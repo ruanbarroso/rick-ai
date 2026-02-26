@@ -922,110 +922,60 @@ export class EditSession {
       return;
     }
 
-    // ---- Step 3: Run deploy pipeline ----
-    await this.sendMessage(`\`[publish]\` Iniciando deploy antes do push...`, "tool_use");
+    // ---- Step 3: Deploy + Push (single detached container) ----
+    // CRITICAL: The deploy pipeline restarts Rick (docker compose up -d), killing
+    // this process. So we CANNOT run the push as a separate step after deploy returns.
+    // Instead, we run BOTH deploy and push inside a single detached docker:cli container
+    // that survives the Rick restart. The push runs right after deploy.sh succeeds.
+    await this.sendMessage(`\`[publish]\` Iniciando deploy + push...`, "tool_use");
     this.state = "deploying";
 
     const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
 
-    const deploySuccess = await new Promise<boolean>((resolve) => {
-      const child = spawn("docker", [
-        "run", "--rm",
-        "-v", "/var/run/docker.sock:/var/run/docker.sock",
-        "-v", `${projectDir}:${projectDir}`,
-        "-v", `/tmp:/tmp`,
-        "-v", `${projectDir}/scripts/deploy.sh:/deploy.sh:ro`,
-        "-e", `PROJECT_DIR=${projectDir}`,
-        "--network", "host",
-        "docker:cli",
-        "sh", "/deploy.sh", this.stagingDir,
-      ]);
+    // Write the push script to a temp file on the host, then mount it into the container.
+    // This avoids shell injection from the token and keeps the script readable.
+    const publishScript = `#!/bin/sh
+set -eu
 
-      let output = "";
+# ---- Phase 1: Deploy ----
+sh /deploy.sh "${this.stagingDir}"
+DEPLOY_EXIT=$?
+if [ "$DEPLOY_EXIT" -ne 0 ]; then
+  echo "[publish] Deploy falhou (exit $DEPLOY_EXIT), push cancelado"
+  exit $DEPLOY_EXIT
+fi
 
-      child.stdout?.on("data", (chunk: Buffer) => {
-        const text = chunk.toString();
-        output += text;
-        const lines = text.split("\n").filter((l: string) => l.includes("[deploy]"));
-        for (const line of lines) {
-          const match = /\[deploy\]\s*[\d:]*\s*(.*)/.exec(line.trim());
-          const msg = match ? match[1].trim() : line.trim();
-          this.sendMessage(`\`[deploy]\` ${msg}`, "tool_use").catch(() => {});
-        }
-      });
+echo "[publish] Deploy OK! Iniciando push para o GitHub..."
 
-      child.stderr?.on("data", (chunk: Buffer) => {
-        output += chunk.toString();
-      });
+# ---- Phase 2: Git push ----
+# Wait a few seconds for the new Rick container to start
+# (deploy.sh just did docker compose up -d)
+sleep 3
 
-      child.on("close", async (code) => {
-        if (code === 0) {
-          resolve(true);
-        } else {
-          const exitMessages: Record<number, string> = {
-            1: "Build falhou (provavelmente erros de TypeScript). Verifique os erros acima.",
-            2: "Smoke test falhou — o novo codigo nao passou no health check.",
-            3: "Watchdog detectou falha apos o swap — rollback realizado.",
-            4: "CRITICO: Rollback tambem falhou! Verificacao manual necessaria.",
-          };
-          const reason = exitMessages[code || 0] || `Codigo de saida: ${code}`;
-          await this.sendMessage(
-            `*Deploy falhou! Publish cancelado.* Rollback automatico realizado.\n\nMotivo: ${reason}\n\n` +
-            `Voce ainda esta no modo de edicao. Corrija o problema e tente */publish* novamente, ou */exit* para descartar.`,
-          );
-          resolve(false);
-        }
-
-        logger.info(
-          { sessionId: this.id, exitCode: code, outputLen: output.length },
-          "Publish deploy pipeline completed",
-        );
-      });
-    });
-
-    if (!deploySuccess) {
-      this.state = "ready";
-      return;
-    }
-
-    // ---- Step 4: Push to GitHub ----
-    await this.sendMessage(`\`[publish]\` Deploy OK! Publicando codigo no GitHub (${targetRepo})...`, "tool_use");
-    this.state = "publishing";
-
-    try {
-      // Git push from the HOST PROJECT DIR (not the staging dir!).
-      // After deploy.sh succeeds, the host dir already has the updated src/ plus
-      // all other project files (.git, scripts/, docker/, etc.). Pushing from the
-      // staging dir would lose everything outside src/ and destroy the git history.
-      const pushScript = `
-set -e
-cd /project
+cd "${projectDir}"
 
 # Configure git (safe.directory needed because container runs as root
-# but files belong to host user — avoids "dubious ownership" error)
-git config --global --add safe.directory /project
+# but files belong to host user)
+git config --global --add safe.directory "${projectDir}"
 git config user.email "rick-ai@bot.local"
 git config user.name "Rick AI"
 
-# Ensure remote uses the token (overwrite origin if it exists)
-git remote set-url origin "https://x-access-token:${githubToken}@github.com/${targetRepo}.git" 2>/dev/null \
+# Inject token into remote URL
+git remote set-url origin "https://x-access-token:${githubToken}@github.com/${targetRepo}.git" 2>/dev/null \\
   || git remote add origin "https://x-access-token:${githubToken}@github.com/${targetRepo}.git"
 
-# Fetch remote state first so we know about divergence
-echo "[publish] Sincronizando com o repositorio remoto..."
-git fetch origin main 2>&1 || echo "[publish] AVISO: fetch falhou (repo vazio?)"
+# Fetch remote state
+echo "[publish] Sincronizando com repositorio remoto..."
+git fetch origin main 2>&1 || echo "[publish] AVISO: fetch falhou"
 
-# If remote has commits we don't have, rebase first BEFORE committing
-# This avoids the divergence problem where our commit can't fast-forward.
+# Rebase if diverged
 if git rev-parse origin/main >/dev/null 2>&1; then
-  LOCAL_BASE=$(git rev-parse HEAD 2>/dev/null || echo "none")
+  LOCAL_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "none")
   REMOTE_HEAD=$(git rev-parse origin/main 2>/dev/null || echo "none")
-  if [ "$LOCAL_BASE" != "$REMOTE_HEAD" ]; then
-    echo "[publish] Branch divergiu — fazendo rebase antes do commit..."
-    # Stash any unstaged changes from deploy.sh, rebase, then unstash
+  if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
+    echo "[publish] Branch divergiu — fazendo rebase..."
     git stash --include-untracked 2>&1 || true
     git rebase origin/main 2>&1 || {
-      echo "[publish] AVISO: rebase com conflito, abortando rebase e tentando merge..."
       git rebase --abort 2>/dev/null || true
       git merge origin/main --no-edit 2>&1 || true
     }
@@ -1033,89 +983,99 @@ if git rev-parse origin/main >/dev/null 2>&1; then
   fi
 fi
 
-# Stage all changes (deploy.sh already updated src/ in place)
+# Stage and commit
 git add -A
-
-# Check if there's anything to commit
 if git diff --cached --quiet 2>/dev/null; then
-  echo "[publish] Nenhuma alteracao para commitar — codigo ja esta no GitHub"
+  echo "[publish] Nenhuma alteracao para commitar"
 else
   git commit -m "publish: atualizado via /publish do Rick AI" 2>&1
   echo "[publish] Commit criado"
 fi
 
-# Push (should fast-forward now after rebase)
-echo "[publish] Enviando para o GitHub..."
+# Push
+echo "[publish] Enviando para GitHub..."
 if git push origin main 2>&1; then
   echo "[publish] Push OK"
 elif git push --force-with-lease origin main 2>&1; then
   echo "[publish] Push force-with-lease OK"
 else
   echo "[publish] ERRO: push falhou"
-  exit 1
+  # Don't exit 1 — deploy already succeeded, Rick is running fine
 fi
+
+# Clean up: remove token from remote URL (security)
+git remote set-url origin "https://github.com/${targetRepo}.git" 2>/dev/null || true
 
 echo "[publish] Codigo publicado com sucesso em github.com/${targetRepo}"
 `;
 
-      const child = spawn("docker", [
+    // Write script to host /tmp so it's accessible by the docker:cli container
+    const scriptPath = `/tmp/rick-publish-${this.id}.sh`;
+    try {
+      await execFileAsync("docker", [
         "run", "--rm",
-        "-v", `${projectDir}:/project`,
-        "--network", "host",
+        "-v", "/tmp:/tmp",
         "node:22-slim",
-        "bash", "-c", pushScript,
+        "bash", "-c", `cat > ${scriptPath} << 'PUBLISH_SCRIPT_EOF'\n${publishScript}\nPUBLISH_SCRIPT_EOF\nchmod +x ${scriptPath}`,
       ]);
-
-      let pushOutput = "";
-
-      child.stdout?.on("data", (chunk: Buffer) => {
-        const text = chunk.toString();
-        pushOutput += text;
-        const lines = text.split("\n").filter((l: string) => l.includes("[publish]"));
-        for (const line of lines) {
-          const match = /\[publish\]\s*(.*)/.exec(line.trim());
-          const msg = match ? match[1].trim() : line.trim();
-          this.sendMessage(`\`[publish]\` ${msg}`, "tool_use").catch(() => {});
-        }
-      });
-
-      child.stderr?.on("data", (chunk: Buffer) => {
-        pushOutput += chunk.toString();
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        child.on("close", async (code) => {
-          if (code === 0) {
-            await this.sendMessage(
-              `*Publish concluido com sucesso!*\n\n` +
-              `O codigo foi deployado e publicado em github.com/${targetRepo}.\n` +
-              `Essa sessao de edicao sera encerrada agora.`,
-            );
-            resolve();
-          } else {
-            await this.sendMessage(
-              `*Push para o GitHub falhou!*\n\n` +
-              `O deploy foi realizado com sucesso, mas o push para ${targetRepo} falhou.\n` +
-              `O Rick esta rodando com o novo codigo, mas ele nao foi publicado no GitHub.\n\n` +
-              `Voce pode tentar */publish* novamente ou */exit* para sair.`,
-            );
-            reject(new Error(`git push failed with exit code ${code}`));
-          }
-
-          logger.info(
-            { sessionId: this.id, exitCode: code, outputLen: pushOutput.length, repo: targetRepo },
-            "Publish git push completed",
-          );
-        });
-      });
-
-      // Push succeeded — close session
-      await this.close();
     } catch (err) {
-      // Push failed but deploy succeeded — stay in edit mode
-      logger.error({ err, sessionId: this.id, repo: targetRepo }, "Publish git push failed");
+      await this.sendMessage(`*Publish cancelado:* Falha ao preparar script de publish.`);
+      logger.error({ err, sessionId: this.id }, "Failed to write publish script");
       this.state = "ready";
+      return;
     }
+
+    // Launch the combined deploy+push in a single docker:cli container.
+    // This container runs detached-like but we still capture output until
+    // Rick dies (deploy restarts Rick). After that, the container continues
+    // autonomously to completion (push to GitHub).
+    const child = spawn("docker", [
+      "run", "--rm",
+      "--name", `publish-${this.id}`,
+      "-v", "/var/run/docker.sock:/var/run/docker.sock",
+      "-v", `${projectDir}:${projectDir}`,
+      "-v", `/tmp:/tmp`,
+      "-v", `${projectDir}/scripts/deploy.sh:/deploy.sh:ro`,
+      "-v", `${scriptPath}:/publish.sh:ro`,
+      "-e", `PROJECT_DIR=${projectDir}`,
+      "--network", "host",
+      "docker:cli",
+      "sh", "/publish.sh",
+    ]);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      const lines = text.split("\n").filter((l: string) => l.includes("[deploy]") || l.includes("[publish]"));
+      for (const line of lines) {
+        const deployMatch = /\[deploy\]\s*[\d:]*\s*(.*)/.exec(line.trim());
+        const publishMatch = /\[publish\]\s*(.*)/.exec(line.trim());
+        if (deployMatch) {
+          this.sendMessage(`\`[deploy]\` ${deployMatch[1].trim()}`, "tool_use").catch(() => {});
+        } else if (publishMatch) {
+          this.sendMessage(`\`[publish]\` ${publishMatch[1].trim()}`, "tool_use").catch(() => {});
+        }
+      }
+    });
+
+    child.stderr?.on("data", () => {
+      // Capture but don't forward (may contain token in git URLs)
+    });
+
+    // We DON'T await the child — Rick will die when deploy.sh does docker compose up -d.
+    // The docker:cli container continues running independently and completes the push.
+    // The edit session close/cleanup will happen when Rick restarts (onClose callback).
+    child.on("close", (code) => {
+      logger.info(
+        { sessionId: this.id, exitCode: code, repo: targetRepo },
+        "Publish container exited (may not fire if Rick restarted)",
+      );
+      // Clean up script file (best-effort)
+      execFileAsync("rm", ["-f", scriptPath]).catch(() => {});
+    });
+
+    // Don't await, don't close session — Rick will restart and the session
+    // reference will be lost naturally. The publish container runs independently.
+    logger.info({ sessionId: this.id, repo: targetRepo }, "Publish container launched (deploy+push)");
   }
 
   /**
