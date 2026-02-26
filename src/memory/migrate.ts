@@ -154,6 +154,13 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS message_type VARCHAR(50) DEFAULT 'text'`,
     ],
   },
+  {
+    name: "007_session_messages_media",
+    statements: [
+      `ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS audio_url VARCHAR(500)`,
+      `ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS image_urls TEXT`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {

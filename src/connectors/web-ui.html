@@ -2815,6 +2815,15 @@ function loadEditHistory(messages) {
     var ehTime = ehMsg.created_at ? new Date(ehMsg.created_at) : new Date();
     var ehEntry = { text: ehMsg.content, from: ehFrom, time: ehTime };
     if (ehMsg.message_type) ehEntry.messageType = ehMsg.message_type;
+    if (ehMsg.audio_url) ehEntry.audioUrl = ehMsg.audio_url;
+    if (ehMsg.image_urls) {
+      try {
+        var parsedUrls = JSON.parse(ehMsg.image_urls);
+        ehEntry.imageUrls = Array.isArray(parsedUrls) ? parsedUrls : [ehMsg.image_urls];
+      } catch (e) {
+        ehEntry.imageUrls = [ehMsg.image_urls];
+      }
+    }
     sessionMessages['edit'].push(ehEntry);
   }
   // Re-render if we're currently viewing the edit session
@@ -2952,6 +2961,15 @@ function renderMessageContent(text, audioUrl, imageUrls) {
   var html = '';
   var hasImages = imageUrls && imageUrls.length > 0;
 
+  // Extract transcription from [Áudio transcrito: "..."] tag — present in edit mode after F5 reload
+  var audioTranscricao = null;
+  if (text) {
+    var transcricaoMatch = text.match(/\[Áudio transcrito:\s*"([\s\S]+?)"\]/);
+    if (transcricaoMatch) {
+      audioTranscricao = transcricaoMatch[1];
+    }
+  }
+
   // Image attachments (supports multiple)
   if (hasImages) {
     for (var ii = 0; ii < imageUrls.length; ii++) {
@@ -2965,7 +2983,10 @@ function renderMessageContent(text, audioUrl, imageUrls) {
   if (audioUrl) {
     html += '<div class="audio-message">';
     html += '<audio controls preload="metadata" src="' + audioUrl + '"></audio>';
-    if (text) {
+    if (audioTranscricao) {
+      // Transcription embedded in the saved content (edit mode after F5 reload)
+      html += '<blockquote class="audio-transcription">' + renderText(audioTranscricao) + '</blockquote>';
+    } else if (text) {
       var isPlaceholder = /^O usuario enviou um audio/i.test(text);
       if (!isPlaceholder) {
         var cleanText = text.replace(/^aqui\s+est[aá]\s+a\s+transcri[cç][aã]o.*?:\s*/i, '');
@@ -2988,7 +3009,8 @@ function renderMessageContent(text, audioUrl, imageUrls) {
     if (text && hasImages) {
       var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(text);
       var isAudioPlaceholder = /^O usuario enviou um audio/i.test(text);
-      if (!isImgPlaceholder && !isAudioPlaceholder) {
+      var hasTranscricaoTag = audioTranscricao !== null;
+      if (!isImgPlaceholder && !isAudioPlaceholder && !hasTranscricaoTag) {
         html += renderText(text);
       }
     }

@@ -362,15 +362,17 @@ export class EditSession {
       "Edit session container started"
     );
 
-    await this.sendMessage(
+    const welcomeMsg =
       `*Modo de edicao ativado!*\n\n` +
       `O Claude Code tem acesso ao codigo-fonte do Rick.\n` +
       `Mande suas instrucoes diretamente — tudo vai pro Claude Code.\n\n` +
       `Comandos:\n` +
       `- */deploy* — aplica as mudancas (com verificacao de seguranca)\n` +
       `- */publish* — deploy + push para o GitHub\n` +
-      `- */exit* — descarta tudo e sai do modo de edicao`
-    );
+      `- */exit* — descarta tudo e sai do modo de edicao`;
+
+    await this.sendMessage(welcomeMsg);
+    await this.saveHistory?.(welcomeMsg, "text");
   }
 
   /**

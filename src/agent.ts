@@ -217,9 +217,10 @@ export class Agent {
       const editSessionIdForSave = this.editSession.id;
       try {
         const { query: dbSaveUser } = await import("./memory/db.js");
+        const editImageUrlsJson = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
         await dbSaveUser(
-          `INSERT INTO session_messages (session_id, role, content, message_type) VALUES ($1, $2, $3, $4)`,
-          [editSessionIdForSave, "user", fullText, "text"]
+          `INSERT INTO session_messages (session_id, role, content, message_type, audio_url, image_urls) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [editSessionIdForSave, "user", fullText, "text", audioUrl || null, editImageUrlsJson]
         );
       } catch (err) {
         logger.warn({ err }, "Failed to save edit session user message");
@@ -1873,12 +1874,12 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.sessionManager.getSessionHistory(sessionId);
       },
 
-      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string }>> => {
+      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string }>> => {
         if (!this.editSession) return [];
         try {
           const { query: dbQuery } = await import("./memory/db.js");
           const result = await dbQuery(
-            `SELECT role, content, created_at, message_type FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+            `SELECT role, content, created_at, message_type, audio_url, image_urls FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
             [this.editSession.id]
           );
           return result.rows;
