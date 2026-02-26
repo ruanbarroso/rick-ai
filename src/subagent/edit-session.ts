@@ -999,7 +999,9 @@ export class EditSession {
 set -e
 cd /project
 
-# Configure git
+# Configure git (safe.directory needed because container runs as root
+# but files belong to host user — avoids "dubious ownership" error)
+git config --global --add safe.directory /project
 git config user.email "rick-ai@bot.local"
 git config user.name "Rick AI"
 

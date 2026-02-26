@@ -70,7 +70,10 @@ log "Staged files applied"
 # tsc runs as part of `npm run build` inside the Dockerfile.
 # If TypeScript has errors, the Docker build fails here.
 # Extract version info from git (if available) or from .rick-version file
+# Mark directory as safe — deploy runs as root inside docker:cli but files
+# belong to ubuntu, causing git "dubious ownership" errors.
 if command -v git >/dev/null 2>&1 && [ -d "$PROJECT_DIR/.git" ]; then
+  git config --global --add safe.directory "$PROJECT_DIR" 2>/dev/null || true
   COMMIT_SHA=$(cd "$PROJECT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
   COMMIT_DATE=$(cd "$PROJECT_DIR" && git log -1 --format='%cI' 2>/dev/null || echo "unknown")
 elif [ -f "$PROJECT_DIR/.rick-version" ]; then
