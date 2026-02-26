@@ -255,6 +255,11 @@ function sqliteQuery(text: string, params?: any[]): QueryResult {
     ) {
       return { rows: [], rowCount: 0 };
     }
+    // Enrich the error with the adapted SQL to ease debugging
+    logger.debug(
+      { adaptedSql: sql.substring(0, 200), err },
+      "sqliteQuery failed"
+    );
     throw err;
   }
 }
@@ -265,9 +270,22 @@ function sqliteQuery(text: string, params?: any[]): QueryResult {
 function adaptSqlForSqlite(sql: string): string {
   let adapted = sql;
 
-  // Replace $N placeholders with ?N (for positional params)
-  // better-sqlite3 uses ? or ?NNN for numbered params
-  adapted = adapted.replace(/\$(\d+)/g, "?$1");
+  // Replace $N placeholders with ?N (for positional params), but ONLY outside
+  // single-quoted string literals.  The alternation matches a complete
+  // single-quoted SQL string first (returned unchanged) so that occurrences of
+  // $N inside literals such as DEFAULT '$1_prefix' or CHECK (col LIKE '$1%')
+  // are NOT converted into ?N parameter slots.  If they were converted, SQLite
+  // would see no unquoted '?' placeholders (sqlite3_bind_parameter_count → 0)
+  // while better-sqlite3 still counted the arguments, triggering:
+  //   RangeError: Too many parameter values were provided
+  //
+  // SQL standard single-quote escaping: '' (two consecutive single-quotes)
+  // represents a literal single-quote inside a string — handled by |'' in the
+  // character class so the regex does not exit the literal prematurely.
+  adapted = adapted.replace(/'(?:[^']|'')*'|\$(\d+)/g, (match, pN) => {
+    // pN is defined only when the \$(\d+) branch matched (outside a string).
+    return pN !== undefined ? `?${pN}` : match;
+  });
 
   // SERIAL → INTEGER PRIMARY KEY AUTOINCREMENT
   // Handle "id SERIAL PRIMARY KEY" pattern
@@ -317,6 +335,9 @@ function adaptSqlForSqlite(sql: string): string {
 
   // BIGINT → INTEGER (SQLite has no BIGINT, but INTEGER handles big values)
   adapted = adapted.replace(/\bBIGINT\b/gi, "INTEGER");
+
+  // BYTEA → BLOB (PostgreSQL binary type → SQLite native blob type)
+  adapted = adapted.replace(/\bBYTEA\b/gi, "BLOB");
 
   // CREATE EXTENSION → no-op
   if (/^\s*CREATE\s+EXTENSION/i.test(adapted)) {

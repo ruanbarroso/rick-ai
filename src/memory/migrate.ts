@@ -212,6 +212,10 @@ export async function runMigrations(): Promise<void> {
 
       for (const stmt of migration.statements) {
         try {
+          logger.debug(
+            { migration: migration.name, stmt: stmt.substring(0, 120) },
+            "Executing migration statement"
+          );
           await query(stmt);
         } catch (err: any) {
           // Tolerate "already exists" errors for idempotency
@@ -219,6 +223,10 @@ export async function runMigrations(): Promise<void> {
           if (msg.includes("already exists") || msg.includes("duplicate")) {
             logger.warn({ stmt: stmt.substring(0, 60) }, "Skipping already-existing object");
           } else {
+            logger.error(
+              { migration: migration.name, stmt: stmt.substring(0, 200), err },
+              "Migration statement failed"
+            );
             throw err;
           }
         }
