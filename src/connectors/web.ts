@@ -83,6 +83,8 @@ export class WebConnector implements Connector {
   private clients = new Map<WebSocket, AuthenticatedClient>();
   private whatsappConnector: WhatsAppConnector | null = null;
   private agentBridge: WebAgentBridge | null = null;
+  /** Tracks whether the agent is currently typing, so reconnecting clients restore the indicator */
+  private currentlyTyping = false;
   private claudeOAuth = new ClaudeOAuthService();
   private openaiOAuth = new OpenAIOAuthService();
   constructor(manager: ConnectorManager) {
@@ -179,6 +181,11 @@ export class WebConnector implements Connector {
                   type: "status",
                   whatsapp: this.whatsappConnector.isConnected(),
                 });
+              }
+
+              // Restore typing indicator state for reconnecting clients (e.g. after F5)
+              if (this.currentlyTyping) {
+                this.send(ws, { type: "typing", composing: true });
               }
 
               // Restore edit mode state for reconnecting clients (e.g. after F5)
@@ -397,6 +404,7 @@ export class WebConnector implements Connector {
   }
 
   async setTyping(userId: string, composing: boolean): Promise<void> {
+    this.currentlyTyping = composing;
     this.broadcastToAuthenticated({ type: "typing", composing });
   }
 

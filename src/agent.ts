@@ -1332,13 +1332,19 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       }
     } catch (_) { /* ignore */ }
 
+    // Set this.editSession BEFORE start() so that saveHistoryCb (which reads
+    // this.editSession?.id) can persist the welcome message to session_messages.
+    // If start() throws, we reset the state in the catch block.
+    this.editSession = session;
+    this.editFirstPromptSent = false;
+    this.editUserPhone = userPhone;
     try {
       await session.start(env);
-      this.editSession = session;
-      this.editFirstPromptSent = false;
-      this.editUserPhone = userPhone;
       return ""; // Welcome message is sent by EditSession.start()
     } catch (err) {
+      this.editSession = null;
+      this.editFirstPromptSent = false;
+      this.editUserPhone = null;
       logger.error({ err }, "Failed to start edit session");
       return `Erro ao iniciar modo de edicao: ${(err as Error).message}`;
     }
