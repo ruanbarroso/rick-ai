@@ -387,7 +387,7 @@ export class EditSession {
    * @param args - Array of arguments to pass directly to docker exec (no shell).
    *               Uses -w /workspace to set working directory safely.
    */
-  private async runClaude(args: string[]): Promise<void> {
+  private async runClaude(args: string[], isRetry = false): Promise<void> {
     this.startTyping();
 
     const isRateLimitSignal = (text: string): boolean => {
@@ -416,6 +416,7 @@ export class EditSession {
       let totalOutput = 0;
       let authFailed = false;
       let rateLimited = false;
+      let stderrChunks: string[] = [];
 
       child.stdout?.on("data", (chunk: Buffer) => {
         ndjsonBuffer += chunk.toString();
@@ -506,6 +507,22 @@ export class EditSession {
         }
       });
 
+      // Capture stderr for diagnostics
+      child.stderr?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderrChunks.push(text);
+        // Also check stderr for auth/rate-limit signals
+        if (
+          text.includes("OAuth token has expired") ||
+          (text.includes("Failed to authenticate") && text.includes("API Error: 401"))
+        ) {
+          authFailed = true;
+        }
+        if (isRateLimitSignal(text)) {
+          rateLimited = true;
+        }
+      });
+
       child.on("close", async (code) => {
         // Process any remaining partial line in the buffer
         if (ndjsonBuffer.trim()) {
@@ -543,6 +560,8 @@ export class EditSession {
         // Stop typing indicator
         this.stopTyping();
 
+        const stderrText = stderrChunks.join("").trim();
+
         // Rate limited — try GPT fallback if available
         if (rateLimited && !authFailed && this.gptFallback) {
           logger.warn({ sessionId: this.id, totalOutput }, "Edit session: Claude rate limited, trying GPT fallback");
@@ -577,15 +596,39 @@ export class EditSession {
           if (!refreshed) {
             logger.info({ sessionId: this.id }, "Edit session: waiting for re-auth");
           }
+        } else if (code !== 0 && totalOutput === 0 && !isRetry) {
+          // Claude Code crashed with no output — auto-retry once
+          logger.warn(
+            { sessionId: this.id, exitCode: code, stderr: stderrText.slice(0, 500) },
+            "Edit session: Claude Code crashed with no output, retrying"
+          );
+          await this.sendMessage("_Claude Code falhou sem resposta. Tentando novamente..._");
+          this.state = "ready";
+          resolve();
+          // Retry with same args after a brief delay
+          setTimeout(() => this.runClaude(args, true), 2000);
+          return;
         } else {
           if (totalOutput === 0) {
-            await this.sendMessage("_(sem output)_");
+            if (code !== 0) {
+              // Retry already failed — show diagnostic info
+              const hint = stderrText
+                ? stderrText.slice(0, 200)
+                : `exit code ${code}`;
+              logger.error(
+                { sessionId: this.id, exitCode: code, stderr: stderrText.slice(0, 500) },
+                "Edit session: Claude Code crashed after retry"
+              );
+              await this.sendMessage(`_Claude Code falhou (${hint}). Tente enviar a mensagem novamente._`);
+            } else {
+              await this.sendMessage("_(sem output)_");
+            }
           }
           this.state = "ready";
         }
 
         logger.info(
-          { sessionId: this.id, exitCode: code, totalOutput, authFailed },
+          { sessionId: this.id, exitCode: code, totalOutput, authFailed, isRetry, hasStderr: stderrText.length > 0 },
           "Edit session claude completed"
         );
 

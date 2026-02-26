@@ -426,7 +426,10 @@ function getProjectDir(): string {
 }
 
 function getVersionCachePath(): string {
-  return join(getProjectDir(), VERSION_CACHE_FILE);
+  // Write cache inside the container's own app dir (/app), not HOST_PROJECT_DIR
+  // which points to the host filesystem and is inaccessible from inside the container.
+  const appDir = process.cwd();
+  return join(appDir, VERSION_CACHE_FILE);
 }
 
 async function fetchLatestFromGitHub(): Promise<LatestVersionInfo | null> {
