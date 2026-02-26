@@ -218,7 +218,7 @@ async function handleVersionCheck(res: ServerResponse): Promise<void> {
       date: process.env.RICK_COMMIT_DATE || "unknown",
     };
 
-    // Fetch latest commit from GitHub (public API, no auth needed)
+    // Fetch latest commit from GitHub (public API, no auth)
     let latest: { sha: string; date: string; message: string } | null = null;
     try {
       const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits/main`, {
@@ -237,7 +237,8 @@ async function handleVersionCheck(res: ServerResponse): Promise<void> {
       logger.warn({ err }, "Failed to fetch latest commit from GitHub");
     }
 
-    const hasUpdate = latest && current.sha !== "unknown" && latest.sha !== current.sha;
+    // If GitHub API failed (rate limit, network, etc.), assume up to date
+    const hasUpdate = latest ? (current.sha !== "unknown" && latest.sha !== current.sha) : false;
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ current, latest, hasUpdate }));

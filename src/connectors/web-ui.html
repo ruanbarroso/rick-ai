@@ -3653,17 +3653,12 @@ function checkForUpdates() {
           data.latest.sha + ' (' + latestDateStr + ')' +
           (data.latest.message ? ' — ' + data.latest.message : '');
         updateInfo.style.display = 'block';
-      } else if (data.latest) {
+      } else {
+        // No update available (or GitHub API failed — assume up to date)
         badge.style.display = 'inline-block';
         badge.style.background = 'rgba(74,222,128,0.15)';
         badge.style.color = '#4ade80';
         badge.textContent = 'Atualizado';
-        updateInfo.style.display = 'none';
-      } else {
-        badge.style.display = 'inline-block';
-        badge.style.background = 'rgba(255,255,255,0.08)';
-        badge.style.color = 'var(--text-secondary)';
-        badge.textContent = 'Offline';
         updateInfo.style.display = 'none';
       }
     })
