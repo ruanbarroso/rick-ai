@@ -14,7 +14,7 @@ import { WhatsAppConnector } from "./connectors/whatsapp.js";
 import { WebConnector } from "./connectors/web.js";
 import { closeVectorPool } from "./memory/vector-db.js";
 import { EditSession } from "./subagent/edit-session.js";
-import { startHealthServer, setHealthy } from "./health.js";
+import { startHealthServer, setHealthy, registerAgentApiServices } from "./health.js";
 
 async function main() {
   console.log(`
@@ -98,6 +98,9 @@ async function main() {
   // 8. Create ConnectorManager and Agent
   const connectorManager = new ConnectorManager();
   const agent = new Agent(llm, memory, connectorManager, vectorMemory);
+
+  // Register services for the sub-agent read-only API (/api/agent/*)
+  registerAgentApiServices(memory, vectorMemory);
 
   // Wire ConnectorManager → Agent
   connectorManager.onMessage(async (msg) => agent.handleMessage(msg));

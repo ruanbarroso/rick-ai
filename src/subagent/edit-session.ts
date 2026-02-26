@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ConnectorManager } from "../connectors/connector-manager.js";
 import { logger } from "../config/logger.js";
+import { config } from "../config/env.js";
+import { createAgentToken } from "./agent-token.js";
+import type { MemoryService } from "../memory/memory-service.js";
 import type { MediaAttachment } from "../llm/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -125,7 +128,19 @@ const EDIT_SYSTEM_PROMPT = [
   "Sempre responda em portugues brasileiro (pt-BR).",
   "Use npx tsc --noEmit para verificar erros de TypeScript antes de concluir.",
   "Nao modifique AGENTS.md, CLAUDE.md ou GEMINI.md a menos que seja explicitamente pedido.",
-].join(" ");
+  "",
+  "CREDENCIAIS E DADOS DO RICK:",
+  "Voce tem acesso a uma API read-only do Rick principal para consultar memorias, credenciais, conversas e busca semantica.",
+  "Use as variaveis de ambiente $RICK_API_URL e $RICK_SESSION_TOKEN para autenticar.",
+  "Endpoints disponiveis:",
+  "- GET $RICK_API_URL/api/agent/config (config operacional)",
+  "- GET $RICK_API_URL/api/agent/memories?category=<cat> (listar memorias; categorias comuns: credenciais, senhas, tokens, geral, pessoal, notas, preferencias)",
+  "- GET $RICK_API_URL/api/agent/memory?category=<cat>&key=<key> (buscar memoria especifica)",
+  "- GET $RICK_API_URL/api/agent/search?q=<texto>&limit=5 (busca semantica)",
+  "- GET $RICK_API_URL/api/agent/conversations?limit=20 (historico de conversas)",
+  "Todas as requisicoes exigem header: Authorization: Bearer $RICK_SESSION_TOKEN",
+  "Exemplo: curl -sf -H \"Authorization: Bearer $RICK_SESSION_TOKEN\" \"$RICK_API_URL/api/agent/memories?category=credenciais\"",
+].join("\n");
 
 export class EditSession {
   readonly id: string;
@@ -144,6 +159,7 @@ export class EditSession {
   private gptFallback: GptFallbackCallback | null;
   private saveHistory: SaveHistoryFn | null;
   private onClose: OnCloseCallback | null;
+  private memoryService: MemoryService | null;
   private typingInterval: ReturnType<typeof setInterval> | null = null;
   /** The last prompt that failed due to auth — retried only if no output was produced */
   private lastFailedPrompt: { text: string; medias?: MediaAttachment[]; isContinue: boolean; hadOutput: boolean } | null = null;
@@ -157,6 +173,7 @@ export class EditSession {
     gptFallback?: GptFallbackCallback,
     saveHistory?: SaveHistoryFn,
     onClose?: OnCloseCallback,
+    memoryService?: MemoryService,
   ) {
     this.id = randomBytes(8).toString("hex");
     this.containerName = `edit-session-${this.id}`;
@@ -179,6 +196,7 @@ export class EditSession {
     this.gptFallback = gptFallback ?? null;
     this.saveHistory = saveHistory ?? null;
     this.onClose = onClose ?? null;
+    this.memoryService = memoryService ?? null;
   }
 
   /**
@@ -293,9 +311,13 @@ export class EditSession {
 
     logger.info({ stagingDir: this.stagingDir, sessionId: this.id }, "Staging directory created");
 
-    // Build env args
+    // === Agent API: generate JWT and resolve upfront credentials ===
+    const agentApiEnv = await this.buildAgentApiEnv();
+
+    // Build env args (caller env + agent API env)
+    const mergedEnv = { ...env, ...agentApiEnv };
     const envArgs: string[] = [];
-    for (const [key, value] of Object.entries(env)) {
+    for (const [key, value] of Object.entries(mergedEnv)) {
       envArgs.push("-e", `${key}=${value}`);
     }
 
@@ -304,6 +326,7 @@ export class EditSession {
       "run", "-d",
       "--init",
       "--ipc=host",
+      "--add-host=host.docker.internal:host-gateway",
       "--name", this.containerName,
       ...envArgs,
       "-e", "DISABLE_AUTOUPDATE=1",
@@ -778,6 +801,48 @@ export class EditSession {
         "Deploy pipeline completed"
       );
     });
+  }
+
+  /**
+   * Build environment variables for the Agent API (JWT token + upfront credentials).
+   * Called from start() before creating the Docker container.
+   */
+  private async buildAgentApiEnv(): Promise<Record<string, string>> {
+    const agentEnv: Record<string, string> = {};
+
+    // JWT token for authenticating against Rick's /api/agent/* endpoints
+    const token = createAgentToken(this.id, this.userId, 7200); // 2h TTL
+    const apiUrl = `http://host.docker.internal:${config.webPort}`;
+    agentEnv.RICK_SESSION_TOKEN = token;
+    agentEnv.RICK_API_URL = apiUrl;
+
+    // Resolve upfront credentials from sensitive memory categories.
+    // The MemoryService decrypts automatically (AES-256-GCM) — the sub-agent
+    // receives plaintext values, never the MEMORY_ENCRYPTION_KEY itself.
+    if (this.memoryService) {
+      try {
+        const sensitiveCategories = ["credenciais", "tokens", "senhas", "secrets", "passwords", "credentials"];
+        for (const category of sensitiveCategories) {
+          const mems = await this.memoryService.listMemories(this.userId, category);
+          for (const mem of mems) {
+            // "github_token" → "RICK_SECRET_GITHUB_TOKEN"
+            const envKey = `RICK_SECRET_${mem.key
+              .toUpperCase()
+              .replace(/[^A-Z0-9]+/g, "_")
+              .replace(/^_|_$/g, "")}`;
+            agentEnv[envKey] = mem.value;
+          }
+        }
+        logger.info(
+          { sessionId: this.id, secretCount: Object.keys(agentEnv).length - 2 },
+          "Edit session: upfront credentials resolved",
+        );
+      } catch (err) {
+        logger.warn({ err, sessionId: this.id }, "Edit session: failed to resolve upfront credentials");
+      }
+    }
+
+    return agentEnv;
   }
 
   /**

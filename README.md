@@ -97,7 +97,8 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 - **Tools**: Browser (Playwright + headless Chromium), shell commands, file I/O, HTTP fetch, read-only PostgreSQL access
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
 - **Context rotation**: Automatic summarization when context window fills up
-- **Credential injection**: OAuth tokens and stored passwords injected at runtime (never in task descriptions)
+- **Credential injection**: OAuth tokens and stored passwords injected at runtime (never in task descriptions). Sensitive memories are pre-resolved and injected as `RICK_SECRET_*` env vars (decrypted, no encryption key exposed).
+- **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick's read-only API for memories, credentials, semantic search, conversations, and config — all scoped to the owner's data.
 - **Session recovery**: Running containers are recovered after Rick restarts
 
 Each sub-agent gets a unique Rick variant name (Rick Prime, Pickle Rick, Evil Rick, etc.) for easy identification.
@@ -175,6 +176,11 @@ Sub-agent sessions have a lifecycle: `starting` → `running` → `waiting_user`
 | `/api/code/export` | GET | Token | Download source as tar.gz |
 | `/api/code/import` | POST | Token | Upload archive + deploy with rollback |
 | `/api/update` | POST | Token | Download latest from GitHub + deploy with rollback |
+| `/api/agent/config` | GET | JWT | Sub-agent: operational config (name, language, owner) |
+| `/api/agent/memories` | GET | JWT | Sub-agent: list memories (decrypted). Optional `?category=x` |
+| `/api/agent/memory` | GET | JWT | Sub-agent: get specific memory. `?category=x&key=y` |
+| `/api/agent/search` | GET | JWT | Sub-agent: semantic vector search. `?q=text&limit=5` |
+| `/api/agent/conversations` | GET | JWT | Sub-agent: recent conversation history. `?limit=20` |
 
 WebSocket endpoints:
 
@@ -227,6 +233,7 @@ rick-ai/
 │   └── subagent/
 │       ├── classifier.ts              # Gemini Flash task classifier (SELF vs DELEGATE)
 │       ├── types.ts                   # Session/task type definitions
+│       ├── agent-token.ts             # JWT (HS256) token generation/verification for sub-agents
 │       ├── session-manager.ts         # Docker container lifecycle, NDJSON relay
 │       └── edit-session.ts            # Self-editing mode (Claude Code)
 ├── docker/
@@ -399,6 +406,7 @@ docker compose logs -f agent
 - **No shell injection** — Sub-agent prompts are passed as direct `execve()` arguments via Node's `spawn()`, never interpolated into `sh -c` strings. Images are injected via `docker cp`, not shell pipes.
 - **Credential separation** — User credentials are stored in a dedicated `credentials` field on sessions, never embedded in task descriptions. They are injected only at the point of execution and never appear in log output.
 - **Encryption at rest** — Sensitive memory categories are encrypted with AES-256-GCM (key derived from `MEMORY_ENCRYPTION_KEY` via scrypt). Backward-compatible with legacy plaintext values.
+- **Sub-agent API isolation** — Sub-agents access Rick's data via a read-only HTTP API authenticated with short-lived JWT tokens (HS256, random key per process). `MEMORY_ENCRYPTION_KEY` and `DATABASE_URL` never leave the main process — sub-agents receive only pre-decrypted values. Tokens expire with the container lifetime.
 - **Web UI authentication** — WebSocket connection requires password verification before any data is exchanged. API endpoints require a token parameter.
 - **Per-user message serialization** — A promise-chain queue prevents race conditions from concurrent messages mutating shared state.
 - **LLM call timeouts** — All LLM providers (Gemini, Anthropic, OpenAI) have 60-second timeouts to prevent indefinite hangs.

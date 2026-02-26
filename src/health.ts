@@ -5,6 +5,9 @@ import { spawn } from "node:child_process";
 import { logger } from "./config/logger.js";
 import { query } from "./memory/database.js";
 import { config } from "./config/env.js";
+import { verifyAgentToken, type AgentTokenPayload } from "./subagent/agent-token.js";
+import type { MemoryService } from "./memory/memory-service.js";
+import type { VectorMemoryService } from "./memory/vector-memory-service.js";
 
 /**
  * HTTP server that serves:
@@ -86,6 +89,27 @@ async function getSessionViewerHtml(): Promise<string> {
  * listen for 'upgrade' events to handle WebSocket connections.
  */
 export let httpServer: Server | null = null;
+
+// ==================== AGENT API SERVICE REGISTRY ====================
+// Services are registered after init (startHealthServer runs before services are created).
+let registeredMemoryService: MemoryService | null = null;
+let registeredVectorMemory: VectorMemoryService | null = null;
+
+/**
+ * Register services for the sub-agent read-only API.
+ * Called from index.ts after MemoryService and VectorMemoryService are initialized.
+ */
+export function registerAgentApiServices(
+  memory: MemoryService,
+  vectorMemory?: VectorMemoryService,
+): void {
+  registeredMemoryService = memory;
+  registeredVectorMemory = vectorMemory ?? null;
+  logger.info(
+    { hasVectorMemory: !!vectorMemory },
+    "Agent API services registered",
+  );
+}
 
 export function startHealthServer(port: number): void {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -183,6 +207,18 @@ export function startHealthServer(port: number): void {
       return;
     }
 
+    // ==================== AGENT READ-ONLY API (JWT-authenticated) ====================
+    // Endpoints for sub-agents (edit sessions, ephemeral sub-agents) to query
+    // memories, credentials, config, conversations, and semantic search.
+    // Authentication uses Bearer JWT tokens, NOT the web UI password.
+
+    if (req.url?.startsWith("/api/agent/") && req.method === "GET") {
+      const agentSession = authenticateAgentRequest(req, res);
+      if (!agentSession) return;
+      await handleAgentApi(req, res, agentSession);
+      return;
+    }
+
     res.writeHead(404);
     res.end("Not found");
   });
@@ -205,6 +241,171 @@ function authenticateRequest(req: IncomingMessage, res: ServerResponse): boolean
     return false;
   }
   return true;
+}
+
+// ==================== AGENT API AUTH (Bearer JWT) ====================
+
+/**
+ * Authenticate sub-agent requests via Bearer JWT token.
+ * Uses Authorization header (not URL params) to avoid token leaks in logs.
+ *
+ * @returns Decoded token payload if valid, null if rejected (401 already sent).
+ */
+function authenticateAgentRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+): AgentTokenPayload | null {
+  const authHeader = req.headers["authorization"] || "";
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Authorization header ausente ou invalido" }));
+    return null;
+  }
+
+  const payload = verifyAgentToken(match[1]);
+  if (!payload) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Token de sessao invalido ou expirado" }));
+    return null;
+  }
+
+  return payload;
+}
+
+// ==================== AGENT API HANDLERS ====================
+
+/**
+ * Route handler for all /api/agent/* endpoints.
+ * All endpoints are read-only and scoped to the token's userPhone.
+ */
+async function handleAgentApi(
+  req: IncomingMessage,
+  res: ServerResponse,
+  session: AgentTokenPayload,
+): Promise<void> {
+  const url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+  const path = url.pathname;
+
+  try {
+    // GET /api/agent/config — Operational configuration (no secrets)
+    if (path === "/api/agent/config") {
+      const safeConfig = {
+        agentName: config.agentName,
+        agentLanguage: config.agentLanguage,
+        ownerPhone: config.ownerPhone,
+        webBaseUrl: config.webBaseUrl,
+      };
+      logger.info({ sessionId: session.sessionId }, "Agent API: config requested");
+      jsonResponse(res, 200, safeConfig);
+      return;
+    }
+
+    // GET /api/agent/memories?category=x — List memories (decrypted)
+    if (path === "/api/agent/memories") {
+      if (!registeredMemoryService) {
+        jsonResponse(res, 503, { error: "MemoryService nao disponivel" });
+        return;
+      }
+      const category = url.searchParams.get("category") || undefined;
+      const memories = await registeredMemoryService.listMemories(session.userPhone, category);
+      const result = memories.map((m: any) => ({
+        key: m.key,
+        value: m.value,
+        category: m.category,
+      }));
+      logger.info(
+        { sessionId: session.sessionId, category: category || "all", count: result.length },
+        "Agent API: memories listed",
+      );
+      jsonResponse(res, 200, { memories: result });
+      return;
+    }
+
+    // GET /api/agent/memory?category=x&key=y — Get specific memory
+    if (path === "/api/agent/memory") {
+      if (!registeredMemoryService) {
+        jsonResponse(res, 503, { error: "MemoryService nao disponivel" });
+        return;
+      }
+      const category = url.searchParams.get("category") || undefined;
+      const key = url.searchParams.get("key") || "";
+      if (!key) {
+        jsonResponse(res, 400, { error: "Parametro 'key' e obrigatorio" });
+        return;
+      }
+      const memories = await registeredMemoryService.listMemories(session.userPhone, category);
+      const found = memories.find(
+        (m: any) => m.key.toLowerCase() === key.toLowerCase(),
+      );
+      logger.info(
+        { sessionId: session.sessionId, category, key, found: !!found },
+        "Agent API: memory lookup",
+      );
+      if (!found) {
+        jsonResponse(res, 404, { error: "Memoria nao encontrada" });
+        return;
+      }
+      jsonResponse(res, 200, { key: found.key, value: found.value, category: found.category });
+      return;
+    }
+
+    // GET /api/agent/search?q=texto&limit=5 — Semantic vector search
+    if (path === "/api/agent/search") {
+      if (!registeredVectorMemory) {
+        jsonResponse(res, 503, { error: "Busca semantica nao disponivel (pgvector nao configurado)" });
+        return;
+      }
+      const q = url.searchParams.get("q") || "";
+      if (!q) {
+        jsonResponse(res, 400, { error: "Parametro 'q' e obrigatorio" });
+        return;
+      }
+      const limit = Math.min(parseInt(url.searchParams.get("limit") || "5"), 20);
+      const results = await registeredVectorMemory.search(session.userPhone, q, limit);
+      logger.info(
+        { sessionId: session.sessionId, query: q, limit, count: results.length },
+        "Agent API: semantic search",
+      );
+      jsonResponse(res, 200, {
+        results: results.map((r: any) => ({
+          content: r.content,
+          category: r.category,
+          source: r.source,
+          similarity: r.similarity,
+        })),
+      });
+      return;
+    }
+
+    // GET /api/agent/conversations?limit=20 — Recent conversation history
+    if (path === "/api/agent/conversations") {
+      if (!registeredMemoryService) {
+        jsonResponse(res, 503, { error: "MemoryService nao disponivel" });
+        return;
+      }
+      const limit = Math.min(parseInt(url.searchParams.get("limit") || "20"), 100);
+      const messages = await registeredMemoryService.getConversationHistory(session.userPhone, limit);
+      logger.info(
+        { sessionId: session.sessionId, limit, count: messages.length },
+        "Agent API: conversations requested",
+      );
+      jsonResponse(res, 200, { messages });
+      return;
+    }
+
+    // Unknown /api/agent/* path
+    jsonResponse(res, 404, { error: "Endpoint nao encontrado" });
+  } catch (err) {
+    logger.error({ err, path, sessionId: session.sessionId }, "Agent API request failed");
+    jsonResponse(res, 500, { error: "Erro interno" });
+  }
+}
+
+/** Helper to send JSON responses. */
+function jsonResponse(res: ServerResponse, status: number, data: unknown): void {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(data));
 }
 
 // ==================== VERSION ====================

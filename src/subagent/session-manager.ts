@@ -9,6 +9,9 @@ import type { ConnectorManager } from "../connectors/connector-manager.js";
 import type { MediaAttachment } from "../llm/types.js";
 import { query } from "../memory/database.js";
 import { logger } from "../config/logger.js";
+import { config } from "../config/env.js";
+import { createAgentToken } from "./agent-token.js";
+import type { MemoryService } from "../memory/memory-service.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -50,13 +53,15 @@ export type SessionMessageCallback = (sessionId: string, role: string, text: str
 export class SessionManager {
   private sessions = new Map<string, SubAgentSession>();
   private connectorManager: ConnectorManager;
+  private memoryService: MemoryService | null;
   private onSessionMessage: SessionMessageCallback | null = null;
 
   /** Active child processes for each session (docker exec) */
   private processes = new Map<string, ChildProcess>();
 
-  constructor(connectorManager: ConnectorManager) {
+  constructor(connectorManager: ConnectorManager, memoryService?: MemoryService) {
     this.connectorManager = connectorManager;
+    this.memoryService = memoryService ?? null;
   }
 
   setSessionMessageCallback(cb: SessionMessageCallback): void {
@@ -329,14 +334,19 @@ export class SessionManager {
   // ==================== CONTAINER MANAGEMENT ====================
 
   private async startContainer(session: SubAgentSession, env: Record<string, string>, images?: MediaAttachment[]): Promise<void> {
+    // === Agent API: generate JWT and resolve upfront credentials ===
+    const agentApiEnv = await this.buildAgentApiEnv(session);
+
+    const mergedEnv = { ...env, ...agentApiEnv };
     const envArgs: string[] = [];
-    for (const [k, v] of Object.entries(env)) {
+    for (const [k, v] of Object.entries(mergedEnv)) {
       if (v) envArgs.push("-e", `${k}=${v}`);
     }
 
     // Start the container
     const { stdout } = await execFileAsync("docker", [
       "run", "-d", "--init", "--ipc=host",
+      "--add-host=host.docker.internal:host-gateway",
       "--name", session.containerName,
       ...envArgs,
       "subagent",
@@ -371,6 +381,45 @@ export class SessionManager {
       session.state = "waiting_user";
       session.updatedAt = Date.now();
     }
+  }
+
+  /**
+   * Build environment variables for the Agent API (JWT token + upfront credentials).
+   * Same mechanism as EditSession.buildAgentApiEnv — all sub-agents share the same API.
+   */
+  private async buildAgentApiEnv(session: SubAgentSession): Promise<Record<string, string>> {
+    const agentEnv: Record<string, string> = {};
+
+    // JWT token for authenticating against Rick's /api/agent/* endpoints
+    const token = createAgentToken(session.id, session.userId, 86400); // 24h TTL matches container lifetime
+    const apiUrl = `http://host.docker.internal:${config.webPort}`;
+    agentEnv.RICK_SESSION_TOKEN = token;
+    agentEnv.RICK_API_URL = apiUrl;
+
+    // Resolve upfront credentials from sensitive memory categories
+    if (this.memoryService) {
+      try {
+        const sensitiveCategories = ["credenciais", "tokens", "senhas", "secrets", "passwords", "credentials"];
+        for (const category of sensitiveCategories) {
+          const mems = await this.memoryService.listMemories(session.userId, category);
+          for (const mem of mems) {
+            const envKey = `RICK_SECRET_${mem.key
+              .toUpperCase()
+              .replace(/[^A-Z0-9]+/g, "_")
+              .replace(/^_|_$/g, "")}`;
+            agentEnv[envKey] = mem.value;
+          }
+        }
+        logger.info(
+          { sessionId: session.id, secretCount: Object.keys(agentEnv).length - 2 },
+          "Sub-agent: upfront credentials resolved",
+        );
+      } catch (err) {
+        logger.warn({ err, sessionId: session.id }, "Sub-agent: failed to resolve upfront credentials");
+      }
+    }
+
+    return agentEnv;
   }
 
   private async startAgentProcess(session: SubAgentSession): Promise<void> {

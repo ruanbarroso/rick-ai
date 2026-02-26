@@ -64,7 +64,7 @@ export class Agent {
     this.vectorMemory = vectorMemory || null;
     this.claudeOAuth = new ClaudeOAuthService();
     this.openaiOAuth = new OpenAIOAuthService();
-    this.sessionManager = new SessionManager(connectorManager);
+    this.sessionManager = new SessionManager(connectorManager, memory);
   }
 
   /**
@@ -1306,6 +1306,7 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       gptFallbackCb,
       saveHistoryCb,
       onCloseCb,
+      this.memory,
     );
 
     // Build env for the container
