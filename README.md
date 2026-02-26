@@ -111,7 +111,8 @@ Rick can edit his own source code:
 2. Send prompts describing what to change — Claude Code edits the files directly.
 3. `/deploy` — Triggers the deploy pipeline:
    - Backup current `src/` → build candidate image → smoke test (health-only mode) → swap containers → 60s watchdog → rollback on failure
-4. `/exit` — Exits edit mode without deploying.
+4. `/publish [usuario/repo]` — Deploy + push code to GitHub. Defaults to `ruanbarroso/rick-ai`. Resolves GitHub token from Rick's memories, validates write access, runs the full deploy pipeline, then pushes. Push strategy: fast-forward → rebase → `--force-with-lease`.
+5. `/exit` — Exits edit mode without deploying.
 
 ### Web UI
 
@@ -147,6 +148,7 @@ Sub-agent sessions have a lifecycle: `starting` → `running` → `waiting_user`
 | `/edit` | Start edit mode (Claude Code on Rick's own source) |
 | `/exit` | Exit edit mode without deploying |
 | `/deploy` | Deploy staged changes (build + smoke test + swap + watchdog) |
+| `/publish [user/repo]` | Deploy + push to GitHub (default: `ruanbarroso/rick-ai`) |
 | `/status` | Show active sessions, memory stats, connected providers |
 | `/help` or `/ajuda` | Show all available commands |
 | `/modelo` | Show configured models and OAuth connection status |

@@ -51,7 +51,7 @@ type SendFn = (text: string, messageType?: "text" | "tool_use") => Promise<void>
 /** Internal callback type for typing indicator (derived from ConnectorManager). */
 type TypingFn = (composing: boolean) => Promise<void>;
 
-type EditState = "starting" | "ready" | "running" | "deploying" | "auth_expired" | "closed";
+type EditState = "starting" | "ready" | "running" | "deploying" | "publishing" | "auth_expired" | "closed";
 
 /**
  * Serialized message queue for streaming output.
@@ -801,6 +801,289 @@ export class EditSession {
         "Deploy pipeline completed"
       );
     });
+  }
+
+  /**
+   * Publish: deploy + push code to GitHub.
+   *
+   * Flow:
+   * 1. Resolve GitHub token from Rick's memories (credenciais/tokens/senhas/etc.)
+   * 2. Validate write access to target repo
+   * 3. Run full deploy pipeline (build → smoke test → swap → watchdog)
+   * 4. On deploy success, push staging code to GitHub
+   *
+   * Push strategy: fast-forward → git pull --rebase → --force-with-lease (last resort)
+   */
+  async publish(repo?: string): Promise<void> {
+    if (this.state !== "ready") {
+      await this.sendMessage("Aguarde o processamento atual terminar antes de publicar.");
+      return;
+    }
+
+    const targetRepo = repo || "ruanbarroso/rick-ai";
+    this.state = "publishing";
+
+    // ---- Step 1: Resolve GitHub token ----
+    await this.sendMessage(`\`[publish]\` Buscando credencial GitHub nas memorias...`, "tool_use");
+
+    let githubToken: string | null = null;
+
+    if (this.memoryService) {
+      const sensitiveCategories = ["credenciais", "tokens", "senhas", "secrets", "passwords", "credentials"];
+      const tokenKeys = ["github_token", "github_pat", "gh_token", "github_personal_access_token", "github"];
+
+      for (const category of sensitiveCategories) {
+        if (githubToken) break;
+        try {
+          const mems = await this.memoryService.listMemories(this.userId, category);
+          for (const mem of mems) {
+            const keyLower = mem.key.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+            if (tokenKeys.some((tk) => keyLower.includes(tk)) || keyLower.includes("github")) {
+              // Validate it looks like a token (starts with ghp_, github_pat_, or is a long alphanumeric string)
+              const val = mem.value.trim();
+              if (val.startsWith("ghp_") || val.startsWith("github_pat_") || val.length >= 30) {
+                githubToken = val;
+                await this.sendMessage(
+                  `\`[publish]\` Token encontrado: ${mem.key} (categoria: ${category})`,
+                  "tool_use",
+                );
+                break;
+              }
+            }
+          }
+        } catch {
+          // skip category
+        }
+      }
+    }
+
+    if (!githubToken) {
+      await this.sendMessage(
+        "*Publish cancelado:* Nenhum token GitHub encontrado nas memorias do Rick.\n\n" +
+        "Salve um token com:\n" +
+        "`/lembrar credenciais:github_token = ghp_seuTokenAqui`\n\n" +
+        "O token precisa ter permissao de escrita (push) no repositorio.",
+      );
+      this.state = "ready";
+      return;
+    }
+
+    // ---- Step 2: Validate write access ----
+    await this.sendMessage(`\`[publish]\` Validando acesso ao repositorio ${targetRepo}...`, "tool_use");
+
+    try {
+      const { stdout: permJson } = await execFileAsync("docker", [
+        "run", "--rm",
+        "node:22-slim",
+        "sh", "-c",
+        `curl -sf -H "Authorization: token ${githubToken}" "https://api.github.com/repos/${targetRepo}" 2>/dev/null | head -c 4096`,
+      ], { timeout: 15000 });
+
+      let canPush = false;
+      try {
+        const repoInfo = JSON.parse(permJson);
+        canPush = repoInfo.permissions?.push === true || repoInfo.permissions?.admin === true;
+        if (!canPush && repoInfo.message) {
+          await this.sendMessage(
+            `*Publish cancelado:* Erro ao acessar o repositorio.\n\nResposta da API: ${repoInfo.message}`,
+          );
+          this.state = "ready";
+          return;
+        }
+      } catch {
+        await this.sendMessage(
+          `*Publish cancelado:* Nao foi possivel validar o acesso ao repositorio ${targetRepo}.\n` +
+          `Verifique se o token e o repositorio estao corretos.`,
+        );
+        this.state = "ready";
+        return;
+      }
+
+      if (!canPush) {
+        await this.sendMessage(
+          `*Publish cancelado:* O token nao tem permissao de escrita no repositorio ${targetRepo}.\n\n` +
+          `Verifique as permissoes do token (precisa de "Contents: Read and Write").`,
+        );
+        this.state = "ready";
+        return;
+      }
+
+      await this.sendMessage(`\`[publish]\` Acesso validado! Permissao de push confirmada.`, "tool_use");
+    } catch (err) {
+      await this.sendMessage(
+        `*Publish cancelado:* Falha ao verificar acesso ao repositorio.\n\n` +
+        `Erro: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      this.state = "ready";
+      return;
+    }
+
+    // ---- Step 3: Run deploy pipeline ----
+    await this.sendMessage(`\`[publish]\` Iniciando deploy antes do push...`, "tool_use");
+    this.state = "deploying";
+
+    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
+
+    const deploySuccess = await new Promise<boolean>((resolve) => {
+      const child = spawn("docker", [
+        "run", "--rm",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v", `${projectDir}:${projectDir}`,
+        "-v", `/tmp:/tmp`,
+        "-v", `${projectDir}/scripts/deploy.sh:/deploy.sh:ro`,
+        "-e", `PROJECT_DIR=${projectDir}`,
+        "--network", "host",
+        "docker:cli",
+        "sh", "/deploy.sh", this.stagingDir,
+      ]);
+
+      let output = "";
+
+      child.stdout?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        output += text;
+        const lines = text.split("\n").filter((l: string) => l.includes("[deploy]"));
+        for (const line of lines) {
+          const match = /\[deploy\]\s*[\d:]*\s*(.*)/.exec(line.trim());
+          const msg = match ? match[1].trim() : line.trim();
+          this.sendMessage(`\`[deploy]\` ${msg}`, "tool_use").catch(() => {});
+        }
+      });
+
+      child.stderr?.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+      });
+
+      child.on("close", async (code) => {
+        if (code === 0) {
+          resolve(true);
+        } else {
+          const exitMessages: Record<number, string> = {
+            1: "Build falhou (provavelmente erros de TypeScript). Verifique os erros acima.",
+            2: "Smoke test falhou — o novo codigo nao passou no health check.",
+            3: "Watchdog detectou falha apos o swap — rollback realizado.",
+            4: "CRITICO: Rollback tambem falhou! Verificacao manual necessaria.",
+          };
+          const reason = exitMessages[code || 0] || `Codigo de saida: ${code}`;
+          await this.sendMessage(
+            `*Deploy falhou! Publish cancelado.* Rollback automatico realizado.\n\nMotivo: ${reason}\n\n` +
+            `Voce ainda esta no modo de edicao. Corrija o problema e tente */publish* novamente, ou */exit* para descartar.`,
+          );
+          resolve(false);
+        }
+
+        logger.info(
+          { sessionId: this.id, exitCode: code, outputLen: output.length },
+          "Publish deploy pipeline completed",
+        );
+      });
+    });
+
+    if (!deploySuccess) {
+      this.state = "ready";
+      return;
+    }
+
+    // ---- Step 4: Push to GitHub ----
+    await this.sendMessage(`\`[publish]\` Deploy OK! Publicando codigo no GitHub (${targetRepo})...`, "tool_use");
+    this.state = "publishing";
+
+    try {
+      // Git push from the staging dir via a docker container.
+      // Strategy: git init → add remote → commit → push (fast-forward first, rebase if needed, force-with-lease last resort)
+      const pushScript = `
+set -e
+cd /workspace
+
+# Configure git
+git config --global user.email "rick-ai@bot.local"
+git config --global user.name "Rick AI"
+git config --global init.defaultBranch main
+
+# Initialize repo and add remote with embedded token
+git init
+git remote add origin "https://x-access-token:${githubToken}@github.com/${targetRepo}.git"
+
+# Fetch existing remote state
+git fetch origin main 2>/dev/null || echo "[publish] Repositorio vazio ou branch main nao existe"
+
+# Add all files and commit
+git add -A
+git commit -m "publish: atualizado via /publish do Rick AI" --allow-empty 2>/dev/null || echo "[publish] Nada a commitar"
+
+# Push strategy: fast-forward → rebase → force-with-lease
+if git push origin main 2>/dev/null; then
+  echo "[publish] Push fast-forward OK"
+elif git pull --rebase origin main 2>/dev/null && git push origin main 2>/dev/null; then
+  echo "[publish] Push com rebase OK"
+elif git push --force-with-lease origin main 2>/dev/null; then
+  echo "[publish] Push force-with-lease OK"
+else
+  echo "[publish] ERRO: push falhou com todas as estrategias"
+  exit 1
+fi
+
+echo "[publish] Codigo publicado com sucesso em github.com/${targetRepo}"
+`;
+
+      const child = spawn("docker", [
+        "run", "--rm",
+        "-v", `${this.stagingDir}:/workspace`,
+        "--network", "host",
+        "node:22-slim",
+        "bash", "-c", pushScript,
+      ]);
+
+      let pushOutput = "";
+
+      child.stdout?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        pushOutput += text;
+        const lines = text.split("\n").filter((l: string) => l.includes("[publish]"));
+        for (const line of lines) {
+          const match = /\[publish\]\s*(.*)/.exec(line.trim());
+          const msg = match ? match[1].trim() : line.trim();
+          this.sendMessage(`\`[publish]\` ${msg}`, "tool_use").catch(() => {});
+        }
+      });
+
+      child.stderr?.on("data", (chunk: Buffer) => {
+        pushOutput += chunk.toString();
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        child.on("close", async (code) => {
+          if (code === 0) {
+            await this.sendMessage(
+              `*Publish concluido com sucesso!*\n\n` +
+              `O codigo foi deployado e publicado em github.com/${targetRepo}.\n` +
+              `Essa sessao de edicao sera encerrada agora.`,
+            );
+            resolve();
+          } else {
+            await this.sendMessage(
+              `*Push para o GitHub falhou!*\n\n` +
+              `O deploy foi realizado com sucesso, mas o push para ${targetRepo} falhou.\n` +
+              `O Rick esta rodando com o novo codigo, mas ele nao foi publicado no GitHub.\n\n` +
+              `Voce pode tentar */publish* novamente ou */exit* para sair.`,
+            );
+            reject(new Error(`git push failed with exit code ${code}`));
+          }
+
+          logger.info(
+            { sessionId: this.id, exitCode: code, outputLen: pushOutput.length, repo: targetRepo },
+            "Publish git push completed",
+          );
+        });
+      });
+
+      // Push succeeded — close session
+      await this.close();
+    } catch (err) {
+      // Push failed but deploy succeeded — stay in edit mode
+      logger.error({ err, sessionId: this.id, repo: targetRepo }, "Publish git push failed");
+      this.state = "ready";
+    }
   }
 
   /**

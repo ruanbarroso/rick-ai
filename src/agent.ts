@@ -145,6 +145,10 @@ export class Agent {
       if (lower === "/deploy") {
         return this.cmdDeploy();
       }
+      if (lower === "/publish" || lower.startsWith("/publish ")) {
+        const repoArg = fullText.trim().substring("/publish".length).trim() || undefined;
+        return this.cmdPublish(repoArg);
+      }
 
       // If auth expired, check if user is pasting an OAuth code
       if (this.editSession.getState() === "auth_expired") {
@@ -1387,6 +1391,23 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
     return ""; // Progress messages come from deploy pipeline
   }
 
+  private async cmdPublish(repo?: string): Promise<string> {
+    if (!this.editSession) {
+      return "Voce nao esta no modo de edicao.";
+    }
+
+    if (this.editSession.getState() === "deploying" || this.editSession.getState() === "publishing") {
+      return "Deploy/publish ja esta em andamento...";
+    }
+
+    // Publish runs async — it'll send progress updates via the callback
+    this.editSession.publish(repo).catch((err) => {
+      logger.error({ err }, "Publish failed");
+    });
+
+    return ""; // Progress messages come from publish pipeline
+  }
+
   // ==================== INFO COMMANDS ====================
 
   private async cmdHelp(userPhone: string): Promise<string> {
@@ -1424,6 +1445,7 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
 /edit - entra no modo de edicao (editar codigo do Rick)
 /exit - sai do modo de edicao (descarta mudancas)
 /deploy - aplica mudancas com pipeline seguro
+/publish [usuario/repo] - deploy + push para GitHub
 
 *Modelos:*
 Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
