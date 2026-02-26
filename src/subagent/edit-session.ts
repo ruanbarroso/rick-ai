@@ -1003,6 +1003,20 @@ else
   # Don't exit 1 — deploy already succeeded, Rick is running fine
 fi
 
+# Update .rick-version with the new commit SHA so the version check
+# doesn't show a false "update available" for the commit we just pushed.
+NEW_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+NEW_DATE=$(git log -1 --format='%cI' 2>/dev/null || echo "unknown")
+printf '%s\n%s\n' "$NEW_SHA" "$NEW_DATE" > "${projectDir}/.rick-version"
+
+# Also update the .rick-version inside the running Rick container
+# so health.ts reads the correct version immediately (without rebuild).
+RICK_CONTAINER=$(docker ps --filter "name=rick-ai-agent" --format "{{.Names}}" | head -1)
+if [ -n "$RICK_CONTAINER" ]; then
+  printf '%s\n%s\n' "$NEW_SHA" "$NEW_DATE" | docker exec -i "$RICK_CONTAINER" sh -c 'cat > /app/.rick-version'
+  echo "[publish] Versao atualizada no container: $NEW_SHA"
+fi
+
 # Clean up: remove token from remote URL (security)
 git remote set-url origin "https://github.com/${targetRepo}.git" 2>/dev/null || true
 
