@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Safe deploy pipeline for Rick (zap-agent).
+# Safe deploy pipeline for Rick (rick-ai).
 # Called by edit-session.ts after Claude Code edits source code.
 #
 # Runs inside a docker:cli container (Alpine) with docker.sock mounted.
@@ -27,12 +27,12 @@
 
 set -eu
 
-# PROJECT_DIR can be passed as env var from edit-session.ts, fallback to $HOME/zap-agent
-PROJECT_DIR="${PROJECT_DIR:-$HOME/zap-agent}"
+# PROJECT_DIR can be passed as env var from edit-session.ts, fallback to $HOME/rick-ai
+PROJECT_DIR="${PROJECT_DIR:-$HOME/rick-ai}"
 STAGING_DIR="${1:-}"
 BACKUP_DIR="$PROJECT_DIR/src.bak"
-CANDIDATE_TAG="zap-agent-agent:candidate"
-CANDIDATE_NAME="zap-agent-candidate"
+CANDIDATE_TAG="rick-ai-agent:candidate"
+CANDIDATE_NAME="rick-ai-candidate"
 HEALTH_PORT_CANDIDATE=8081
 HEALTH_PORT_MAIN=80
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"
@@ -148,7 +148,7 @@ log "Step 6: Swapping — promoting candidate image..."
 # Re-tag the candidate image as the image docker-compose expects.
 # This avoids rebuilding the image a second time — the candidate was already
 # built and smoke-tested in steps 3-5.
-COMPOSE_IMAGE="zap-agent-agent:latest"
+COMPOSE_IMAGE="rick-ai-agent:latest"
 docker tag "$CANDIDATE_TAG" "$COMPOSE_IMAGE"
 
 # Restart the service using the pre-built image (no --build needed)

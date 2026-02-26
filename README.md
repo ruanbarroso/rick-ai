@@ -267,7 +267,7 @@ All infrastructure runs on Oracle Cloud Always Free tier — zero cost.
 ```
 Host Docker (cluster-24g)
 │
-├── zap-agent-agent-1              # Main Rick container (always running)
+├── rick-ai-agent-1                # Main Rick container (always running)
 │   ├── Mounts docker.sock         # Creates/manages child containers
 │   ├── Mounts auth_info/          # WhatsApp session persistence
 │   ├── Mounts scripts/            # Deploy scripts (read-only)

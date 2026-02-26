@@ -283,7 +283,7 @@ export class EditSession {
    * 2. Spin up Claude Code container with staging dir mounted
    */
   async start(env: Record<string, string>): Promise<void> {
-    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/zap-agent";
+    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
 
     // Create staging directory with copy of current source on the HOST.
     // We copy src/, package.json, tsconfig.json, package-lock.json from the host project,
@@ -704,7 +704,7 @@ export class EditSession {
     this.state = "deploying";
     await this.sendMessage("*Iniciando deploy seguro...*\nEtapas: build (inclui tsc) → smoke test → swap → watchdog");
 
-    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/zap-agent";
+    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
 
     const child = spawn("docker", [
       "run", "--rm",

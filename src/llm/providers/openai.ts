@@ -156,7 +156,7 @@ export class OpenAIProvider implements LLMProvider {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.oauthToken}`,
-      "User-Agent": "zap-agent/1.0",
+      "User-Agent": "rick-ai/1.0",
       originator: "opencode",
     };
 

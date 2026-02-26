@@ -139,7 +139,7 @@ export class OpenAIOAuthService {
       state,
       id_token_add_organizations: "true",
       codex_cli_simplified_flow: "true",
-      originator: "zap-agent",
+      originator: "rick-ai",
     });
 
     const authUrl = `${AUTH_URL}?${params.toString()}`;

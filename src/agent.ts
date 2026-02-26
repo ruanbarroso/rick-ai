@@ -252,33 +252,41 @@ export class Agent {
     // Keep OAuth tokens fresh — needed for code sub-agent GPT fallback
     await this.ensureOAuthTokens(userPhone);
 
+    // Collect all images for potential sub-agent forwarding
+    const allImageMedias: MediaAttachment[] = [];
+    if (routingMedia && routingMedia.mimeType.startsWith("image/")) allImageMedias.push(routingMedia);
+    if (imageMedias) {
+      for (const img of imageMedias) {
+        if (!allImageMedias.includes(img)) allImageMedias.push(img);
+      }
+    }
+
     // If there are sessions with pending "done" polls, handle the 3 cases:
     // 1. Encerrar (explicit close words)
     // 2. Continuidade (adjust/fix on the same session)
     // 3. Novo pedido (different topic → nag to close first)
-    if (this.sessionManager.hasDoneSessions() && !routingMedia) {
-      return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls);
+    if (this.sessionManager.hasDoneSessions()) {
+      return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias);
     }
 
     // If sessions are running but none done, tell user to wait
-    if (this.sessionManager.getRunningSessions().length > 0 && !routingMedia) {
+    if (this.sessionManager.getRunningSessions().length > 0) {
       return "O sub-agente ainda esta trabalhando... Aguarde um momento.";
     }
 
     // Classify the task — does it need a sub-agent?
-    if (!routingMedia) {
-       const classification = await classifyTask(fullText);
-      if (classification) {
-         return this.delegateToSubAgent(
-          userPhone,
-          connectorName,
-          fullText,
-          classification.credentialHints,
-          {},
-          audioUrl,
-          imageUrls
-        );
-      }
+    const classification = await classifyTask(fullText);
+    if (classification) {
+      return this.delegateToSubAgent(
+        userPhone,
+        connectorName,
+        fullText,
+        classification.credentialHints,
+        {},
+        audioUrl,
+        imageUrls,
+        allImageMedias
+      );
     }
 
     // Simple chat — Gemini Flash handles directly
@@ -350,7 +358,8 @@ export class Agent {
     credentialHints: string[] = [],
     preResolvedCredentials: Record<string, string> = {},
     audioUrl?: string,
-    imageUrls?: string[]
+    imageUrls?: string[],
+    imageMedias?: MediaAttachment[]
   ): Promise<string> {
     // Build env vars for the sub-agent container — all available LLM keys
     const env: Record<string, string> = {};
@@ -448,7 +457,7 @@ export class Agent {
     let session;
     try {
       session = await this.sessionManager.createSession(
-        userMessage, connectorName, userPhone, resolved, env
+        userMessage, connectorName, userPhone, resolved, env, imageMedias
       );
     } catch (err) {
       logger.error({ err }, "Sub-agent session failed");
@@ -612,7 +621,8 @@ export class Agent {
     connectorName: string,
     text: string,
     audioUrl?: string,
-    imageUrls?: string[]
+    imageUrls?: string[],
+    imageMedias?: MediaAttachment[]
   ): Promise<string> {
     const doneSessions = this.sessionManager.getDoneSessions();
     if (doneSessions.length === 0) return "Nenhuma sessao pendente.";
@@ -680,7 +690,7 @@ export class Agent {
     // CASE 2: Continuation — relay to the most recent done session
     await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls);
 
-    this.sessionManager.sendToSession(mostRecent.id, text).catch(async (err) => {
+    this.sessionManager.sendToSession(mostRecent.id, text, imageMedias).catch(async (err) => {
       logger.error({ err }, "Sub-agent relay failed");
       await this.connectorManager.sendMessage(
         connectorName, userPhone,

@@ -146,7 +146,22 @@ async function callOpenAI(provider, messages, systemPrompt, tools) {
     headers["authorization"] = `Bearer ${provider.apiKey}`;
   }
 
-  const msgs = [{ role: "system", content: systemPrompt }, ...messages];
+  // Convert multimodal content blocks to OpenAI format
+  const convertedMessages = messages.map(m => {
+    if (m.role === "user" && Array.isArray(m.content)) {
+      const parts = [];
+      for (const block of m.content) {
+        if (block.type === "text") {
+          parts.push({ type: "text", text: block.text });
+        } else if (block.type === "image" && block.source?.type === "base64") {
+          parts.push({ type: "image_url", image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` } });
+        }
+      }
+      return { role: m.role, content: parts.length > 0 ? parts : m.content };
+    }
+    return m;
+  });
+  const msgs = [{ role: "system", content: systemPrompt }, ...convertedMessages];
   const body = { model: provider.model, messages: msgs, max_tokens: provider.maxOutputTokens };
   if (tools && tools.length > 0) {
     body.tools = tools.map(t => ({
@@ -175,7 +190,7 @@ async function callOpenAICodex(provider, messages, systemPrompt, tools) {
   const headers = {
     "content-type": "application/json",
     "authorization": `Bearer ${provider.accessToken}`,
-    "user-agent": "zap-agent/1.0",
+    "user-agent": "rick-ai/1.0",
     "originator": "opencode",
   };
   if (provider.accountId) {
@@ -271,8 +286,22 @@ async function callGemini(provider, messages, systemPrompt, tools) {
         parts: [{ functionResponse: { name: m.tool_name || "tool", response: { content: m.content } } }],
       };
     }
-    // user
-    return { role: "user", parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }] };
+    // user — handle multimodal content (text + images)
+    if (typeof m.content === "string") {
+      return { role: "user", parts: [{ text: m.content }] };
+    }
+    if (Array.isArray(m.content)) {
+      const parts = [];
+      for (const block of m.content) {
+        if (block.type === "text") {
+          parts.push({ text: block.text });
+        } else if (block.type === "image" && block.source?.type === "base64") {
+          parts.push({ inlineData: { mimeType: block.source.media_type, data: block.source.data } });
+        }
+      }
+      if (parts.length > 0) return { role: "user", parts };
+    }
+    return { role: "user", parts: [{ text: JSON.stringify(m.content) }] };
   });
 
   const body = {
@@ -894,9 +923,41 @@ REGRAS:
 
 // ==================== MAIN AGENTIC LOOP ====================
 
-async function handleUserMessage(text) {
-  // Add user message to history
-  conversationHistory.push({ role: "user", content: text });
+/**
+ * Build a multimodal user content block from text + image paths.
+ * For Anthropic: array of { type: "text" } and { type: "image", source: { type: "base64", ... } }
+ * For others: we embed a note about images (they don't support vision in this format).
+ */
+function buildUserContent(text, imagePaths) {
+  if (!imagePaths || imagePaths.length === 0) return text;
+
+  // Read images and build multimodal content blocks
+  const blocks = [];
+  for (const imgPath of imagePaths) {
+    try {
+      const data = readFileSync(imgPath);
+      const base64 = data.toString("base64");
+      const ext = imgPath.split(".").pop() || "png";
+      const mimeMap = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp" };
+      const mediaType = mimeMap[ext] || "image/png";
+      blocks.push({
+        type: "image",
+        source: { type: "base64", media_type: mediaType, data: base64 },
+      });
+    } catch (err) {
+      // Skip unreadable images
+    }
+  }
+
+  if (blocks.length === 0) return text;
+  blocks.push({ type: "text", text: text || "Analise esta(s) imagem(ns)." });
+  return blocks;
+}
+
+async function handleUserMessage(text, imagePaths) {
+  // Add user message to history (multimodal if images present)
+  const userContent = buildUserContent(text, imagePaths);
+  conversationHistory.push({ role: "user", content: userContent });
 
   // Check if context rotation is needed
   await rotateContextIfNeeded();
@@ -984,7 +1045,7 @@ rl.on("line", async (line) => {
     const msg = JSON.parse(line.trim());
 
     if (msg.type === "message") {
-      await handleUserMessage(msg.text);
+      await handleUserMessage(msg.text, msg.images);
     } else if (msg.type === "ping") {
       emit("pong", {});
     } else if (msg.type === "kill") {

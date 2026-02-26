@@ -22,16 +22,16 @@ sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 5432 -j ACCEPT
 sudo netfilter-persistent save
 
 echo "=== Criando diretorio do projeto ==="
-mkdir -p ~/zap-agent
-cd ~/zap-agent
+mkdir -p ~/rick-ai
+cd ~/rick-ai
 
 echo ""
 echo "============================================"
 echo "  Setup concluido!"
 echo ""
 echo "  Proximos passos:"
-echo "  1. Copie os arquivos do projeto para ~/zap-agent/"
-echo "     scp -r ./* usuario@ip_oracle:~/zap-agent/"
+echo "  1. Copie os arquivos do projeto para ~/rick-ai/"
+echo "     scp -r ./* usuario@ip_oracle:~/rick-ai/"
 echo ""
 echo "  2. Crie o arquivo .env:"
 echo "     cp .env.example .env"

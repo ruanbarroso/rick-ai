@@ -221,7 +221,7 @@ interface LatestVersionInfo {
 }
 
 function getProjectDir(): string {
-  return process.env.HOST_PROJECT_DIR || "/home/ubuntu/zap-agent";
+  return process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
 }
 
 function getVersionCachePath(): string {
@@ -496,7 +496,7 @@ const EXPORT_INCLUDES = [
 ];
 
 async function handleCodeExport(res: ServerResponse): Promise<void> {
-  const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/zap-agent";
+  const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
 
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -569,7 +569,7 @@ async function handleCodeExport(res: ServerResponse): Promise<void> {
 // ==================== CODE IMPORT ====================
 
 async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/zap-agent";
+  const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
 
   try {
     // Read the entire request body
@@ -849,7 +849,7 @@ async function getOwnContainerName(): Promise<string | null> {
     ]);
     return output.trim().replace(/^\//, "");
   } catch {
-    return "zap-agent-agent-1"; // fallback
+    return "rick-ai-agent-1"; // fallback
   }
 }
 

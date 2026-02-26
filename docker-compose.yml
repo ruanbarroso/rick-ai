@@ -10,7 +10,7 @@ services:
     ports:
       - "80:80"
     environment:
-      - HOST_PROJECT_DIR=/home/ubuntu/zap-agent
+      - HOST_PROJECT_DIR=/home/ubuntu/rick-ai
     volumes:
       - ./auth_info:/app/auth_info
       - /var/run/docker.sock:/var/run/docker.sock

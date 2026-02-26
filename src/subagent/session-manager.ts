@@ -1,8 +1,12 @@
 import { execFile, spawn, ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { randomBytes } from "node:crypto";
+import { writeFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SubAgentSession, SessionState } from "./types.js";
 import type { ConnectorManager } from "../connectors/connector-manager.js";
+import type { MediaAttachment } from "../llm/types.js";
 import { query } from "../memory/database.js";
 import { logger } from "../config/logger.js";
 
@@ -205,7 +209,8 @@ export class SessionManager {
     connectorName: string,
     userId: string,
     credentials: Record<string, string>,
-    env: Record<string, string>
+    env: Record<string, string>,
+    images?: MediaAttachment[]
   ): Promise<SubAgentSession> {
     const id = randomBytes(8).toString("hex");
     const containerName = `subagent-${id}`;
@@ -228,7 +233,7 @@ export class SessionManager {
     this.sessions.set(id, session);
 
     try {
-      await this.startContainer(session, env);
+      await this.startContainer(session, env, images);
     } catch (err) {
       logger.error({ err, sessionId: id }, "Failed to start sub-agent container");
       session.state = "killed";
@@ -242,7 +247,7 @@ export class SessionManager {
   /**
    * Send a user message to an existing session.
    */
-  async sendToSession(sessionId: string, message: string): Promise<void> {
+  async sendToSession(sessionId: string, message: string, images?: MediaAttachment[]): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session || !session.containerId) {
       throw new Error(`No session with id ${sessionId}`);
@@ -258,8 +263,13 @@ export class SessionManager {
       this.onSessionMessage(sessionId, "user", message);
     }
 
+    // Copy images into the container and collect paths
+    const imagePaths = await this.injectImages(session, images);
+
     // Send via stdin NDJSON
-    this.sendToAgentProcess(sessionId, { type: "message", text: message });
+    const payload: any = { type: "message", text: message };
+    if (imagePaths.length > 0) payload.images = imagePaths;
+    this.sendToAgentProcess(sessionId, payload);
   }
 
   async killSession(sessionId: string): Promise<void> {
@@ -318,7 +328,7 @@ export class SessionManager {
 
   // ==================== CONTAINER MANAGEMENT ====================
 
-  private async startContainer(session: SubAgentSession, env: Record<string, string>): Promise<void> {
+  private async startContainer(session: SubAgentSession, env: Record<string, string>, images?: MediaAttachment[]): Promise<void> {
     const envArgs: string[] = [];
     for (const [k, v] of Object.entries(env)) {
       if (v) envArgs.push("-e", `${k}=${v}`);
@@ -351,8 +361,11 @@ export class SessionManager {
         this.onSessionMessage(session.id, "user", session.taskDescription);
       }
 
-      // Send to agent
-      this.sendToAgentProcess(session.id, { type: "message", text: enrichedPrompt });
+      // Copy images into container and send to agent
+      const imagePaths = await this.injectImages(session, images);
+      const payload: any = { type: "message", text: enrichedPrompt };
+      if (imagePaths.length > 0) payload.images = imagePaths;
+      this.sendToAgentProcess(session.id, payload);
     } else {
       // Blank session — waiting for user to send first message
       session.state = "waiting_user";
@@ -506,6 +519,38 @@ export class SessionManager {
     } catch (err) {
       logger.warn({ err, sessionId }, "Failed to delete session messages");
     }
+  }
+
+  // ==================== IMAGE INJECTION ====================
+
+  /**
+   * Copy image attachments into a running sub-agent container.
+   * Returns the list of paths inside the container (e.g. /tmp/img-xxx.png).
+   */
+  private async injectImages(session: SubAgentSession, images?: MediaAttachment[]): Promise<string[]> {
+    if (!images || images.length === 0 || !session.containerId) return [];
+
+    const paths: string[] = [];
+    for (const img of images) {
+      if (!img.mimeType.startsWith("image/")) continue;
+      try {
+        const ext = img.mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png";
+        const id = randomBytes(4).toString("hex");
+        const containerPath = `/tmp/img-${id}.${ext}`;
+        const tmpFile = join(tmpdir(), `subagent-img-${id}.${ext}`);
+
+        await writeFile(tmpFile, img.data);
+        try {
+          await execFileAsync("docker", ["cp", tmpFile, `${session.containerName}:${containerPath}`]);
+          paths.push(containerPath);
+        } finally {
+          await unlink(tmpFile).catch(() => {});
+        }
+      } catch (err) {
+        logger.warn({ err, sessionId: session.id }, "Failed to inject image into sub-agent container");
+      }
+    }
+    return paths;
   }
 
   // ==================== HELPERS ====================
