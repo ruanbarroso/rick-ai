@@ -1701,13 +1701,81 @@
   </div>
   <div class="settings-body">
 
-    <!-- AI Providers -->
+    <!-- Version & Updates -->
     <div class="settings-section">
       <div class="settings-section-header" onclick="toggleSection(this)">
-        <h3>Provedores de IA</h3>
+        <h3>Versao</h3>
         <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
       </div>
       <div class="settings-section-body">
+        <!-- Version info (clickable for easter egg) -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div>
+            <span class="settings-label" style="margin-bottom:2px;">Versao instalada</span>
+            <div id="version-current" style="font-size:0.85rem;color:var(--text-secondary);cursor:default;user-select:none;" onclick="versionEasterEgg()">
+              Carregando...
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <div id="version-badge" style="display:none;padding:3px 10px;border-radius:12px;font-size:0.72rem;font-weight:600;"></div>
+            <button class="version-refresh-btn" id="version-refresh-btn" onclick="onVersionRefreshClick(event)" title="Reverificar versao" aria-label="Reverificar versao" style="display:none;position:relative;z-index:2;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+                <polyline points="21 3 21 9 15 9"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div id="update-inline" style="display:none;margin-bottom:10px;">
+          <div style="font-size:0.8rem;font-weight:600;color:var(--text-primary);">Nova versao disponivel</div>
+          <div id="update-details" style="font-size:0.78rem;color:var(--text-secondary);margin-top:2px;"></div>
+        </div>
+
+        <!-- Check for updates -->
+        <div class="settings-btn-row">
+          <button class="settings-action-btn primary" onclick="onVersionPrimaryClick()" id="btn-check-updates">
+            Verificar atualizacoes
+          </button>
+        </div>
+
+        <!-- Export/Import (hidden, revealed by easter egg) -->
+        <div id="version-dev-tools" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+          <span class="settings-label" style="font-size:0.75rem;opacity:0.6;">Ferramentas de desenvolvimento</span>
+          <div class="settings-btn-row" style="margin-top:8px;">
+            <button class="settings-action-btn" onclick="exportCode()" id="btn-export-code">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Exportar
+            </button>
+            <button class="settings-action-btn" onclick="document.getElementById('import-code-input').click()" id="btn-import-code">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Importar
+            </button>
+            <input type="file" id="import-code-input" accept=".tar.gz,.tgz,.zip" style="display:none" onchange="importCode(this)">
+          </div>
+        </div>
+
+        <!-- Status area (shared by all operations) -->
+        <div id="code-op-status" style="margin-top:10px;display:none;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div id="code-op-spinner" class="typing-dot" style="display:none;"></div>
+            <span id="code-op-text" style="font-size:0.82rem;color:var(--text-secondary);"></span>
+          </div>
+          <div id="code-op-progress" style="margin-top:6px;display:none;">
+            <div style="background:var(--bg-surface);border-radius:4px;height:6px;overflow:hidden;">
+              <div id="code-op-progress-bar" style="background:var(--accent);height:100%;width:0%;transition:width 0.3s;"></div>
+            </div>
+          </div>
+          <pre id="code-op-log" style="margin-top:8px;display:none;max-height:200px;overflow-y:auto;font-size:0.75rem;background:var(--bg-surface);border-radius:6px;padding:10px;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);border:1px solid var(--border);"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI Providers -->
+    <div class="settings-section">
+      <div class="settings-section-header collapsed" onclick="toggleSection(this)">
+        <h3>Provedores de IA</h3>
+        <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+      </div>
+      <div class="settings-section-body collapsed">
         <div class="provider-block">
           <div class="provider-head">
             <div class="provider-name">Google Gemini (obrigatorio)</div>
@@ -1862,74 +1930,6 @@
       </div>
     </div>
 
-    <!-- Version & Updates -->
-    <div class="settings-section">
-      <div class="settings-section-header collapsed" onclick="toggleSection(this)">
-        <h3>Versao</h3>
-        <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
-      </div>
-      <div class="settings-section-body collapsed">
-        <!-- Version info (clickable for easter egg) -->
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-          <div>
-            <span class="settings-label" style="margin-bottom:2px;">Versao instalada</span>
-            <div id="version-current" style="font-size:0.85rem;color:var(--text-secondary);cursor:default;user-select:none;" onclick="versionEasterEgg()">
-              Carregando...
-            </div>
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;">
-            <div id="version-badge" style="display:none;padding:3px 10px;border-radius:12px;font-size:0.72rem;font-weight:600;"></div>
-            <button class="version-refresh-btn" id="version-refresh-btn" onclick="onVersionRefreshClick(event)" title="Reverificar versao" aria-label="Reverificar versao" style="display:none;position:relative;z-index:2;">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
-                <polyline points="21 3 21 9 15 9"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        <div id="update-inline" style="display:none;margin-bottom:10px;">
-          <div style="font-size:0.8rem;font-weight:600;color:var(--text-primary);">Nova versao disponivel</div>
-          <div id="update-details" style="font-size:0.78rem;color:var(--text-secondary);margin-top:2px;"></div>
-        </div>
-
-        <!-- Check for updates -->
-        <div class="settings-btn-row">
-          <button class="settings-action-btn primary" onclick="onVersionPrimaryClick()" id="btn-check-updates">
-            Verificar atualizacoes
-          </button>
-        </div>
-
-        <!-- Export/Import (hidden, revealed by easter egg) -->
-        <div id="version-dev-tools" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
-          <span class="settings-label" style="font-size:0.75rem;opacity:0.6;">Ferramentas de desenvolvimento</span>
-          <div class="settings-btn-row" style="margin-top:8px;">
-            <button class="settings-action-btn" onclick="exportCode()" id="btn-export-code">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Exportar
-            </button>
-            <button class="settings-action-btn" onclick="document.getElementById('import-code-input').click()" id="btn-import-code">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Importar
-            </button>
-            <input type="file" id="import-code-input" accept=".tar.gz,.tgz,.zip" style="display:none" onchange="importCode(this)">
-          </div>
-        </div>
-
-        <!-- Status area (shared by all operations) -->
-        <div id="code-op-status" style="margin-top:10px;display:none;">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <div id="code-op-spinner" class="typing-dot" style="display:none;"></div>
-            <span id="code-op-text" style="font-size:0.82rem;color:var(--text-secondary);"></span>
-          </div>
-          <div id="code-op-progress" style="margin-top:6px;display:none;">
-            <div style="background:var(--bg-surface);border-radius:4px;height:6px;overflow:hidden;">
-              <div id="code-op-progress-bar" style="background:var(--accent);height:100%;width:0%;transition:width 0.3s;"></div>
-            </div>
-          </div>
-          <pre id="code-op-log" style="margin-top:8px;display:none;max-height:200px;overflow-y:auto;font-size:0.75rem;background:var(--bg-surface);border-radius:6px;padding:10px;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);border:1px solid var(--border);"></pre>
-        </div>
-      </div>
-    </div>
-
     <!-- Dev Repository (EASTER EGG) -->
     <div class="settings-section" id="dev-repo-section" style="display:none;">
       <div class="settings-section-header collapsed" onclick="toggleSection(this)">
@@ -2078,6 +2078,7 @@ var pendingFileReads = [];      // in-flight FileReader promises
 var pendingAudio = null;        // { blob, mimeType, localUrl } — set after recording stops
 var pendingAudioEcho = false;
 var pendingImageEcho = false;
+var pendingUserEcho = false;
 var reconnectAttempts = 0;
 var reconnectTimer = null;
 var password = '';
@@ -2220,24 +2221,23 @@ function handleServerMessage(msg) {
       var sid = msg.sessionId || (editModeActive ? 'edit' : 'main');
       var from = msg.from === 'agent' ? 'agent' : 'user';
       var echoImageUrls = msg.imageUrls || (msg.imageUrl ? [msg.imageUrl] : null);
-      // Skip echo for user media messages — already shown locally with blob/data URLs
-      if (from === 'user' && (pendingAudioEcho || pendingImageEcho)) {
-        var hasAudioEcho = msg.audioUrl && pendingAudioEcho;
-        var hasImageEcho = echoImageUrls && pendingImageEcho;
-        if (hasAudioEcho || hasImageEcho) {
-          if (hasAudioEcho) pendingAudioEcho = false;
-          if (hasImageEcho) pendingImageEcho = false;
-          // Update stored message URLs from local to server URLs
+      // Skip echo for user messages — already shown locally
+      if (from === 'user' && pendingUserEcho) {
+        pendingUserEcho = false;
+        // Update stored media URLs from local blob/data to server URLs
+        if (pendingAudioEcho || pendingImageEcho) {
           var msgs = sessionMessages[sid] || [];
           for (var k = msgs.length - 1; k >= 0; k--) {
-            if (msgs[k].from === 'user' && (msgs[k].audioUrl || msgs[k].imageUrls)) {
-              if (hasAudioEcho) msgs[k].audioUrl = msg.audioUrl;
-              if (hasImageEcho) msgs[k].imageUrls = echoImageUrls;
+            if (msgs[k].from === 'user') {
+              if (pendingAudioEcho && msg.audioUrl) msgs[k].audioUrl = msg.audioUrl;
+              if (pendingImageEcho && echoImageUrls) msgs[k].imageUrls = echoImageUrls;
               break;
             }
           }
-          break;
+          pendingAudioEcho = false;
+          pendingImageEcho = false;
         }
+        break;
       }
       storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls);
       if (sid === currentSessionId) {
@@ -2820,14 +2820,13 @@ async function sendMessage() {
   if (hasAudio) pendingAudioEcho = true;
   if (localImageUrls.length > 0) pendingImageEcho = true;
 
-  // Show message locally immediately
-  var sid = currentSessionId || 'main';
-  if (hasAudio || hasFiles) {
-    storeMessage(sid, text, 'user', localAudioUrl, localImageUrls.length > 0 ? localImageUrls : null);
-    if (sid === currentSessionId) {
-      appendMessageToDOM(text, 'user', localAudioUrl, localImageUrls.length > 0 ? localImageUrls : null);
-    }
-  }
+   // Show message locally immediately (all user messages, not just media)
+   var sid = currentSessionId || 'main';
+   pendingUserEcho = true;
+   storeMessage(sid, text, 'user', localAudioUrl, localImageUrls.length > 0 ? localImageUrls : null);
+   if (sid === currentSessionId) {
+     appendMessageToDOM(text, 'user', localAudioUrl, localImageUrls.length > 0 ? localImageUrls : null);
+   }
 
   // Build files array for payload
   var filesPayload = [];
