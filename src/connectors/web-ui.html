@@ -3724,13 +3724,29 @@ function checkForUpdates() {
         document.getElementById('update-details').textContent =
           data.latest.sha + ' (' + latestDateStr + ')' +
           (data.latest.message ? ' — ' + data.latest.message : '');
+        var installBtn = document.getElementById('btn-install-update');
+        installBtn.textContent = 'Instalar atualizacao';
+        updateInfo.style.display = 'block';
+      } else if (data.latestSource === 'fallback') {
+        // GitHub check unavailable (rate limit/network). Still allow forcing update.
+        badge.style.display = 'inline-block';
+        badge.style.background = 'rgba(148,163,184,0.18)';
+        badge.style.color = '#cbd5e1';
+        badge.textContent = 'Verificacao indisponivel';
+
+        document.getElementById('update-details').textContent =
+          'Nao foi possivel consultar a ultima versao no GitHub agora. Voce pode tentar instalar mesmo assim.';
+        var installBtnFallback = document.getElementById('btn-install-update');
+        installBtnFallback.textContent = 'Tentar atualizar mesmo assim';
         updateInfo.style.display = 'block';
       } else {
-        // No update available (or GitHub API failed — assume up to date)
+        // No update available
         badge.style.display = 'inline-block';
         badge.style.background = 'rgba(74,222,128,0.15)';
         badge.style.color = '#4ade80';
         badge.textContent = 'Atualizado';
+        var installBtnNoUpdate = document.getElementById('btn-install-update');
+        installBtnNoUpdate.textContent = 'Instalar atualizacao';
         updateInfo.style.display = 'none';
       }
     })
