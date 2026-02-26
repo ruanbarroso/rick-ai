@@ -1933,6 +1933,22 @@
   <p id="loading-text" style="color:var(--text-muted);margin-top:12px;margin-bottom:0;">Carregando...</p>
 </div>
 
+<!-- UPDATE CONFIRM MODAL -->
+<div class="confirm-overlay" id="update-confirm-overlay" onclick="closeUpdateConfirm()"></div>
+<div class="confirm-modal" id="update-confirm-modal">
+  <h3>Instalar atualizacao?</h3>
+  <p>
+    Isso vai:<br>
+    1. Baixar o codigo mais recente<br>
+    2. Rebuild + restart do container<br><br>
+    Se o build falhar, rollback automatico.
+  </p>
+  <div class="confirm-actions">
+    <button class="settings-action-btn" onclick="closeUpdateConfirm()">Cancelar</button>
+    <button class="settings-action-btn primary" onclick="confirmInstallUpdate()">Instalar</button>
+  </div>
+</div>
+
 <!-- TOAST -->
 <div class="toast" id="toast"></div>
 
@@ -3793,9 +3809,25 @@ function waitForRestart(expectedVersion) {
 }
 
 function installUpdate() {
-  if (!confirm('Instalar atualizacao do GitHub?\n\nIsso vai:\n1. Baixar o codigo mais recente\n2. Rebuild + restart do container\n\nSe o build falhar, rollback automatico.')) {
-    return;
-  }
+  openUpdateConfirm();
+}
+
+function openUpdateConfirm() {
+  document.getElementById('update-confirm-overlay').classList.add('visible');
+  document.getElementById('update-confirm-modal').classList.add('visible');
+}
+
+function closeUpdateConfirm() {
+  document.getElementById('update-confirm-overlay').classList.remove('visible');
+  document.getElementById('update-confirm-modal').classList.remove('visible');
+}
+
+function confirmInstallUpdate() {
+  closeUpdateConfirm();
+  startInstallUpdate();
+}
+
+function startInstallUpdate() {
 
   var btn = document.getElementById('btn-check-updates');
   var refreshBtn = document.getElementById('version-refresh-btn');
