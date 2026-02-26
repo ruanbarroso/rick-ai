@@ -365,8 +365,8 @@ Exit codes: `0` = success, `1` = build fail, `2` = smoke test fail, `3` = watchd
 
 Rick can update itself from GitHub without SSH access:
 
-1. **Check for updates**: `GET /api/version` compares `RICK_COMMIT_SHA` with the latest commit on `main` via GitHub API
-2. **Install update**: `POST /api/update` downloads the latest code from GitHub, runs the deploy pipeline with full rollback protection
+1. **Check for updates**: `GET /api/version` compares `RICK_COMMIT_SHA` with the latest commit on `main` via GitHub API. On success, Rick persists the last known latest version in a local cache file (`.rick-latest-version.json`).
+2. **Install update**: `POST /api/update` downloads code from GitHub and runs the deploy pipeline with full rollback protection. If live version lookup fails temporarily, Rick falls back to the cached latest version (when available).
 3. **Web UI**: The "Versao" section in settings shows current version, update availability, and an install button
 
 ## Quick Start

@@ -210,6 +210,76 @@ function authenticateRequest(req: IncomingMessage, res: ServerResponse): boolean
 // ==================== VERSION ====================
 
 const GITHUB_REPO = "ruanbarroso/rick-ai";
+const VERSION_CACHE_FILE = ".rick-latest-version.json";
+
+interface LatestVersionInfo {
+  sha: string;
+  fullSha?: string;
+  date: string;
+  message: string;
+  checkedAt: string;
+}
+
+function getProjectDir(): string {
+  return process.env.HOST_PROJECT_DIR || "/home/ubuntu/zap-agent";
+}
+
+function getVersionCachePath(): string {
+  return join(getProjectDir(), VERSION_CACHE_FILE);
+}
+
+async function fetchLatestFromGitHub(): Promise<LatestVersionInfo | null> {
+  try {
+    const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits/main`, {
+      headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "RickAI" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) {
+      logger.warn({ status: resp.status }, "Version check: GitHub API returned non-OK");
+      return null;
+    }
+
+    const data = await resp.json() as any;
+    const fullSha = data.sha as string | undefined;
+    if (!fullSha) return null;
+
+    return {
+      sha: fullSha.substring(0, 7),
+      fullSha,
+      date: data.commit?.committer?.date || "unknown",
+      message: data.commit?.message?.split("\n")[0] || "",
+      checkedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    logger.warn({ err }, "Failed to fetch latest commit from GitHub");
+    return null;
+  }
+}
+
+async function readLatestVersionCache(): Promise<LatestVersionInfo | null> {
+  try {
+    const raw = await readFile(getVersionCachePath(), "utf-8");
+    const parsed = JSON.parse(raw) as Partial<LatestVersionInfo>;
+    if (!parsed || !parsed.sha || !parsed.date) return null;
+    return {
+      sha: parsed.sha,
+      fullSha: parsed.fullSha,
+      date: parsed.date,
+      message: parsed.message || "",
+      checkedAt: parsed.checkedAt || "unknown",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeLatestVersionCache(latest: LatestVersionInfo): Promise<void> {
+  try {
+    await writeFile(getVersionCachePath(), JSON.stringify(latest, null, 2), "utf-8");
+  } catch (err) {
+    logger.warn({ err }, "Failed to persist latest version cache");
+  }
+}
 
 async function handleVersionCheck(res: ServerResponse): Promise<void> {
   try {
@@ -218,30 +288,22 @@ async function handleVersionCheck(res: ServerResponse): Promise<void> {
       date: process.env.RICK_COMMIT_DATE || "unknown",
     };
 
-    // Fetch latest commit from GitHub (public API, no auth)
-    let latest: { sha: string; date: string; message: string } | null = null;
-    try {
-      const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits/main`, {
-        headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "RickAI" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (resp.ok) {
-        const data = await resp.json() as any;
-        latest = {
-          sha: data.sha?.substring(0, 7) || "unknown",
-          date: data.commit?.committer?.date || "unknown",
-          message: data.commit?.message?.split("\n")[0] || "",
-        };
+    let latestSource: "github" | "cache" | "none" = "none";
+    let latest = await fetchLatestFromGitHub();
+    if (latest) {
+      latestSource = "github";
+      await writeLatestVersionCache(latest);
+    } else {
+      latest = await readLatestVersionCache();
+      if (latest) {
+        latestSource = "cache";
       }
-    } catch (err) {
-      logger.warn({ err }, "Failed to fetch latest commit from GitHub");
     }
 
-    // If GitHub API failed (rate limit, network, etc.), assume up to date
     const hasUpdate = latest ? (current.sha !== "unknown" && latest.sha !== current.sha) : false;
 
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ current, latest, hasUpdate }));
+    res.end(JSON.stringify({ current, latest, hasUpdate, latestSource }));
   } catch (err) {
     logger.error({ err }, "Version check failed");
     res.writeHead(500, { "Content-Type": "application/json" });
@@ -252,13 +314,29 @@ async function handleVersionCheck(res: ServerResponse): Promise<void> {
 // ==================== UPDATE (download GitHub zip + deploy) ====================
 
 async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/zap-agent";
+  const projectDir = getProjectDir();
 
   try {
     logger.info("Update: downloading latest code from GitHub...");
 
+    // Resolve target version (GitHub live first, then local cache fallback)
+    let target = await fetchLatestFromGitHub();
+    let versionSource: "github" | "cache" | "unknown" = "unknown";
+    if (target) {
+      versionSource = "github";
+      await writeLatestVersionCache(target);
+    } else {
+      target = await readLatestVersionCache();
+      if (target) versionSource = "cache";
+    }
+
+    const commitSha = target?.sha || "unknown";
+    const commitDate = target?.date || "unknown";
+    const zipUrl = target?.fullSha
+      ? `https://github.com/${GITHUB_REPO}/archive/${target.fullSha}.zip`
+      : `https://github.com/${GITHUB_REPO}/archive/refs/heads/main.zip`;
+
     // Download zip from GitHub
-    const zipUrl = `https://github.com/${GITHUB_REPO}/archive/refs/heads/main.zip`;
     const zipResp = await fetch(zipUrl, {
       signal: AbortSignal.timeout(30000),
     });
@@ -271,21 +349,6 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
 
     const zipBuffer = Buffer.from(await zipResp.arrayBuffer());
     logger.info({ sizeMB: (zipBuffer.length / 1024 / 1024).toFixed(1) }, "Update: zip downloaded");
-
-    // Get the latest commit info to stamp the build
-    let commitSha = "unknown";
-    let commitDate = "unknown";
-    try {
-      const commitResp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits/main`, {
-        headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "RickAI" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (commitResp.ok) {
-        const data = await commitResp.json() as any;
-        commitSha = data.sha?.substring(0, 7) || "unknown";
-        commitDate = data.commit?.committer?.date || "unknown";
-      }
-    } catch { /* use defaults */ }
 
     // Write zip to host
     const hostStaging = `/tmp/rick-update-${Date.now()}`;
@@ -321,6 +384,7 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
     const deployLog: string[] = [];
     deployLog.push(`[update] Downloaded from GitHub (${(zipBuffer.length / 1024 / 1024).toFixed(1)} MB)`);
     deployLog.push(`[update] Version: ${commitSha} (${commitDate})`);
+    deployLog.push(`[update] Version source: ${versionSource}`);
 
     // Backup + copy
     const copyScript = [
@@ -356,6 +420,7 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
       success: true,
       deploying: true,
       version: commitSha,
+      versionSource,
       log: deployLog.join("\n"),
       message: "Arquivos copiados. Build iniciando — Rick vai reiniciar em breve.",
     }));
