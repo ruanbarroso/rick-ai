@@ -143,12 +143,12 @@ class StreamQueue {
  * connectorName and userId provided at construction time.
  */
 const EDIT_SYSTEM_PROMPT = [
-  "Voce e o Claude Code editando o codigo-fonte do Rick AI, um agente pessoal de IA.",
-  "O workspace /workspace contem o codigo TypeScript do projeto (src/, package.json, tsconfig.json).",
+  "Voce e um agente de edicao do Rick AI, um agente pessoal de IA.",
+  "O workspace /workspace contem o codigo do projeto (src/, Dockerfile, docker-compose.yml, package.json, tsconfig.json, README.md).",
   "O projeto usa Node.js 22, TypeScript, e roda em Docker.",
   "Sempre responda em portugues brasileiro (pt-BR).",
   "Use npx tsc --noEmit para verificar erros de TypeScript antes de concluir.",
-  "Nunca modifique arquivos fora de /workspace/src/.",
+  "Nao modifique AGENTS.md, CLAUDE.md ou GEMINI.md a menos que seja explicitamente pedido.",
 ].join(" ");
 
 export class EditSession {
