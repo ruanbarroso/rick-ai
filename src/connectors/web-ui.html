@@ -2433,8 +2433,11 @@ function handleServerMessage(msg) {
         }
         break;
       }
-      // Detect deploy start to trigger auto-reload after server restart
-      if (from === 'agent' && msg.text && msg.text.includes('Iniciando deploy seguro')) {
+      // Detect deploy/publish start to trigger auto-reload after server restart
+      if (from === 'agent' && msg.text && (
+        msg.text.includes('Iniciando deploy seguro') ||
+        msg.text.includes('Iniciando deploy antes do push')
+      )) {
         deployInProgress = true;
       }
       storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null);

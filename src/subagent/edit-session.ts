@@ -368,6 +368,7 @@ export class EditSession {
       `Mande suas instrucoes diretamente — tudo vai pro Claude Code.\n\n` +
       `Comandos:\n` +
       `- */deploy* — aplica as mudancas (com verificacao de seguranca)\n` +
+      `- */publish* — deploy + push para o GitHub\n` +
       `- */exit* — descarta tudo e sai do modo de edicao`
     );
   }
@@ -840,7 +841,10 @@ export class EditSession {
             const keyLower = mem.key.toLowerCase().replace(/[^a-z0-9_]/g, "_");
             if (tokenKeys.some((tk) => keyLower.includes(tk)) || keyLower.includes("github")) {
               // Validate it looks like a token (starts with ghp_, github_pat_, or is a long alphanumeric string)
-              const val = mem.value.trim();
+              const rawVal = mem.value.trim();
+              // Extract the actual token: the value may be stored as "token: ghp_xxx" or "Bearer ghp_xxx"
+              const tokenMatch = rawVal.match(/ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+/);
+              const val = tokenMatch ? tokenMatch[0] : rawVal.replace(/^(token|bearer|pat)\s*[:=]\s*/i, "").trim();
               if (val.startsWith("ghp_") || val.startsWith("github_pat_") || val.length >= 30) {
                 githubToken = val;
                 await this.sendMessage(
@@ -868,40 +872,38 @@ export class EditSession {
       return;
     }
 
-    // ---- Step 2: Validate write access ----
+    // ---- Step 2: Validate write access via native fetch (Node 22) ----
     await this.sendMessage(`\`[publish]\` Validando acesso ao repositorio ${targetRepo}...`, "tool_use");
 
     try {
-      const { stdout: permJson } = await execFileAsync("docker", [
-        "run", "--rm",
-        "node:22-slim",
-        "sh", "-c",
-        `curl -sf -H "Authorization: token ${githubToken}" "https://api.github.com/repos/${targetRepo}" 2>/dev/null | head -c 4096`,
-      ], { timeout: 15000 });
+      const ghResponse = await fetch(`https://api.github.com/repos/${targetRepo}`, {
+        headers: {
+          "Authorization": `token ${githubToken}`,
+          "User-Agent": "Rick-AI-Agent/1.0",
+          "Accept": "application/vnd.github.v3+json",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
 
-      let canPush = false;
-      try {
-        const repoInfo = JSON.parse(permJson);
-        canPush = repoInfo.permissions?.push === true || repoInfo.permissions?.admin === true;
-        if (!canPush && repoInfo.message) {
-          await this.sendMessage(
-            `*Publish cancelado:* Erro ao acessar o repositorio.\n\nResposta da API: ${repoInfo.message}`,
-          );
-          this.state = "ready";
-          return;
-        }
-      } catch {
+      const repoInfo = await ghResponse.json() as Record<string, unknown>;
+
+      if (!ghResponse.ok) {
+        const apiMsg = typeof repoInfo.message === "string" ? repoInfo.message : ghResponse.statusText;
         await this.sendMessage(
-          `*Publish cancelado:* Nao foi possivel validar o acesso ao repositorio ${targetRepo}.\n` +
-          `Verifique se o token e o repositorio estao corretos.`,
+          `*Publish cancelado:* Erro ao acessar o repositorio *${targetRepo}*.\n\n` +
+          `Resposta da API GitHub (HTTP ${ghResponse.status}): ${apiMsg}\n\n` +
+          `Verifique se o token e valido e se o repositorio existe.`,
         );
         this.state = "ready";
         return;
       }
 
+      const perms = repoInfo.permissions as { push?: boolean; admin?: boolean } | undefined;
+      const canPush = perms?.push === true || perms?.admin === true;
+
       if (!canPush) {
         await this.sendMessage(
-          `*Publish cancelado:* O token nao tem permissao de escrita no repositorio ${targetRepo}.\n\n` +
+          `*Publish cancelado:* O token nao tem permissao de escrita no repositorio *${targetRepo}*.\n\n` +
           `Verifique as permissoes do token (precisa de "Contents: Read and Write").`,
         );
         this.state = "ready";
