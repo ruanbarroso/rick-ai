@@ -220,7 +220,6 @@ async function handleVersionCheck(res: ServerResponse): Promise<void> {
 
     // Fetch latest commit from GitHub (public API, no auth)
     let latest: { sha: string; date: string; message: string } | null = null;
-    let latestSource: "github" | "fallback" = "github";
     try {
       const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits/main`, {
         headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "RickAI" },
@@ -238,21 +237,11 @@ async function handleVersionCheck(res: ServerResponse): Promise<void> {
       logger.warn({ err }, "Failed to fetch latest commit from GitHub");
     }
 
-    // If GitHub API failed (rate limit, network, etc.), keep API shape stable.
-    // Returning latest: null breaks update UX on some clients.
-    if (!latest) {
-      latestSource = "fallback";
-      latest = {
-        sha: current.sha,
-        date: current.date,
-        message: "Nao foi possivel consultar o GitHub agora.",
-      };
-    }
-
+    // If GitHub API failed (rate limit, network, etc.), assume up to date
     const hasUpdate = latest ? (current.sha !== "unknown" && latest.sha !== current.sha) : false;
 
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ current, latest, hasUpdate, latestSource }));
+    res.end(JSON.stringify({ current, latest, hasUpdate }));
   } catch (err) {
     logger.error({ err }, "Version check failed");
     res.writeHead(500, { "Content-Type": "application/json" });
