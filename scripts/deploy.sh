@@ -69,8 +69,21 @@ log "Staged files applied"
 
 # tsc runs as part of `npm run build` inside the Dockerfile.
 # If TypeScript has errors, the Docker build fails here.
+# Extract version info from git (if available) or from .rick-version file
+if command -v git >/dev/null 2>&1 && [ -d "$PROJECT_DIR/.git" ]; then
+  COMMIT_SHA=$(cd "$PROJECT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  COMMIT_DATE=$(cd "$PROJECT_DIR" && git log -1 --format='%cI' 2>/dev/null || echo "unknown")
+elif [ -f "$PROJECT_DIR/.rick-version" ]; then
+  COMMIT_SHA=$(head -1 "$PROJECT_DIR/.rick-version" 2>/dev/null || echo "unknown")
+  COMMIT_DATE=$(tail -1 "$PROJECT_DIR/.rick-version" 2>/dev/null || echo "unknown")
+else
+  COMMIT_SHA="unknown"
+  COMMIT_DATE="unknown"
+fi
+log "Version: $COMMIT_SHA ($COMMIT_DATE)"
+
 log "Step 3: Building candidate image (includes tsc check)..."
-if ! docker build -t "$CANDIDATE_TAG" -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR" 2>&1; then
+if ! docker build --build-arg "COMMIT_SHA=$COMMIT_SHA" --build-arg "COMMIT_DATE=$COMMIT_DATE" -t "$CANDIDATE_TAG" -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR" 2>&1; then
   err "Docker build failed (likely tsc errors)! Rolling back..."
   rm -rf "$PROJECT_DIR/src"
   cp -r "$BACKUP_DIR" "$PROJECT_DIR/src"

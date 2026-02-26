@@ -1828,6 +1828,78 @@
       </div>
     </div>
 
+    <!-- Version & Updates -->
+    <div class="settings-section">
+      <div class="settings-section-header collapsed" onclick="toggleSection(this)">
+        <h3>Versao</h3>
+        <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+      </div>
+      <div class="settings-section-body collapsed">
+        <!-- Version info (clickable for easter egg) -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div>
+            <span class="settings-label" style="margin-bottom:2px;">Versao instalada</span>
+            <div id="version-current" style="font-size:0.85rem;color:var(--text-secondary);cursor:default;user-select:none;" onclick="versionEasterEgg()">
+              Carregando...
+            </div>
+          </div>
+          <div id="version-badge" style="display:none;padding:3px 10px;border-radius:12px;font-size:0.72rem;font-weight:600;"></div>
+        </div>
+
+        <!-- Check for updates -->
+        <div class="settings-btn-row">
+          <button class="settings-action-btn primary" onclick="checkForUpdates()" id="btn-check-updates">
+            Verificar atualizacoes
+          </button>
+        </div>
+
+        <!-- Update available info -->
+        <div id="update-info" style="display:none;margin-top:12px;">
+          <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:12px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <div>
+                <div style="font-size:0.82rem;font-weight:600;color:var(--text-primary);">Nova versao disponivel</div>
+                <div id="update-details" style="font-size:0.78rem;color:var(--text-secondary);margin-top:2px;"></div>
+              </div>
+            </div>
+            <div class="settings-btn-row" style="margin-top:10px;">
+              <button class="settings-action-btn primary" onclick="installUpdate()" id="btn-install-update">
+                Instalar atualizacao
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Export/Import (hidden, revealed by easter egg) -->
+        <div id="version-dev-tools" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+          <span class="settings-label" style="font-size:0.75rem;opacity:0.6;">Ferramentas de desenvolvimento</span>
+          <div class="settings-btn-row" style="margin-top:8px;">
+            <button class="settings-action-btn" onclick="exportCode()" id="btn-export-code">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Exportar
+            </button>
+            <button class="settings-action-btn" onclick="document.getElementById('import-code-input').click()" id="btn-import-code">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Importar
+            </button>
+            <input type="file" id="import-code-input" accept=".tar.gz,.tgz,.zip" style="display:none" onchange="importCode(this)">
+          </div>
+        </div>
+
+        <!-- Status area (shared by all operations) -->
+        <div id="code-op-status" style="margin-top:10px;display:none;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div id="code-op-spinner" class="typing-dot" style="display:none;"></div>
+            <span id="code-op-text" style="font-size:0.82rem;color:var(--text-secondary);"></span>
+          </div>
+          <div id="code-op-progress" style="margin-top:6px;display:none;">
+            <div style="background:var(--bg-surface);border-radius:4px;height:6px;overflow:hidden;">
+              <div id="code-op-progress-bar" style="background:var(--accent);height:100%;width:0%;transition:width 0.3s;"></div>
+            </div>
+          </div>
+          <pre id="code-op-log" style="margin-top:8px;display:none;max-height:200px;overflow-y:auto;font-size:0.75rem;background:var(--bg-surface);border-radius:6px;padding:10px;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);border:1px solid var(--border);"></pre>
+        </div>
+      </div>
+    </div>
+
     <!-- Dev Repository (EASTER EGG) -->
     <div class="settings-section" id="dev-repo-section" style="display:none;">
       <div class="settings-section-header collapsed" onclick="toggleSection(this)">
@@ -2989,6 +3061,9 @@ function toggleSection(header) {
 function populateSettings(settings) {
   oauthConnected = false;
 
+  // Load version info (async, won't block settings rendering)
+  loadVersionInfo();
+
   if (settings.geminiApiKey) {
     document.getElementById('setting-gemini-key').value = settings.geminiApiKey;
   }
@@ -3498,6 +3573,321 @@ function saveDevRepo() {
   devRepoConfigured = true;
   sendSaveSettings({ devRepoUrl: url });
   checkEditModeButtonVisibility();
+}
+
+// ==================== VERSION & UPDATES ====================
+
+var versionClickCount = 0;
+var versionClickTimer = null;
+var devToolsRevealed = false;
+
+function getAuthToken() {
+  return password || '';
+}
+
+function versionEasterEgg() {
+  versionClickCount++;
+  if (versionClickTimer) clearTimeout(versionClickTimer);
+  versionClickTimer = setTimeout(function() { versionClickCount = 0; }, 1500);
+
+  if (versionClickCount >= 5 && !devToolsRevealed) {
+    devToolsRevealed = true;
+    document.getElementById('version-dev-tools').style.display = 'block';
+    showToast('Dev tools ativadas');
+  }
+}
+
+function loadVersionInfo() {
+  var token = getAuthToken();
+  fetch('/api/version?token=' + encodeURIComponent(token))
+    .then(function(resp) { return resp.ok ? resp.json() : null; })
+    .then(function(data) {
+      if (!data) return;
+      var currentEl = document.getElementById('version-current');
+      if (data.current && data.current.sha !== 'unknown') {
+        var d = new Date(data.current.date);
+        var dateStr = isNaN(d.getTime()) ? data.current.date : d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        currentEl.textContent = data.current.sha + ' (' + dateStr + ')';
+      } else {
+        currentEl.textContent = 'Desconhecida';
+      }
+    })
+    .catch(function() {});
+}
+
+function checkForUpdates() {
+  var btn = document.getElementById('btn-check-updates');
+  btn.disabled = true;
+  btn.textContent = 'Verificando...';
+  codeOpStatus('');
+
+  var token = getAuthToken();
+  fetch('/api/version?token=' + encodeURIComponent(token))
+    .then(function(resp) {
+      if (!resp.ok) return resp.text().then(function(t) { throw new Error(t || 'Erro ' + resp.status); });
+      return resp.json();
+    })
+    .then(function(data) {
+      // Update current version display
+      var currentEl = document.getElementById('version-current');
+      var badge = document.getElementById('version-badge');
+      var updateInfo = document.getElementById('update-info');
+
+      if (data.current && data.current.sha !== 'unknown') {
+        var d = new Date(data.current.date);
+        var dateStr = isNaN(d.getTime()) ? data.current.date : d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        currentEl.textContent = data.current.sha + ' (' + dateStr + ')';
+      } else {
+        currentEl.textContent = 'Desconhecida';
+      }
+
+      if (data.hasUpdate && data.latest) {
+        badge.style.display = 'inline-block';
+        badge.style.background = 'rgba(250,176,5,0.15)';
+        badge.style.color = '#fab005';
+        badge.textContent = 'Atualizacao disponivel';
+
+        var ld = new Date(data.latest.date);
+        var latestDateStr = isNaN(ld.getTime()) ? data.latest.date : ld.toLocaleDateString('pt-BR') + ' ' + ld.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        document.getElementById('update-details').textContent =
+          data.latest.sha + ' (' + latestDateStr + ')' +
+          (data.latest.message ? ' — ' + data.latest.message : '');
+        updateInfo.style.display = 'block';
+      } else if (data.latest) {
+        badge.style.display = 'inline-block';
+        badge.style.background = 'rgba(74,222,128,0.15)';
+        badge.style.color = '#4ade80';
+        badge.textContent = 'Atualizado';
+        updateInfo.style.display = 'none';
+      } else {
+        badge.style.display = 'inline-block';
+        badge.style.background = 'rgba(255,255,255,0.08)';
+        badge.style.color = 'var(--text-secondary)';
+        badge.textContent = 'Offline';
+        updateInfo.style.display = 'none';
+      }
+    })
+    .catch(function(err) {
+      codeOpStatus('Erro: ' + err.message, { error: true });
+    })
+    .finally(function() {
+      btn.disabled = false;
+      btn.textContent = 'Verificar atualizacoes';
+    });
+}
+
+function installUpdate() {
+  if (!confirm('Instalar atualizacao do GitHub?\n\nIsso vai:\n1. Baixar o codigo mais recente\n2. Rebuild + restart do container\n\nSe o build falhar, rollback automatico.')) {
+    return;
+  }
+
+  var btn = document.getElementById('btn-install-update');
+  var checkBtn = document.getElementById('btn-check-updates');
+  btn.disabled = true;
+  checkBtn.disabled = true;
+  btn.textContent = 'Instalando...';
+  codeOpStatus('Baixando do GitHub...', { spinning: true, progress: 10 });
+
+  var token = getAuthToken();
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/update?token=' + encodeURIComponent(token), true);
+
+  var pollCount = 0;
+  var pollInterval = setInterval(function() {
+    pollCount++;
+    if (xhr.readyState === 4) { clearInterval(pollInterval); return; }
+    var pct = Math.min(10 + pollCount * 4, 90);
+    var msgs = ['Baixando do GitHub...', 'Extraindo...', 'Copiando arquivos...', 'Build em andamento...', 'Build em andamento...'];
+    var msgIdx = Math.min(Math.floor(pollCount / 3), msgs.length - 1);
+    codeOpStatus(msgs[msgIdx], { spinning: true, progress: pct });
+  }, 2000);
+
+  xhr.onload = function() {
+    clearInterval(pollInterval);
+    if (xhr.status === 200) {
+      try {
+        var resp = JSON.parse(xhr.responseText);
+        codeOpStatus('Atualizacao instalada! Reconectando...', { success: true, progress: 100, log: resp.log || '' });
+      } catch(e) {
+        codeOpStatus('Atualizacao instalada! Reconectando...', { success: true, progress: 100 });
+      }
+      setTimeout(function() { location.reload(); }, 3000);
+    } else {
+      var errText = xhr.responseText;
+      try {
+        var errResp = JSON.parse(xhr.responseText);
+        codeOpStatus('Falha: ' + (errResp.error || errText), { error: true, log: errResp.log || '' });
+      } catch(e) {
+        codeOpStatus('Falha: ' + errText, { error: true });
+      }
+      btn.disabled = false;
+      checkBtn.disabled = false;
+      btn.textContent = 'Instalar atualizacao';
+    }
+  };
+
+  xhr.onerror = function() {
+    clearInterval(pollInterval);
+    // Connection lost likely means container restarted (success)
+    codeOpStatus('Container reiniciando... Reconectando...', { success: true, progress: 95 });
+    setTimeout(function() { location.reload(); }, 5000);
+  };
+
+  xhr.send('');
+}
+
+// ==================== CODE EXPORT/IMPORT ====================
+
+function codeOpStatus(text, opts) {
+  opts = opts || {};
+  var container = document.getElementById('code-op-status');
+  var textEl = document.getElementById('code-op-text');
+  var spinner = document.getElementById('code-op-spinner');
+  var progressWrap = document.getElementById('code-op-progress');
+  var logEl = document.getElementById('code-op-log');
+
+  container.style.display = text ? 'block' : 'none';
+  textEl.textContent = text || '';
+  spinner.style.display = opts.spinning ? 'inline-block' : 'none';
+  progressWrap.style.display = opts.progress !== undefined ? 'block' : 'none';
+  if (opts.progress !== undefined) {
+    document.getElementById('code-op-progress-bar').style.width = opts.progress + '%';
+  }
+  if (opts.log !== undefined) {
+    logEl.style.display = opts.log ? 'block' : 'none';
+    if (typeof opts.log === 'string') logEl.textContent = opts.log;
+  }
+  if (opts.error) {
+    textEl.style.color = 'var(--danger, #f87171)';
+  } else if (opts.success) {
+    textEl.style.color = '#4ade80';
+  } else {
+    textEl.style.color = 'var(--text-secondary)';
+  }
+}
+
+function exportCode() {
+  var btn = document.getElementById('btn-export-code');
+  btn.disabled = true;
+      codeOpStatus('Gerando arquivo...', { spinning: true });
+
+  var token = getAuthToken();
+  fetch('/api/code/export?token=' + encodeURIComponent(token))
+    .then(function(resp) {
+      if (!resp.ok) return resp.text().then(function(t) { throw new Error(t || 'Erro ' + resp.status); });
+      // Get filename from Content-Disposition header
+      var cd = resp.headers.get('Content-Disposition') || '';
+      var match = cd.match(/filename="?([^"]+)"?/);
+      var filename = match ? match[1] : 'rick-ai-source.tar.gz';
+      return resp.blob().then(function(blob) {
+        return { blob: blob, filename: filename };
+      });
+    })
+    .then(function(result) {
+      // Trigger download
+      var url = URL.createObjectURL(result.blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      var sizeMB = (result.blob.size / (1024 * 1024)).toFixed(1);
+      codeOpStatus('Exportado (' + sizeMB + ' MB)', { success: true });
+    })
+    .catch(function(err) {
+      codeOpStatus('Erro: ' + err.message, { error: true });
+    })
+    .finally(function() {
+      btn.disabled = false;
+    });
+}
+
+function importCode(input) {
+  var file = input.files && input.files[0];
+  if (!file) return;
+  // Reset the input so the same file can be selected again
+  input.value = '';
+
+  if (!file.name.endsWith('.zip') && !file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
+    codeOpStatus('Selecione um arquivo .tar.gz ou .zip', { error: true });
+    return;
+  }
+
+  var sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+  if (!confirm('Importar "' + file.name + '" (' + sizeMB + ' MB)?\n\nIsso vai:\n1. Substituir o codigo-fonte\n2. Rebuild + restart do container\n\nSe o build falhar, rollback automatico.')) {
+    return;
+  }
+
+  var btn = document.getElementById('btn-import-code');
+  var exportBtn = document.getElementById('btn-export-code');
+  btn.disabled = true;
+  exportBtn.disabled = true;
+  codeOpStatus('Enviando (' + sizeMB + ' MB)...', { spinning: true, progress: 0 });
+
+  var token = getAuthToken();
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/code/import?token=' + encodeURIComponent(token), true);
+  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+  xhr.upload.onprogress = function(e) {
+    if (e.lengthComputable) {
+      var pct = Math.round((e.loaded / e.total) * 30); // upload = 0-30%
+      codeOpStatus('Enviando...', { spinning: true, progress: pct });
+    }
+  };
+
+  xhr.onload = function() {
+    if (xhr.status === 200) {
+      try {
+        var resp = JSON.parse(xhr.responseText);
+        codeOpStatus('Deploy concluido! Reconectando...', { success: true, progress: 100, log: resp.log || '' });
+        // The server will restart — try to reconnect
+        setTimeout(function() { location.reload(); }, 3000);
+      } catch(e) {
+        codeOpStatus('Deploy concluido! Reconectando...', { success: true, progress: 100 });
+        setTimeout(function() { location.reload(); }, 3000);
+      }
+    } else {
+      var errText = xhr.responseText;
+      try { errText = JSON.parse(errText).error || errText; } catch(e) {}
+      try {
+        var errResp = JSON.parse(xhr.responseText);
+        codeOpStatus('Falha no deploy: ' + (errResp.error || errText), { error: true, log: errResp.log || '' });
+      } catch(e) {
+        codeOpStatus('Falha no deploy: ' + errText, { error: true });
+      }
+      btn.disabled = false;
+      exportBtn.disabled = false;
+    }
+  };
+
+  xhr.onerror = function() {
+    codeOpStatus('Erro de rede ao enviar ZIP', { error: true });
+    btn.disabled = false;
+    exportBtn.disabled = false;
+  };
+
+  // Start polling for deploy progress after upload
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState === 2) { // headers received = upload done, deploy started
+      codeOpStatus('Deploy em andamento... (build + smoke test)', { spinning: true, progress: 35 });
+      // Poll progress
+      var pollCount = 0;
+      var pollInterval = setInterval(function() {
+        pollCount++;
+        var pct = Math.min(35 + pollCount * 3, 95);
+        if (xhr.readyState === 4) {
+          clearInterval(pollInterval);
+          return;
+        }
+        codeOpStatus('Deploy em andamento... (build + smoke test)', { spinning: true, progress: pct });
+      }, 2000);
+    }
+  };
+
+  xhr.send(file);
 }
 
 function testDatabase(which) {

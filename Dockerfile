@@ -34,6 +34,12 @@ RUN npm prune --production
 # Create auth dir + data dir (for SQLite DB when no PostgreSQL)
 RUN mkdir -p auth_info data
 
+# Version info (injected at build time via --build-arg)
+ARG COMMIT_SHA=unknown
+ARG COMMIT_DATE=unknown
+ENV RICK_COMMIT_SHA=$COMMIT_SHA
+ENV RICK_COMMIT_DATE=$COMMIT_DATE
+
 EXPOSE 80
 
 CMD ["node", "dist/index.js"]

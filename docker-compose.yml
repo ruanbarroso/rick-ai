@@ -1,6 +1,10 @@
 services:
   agent:
-    build: .
+    build:
+      context: .
+      args:
+        COMMIT_SHA: ${RICK_COMMIT_SHA:-unknown}
+        COMMIT_DATE: ${RICK_COMMIT_DATE:-unknown}
     restart: unless-stopped
     env_file: .env
     ports:
