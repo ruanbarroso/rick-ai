@@ -35,7 +35,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: zap_agent
+      POSTGRES_DB: rick_ai
       POSTGRES_USER: zap
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
@@ -49,7 +49,7 @@ services:
         -c work_mem=4MB
         -c max_connections=20
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U zap -d zap_agent"]
+      test: ["CMD-SHELL", "pg_isready -U zap -d rick_ai"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -71,14 +71,14 @@ sudo docker compose ps
 
 echo ""
 echo ">>> PostgreSQL rodando!"
-echo ">>> Connection string: postgresql://zap:${DB_PASSWORD}@${DB_HOST}:5432/zap_agent"
+echo ">>> Connection string: postgresql://zap:${DB_PASSWORD}@${DB_HOST}:5432/rick_ai"
 REMOTE
 
 echo ""
 echo "============================================"
 echo "  PostgreSQL deployado com sucesso!"
 echo ""
-echo "  DATABASE_URL=postgresql://zap:${DB_PASSWORD}@${DB_HOST}:5432/zap_agent"
+echo "  DATABASE_URL=postgresql://zap:${DB_PASSWORD}@${DB_HOST}:5432/rick_ai"
 echo ""
 echo "  Use essa URL no .env do agente"
 echo "============================================"
