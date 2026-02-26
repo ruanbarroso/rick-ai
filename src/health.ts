@@ -486,27 +486,37 @@ async function writeLatestVersionCache(latest: LatestVersionInfo): Promise<void>
 }
 
 /**
- * Resolve current version from env vars (set at build time) or .rick-version file (fallback).
- * The .rick-version file is written by the OTA updater and also COPYed into the image
- * from the build context, so it works even when docker compose up --build is run
- * without explicit --build-arg COMMIT_SHA=... (e.g. after /publish or manual rebuild).
+ * Resolve current version from .rick-version file (preferred) or env vars (fallback).
+ *
+ * Priority: .rick-version > RICK_COMMIT_SHA env var > "unknown"
+ *
+ * Why .rick-version takes priority: after /publish, deploy.sh writes the new commit
+ * SHA into .rick-version and injects it into the running container via docker exec.
+ * But RICK_COMMIT_SHA is baked into the image at build time and can't be updated
+ * without a full rebuild. So .rick-version is always the most current source.
  */
 async function resolveCurrentVersion(): Promise<{ sha: string; date: string }> {
-  let sha = process.env.RICK_COMMIT_SHA || "unknown";
-  let date = process.env.RICK_COMMIT_DATE || "unknown";
-
-  if (sha === "unknown") {
-    try {
-      const content = await readFile(".rick-version", "utf-8");
-      const lines = content.trim().split("\n");
-      if (lines[0] && lines[0] !== "unknown") sha = lines[0].trim();
-      if (lines[1] && lines[1] !== "unknown") date = lines[1].trim();
-    } catch {
-      // .rick-version not found — stay "unknown"
+  // Try .rick-version first (updated by /publish and deploy.sh at runtime)
+  try {
+    const content = await readFile(".rick-version", "utf-8");
+    const lines = content.trim().split("\n");
+    const fileSha = lines[0]?.trim();
+    const fileDate = lines[1]?.trim();
+    if (fileSha && fileSha !== "unknown") {
+      return {
+        sha: fileSha,
+        date: fileDate && fileDate !== "unknown" ? fileDate : process.env.RICK_COMMIT_DATE || "unknown",
+      };
     }
+  } catch {
+    // .rick-version not found — fall through to env vars
   }
 
-  return { sha, date };
+  // Fallback to build-time env vars
+  return {
+    sha: process.env.RICK_COMMIT_SHA || "unknown",
+    date: process.env.RICK_COMMIT_DATE || "unknown",
+  };
 }
 
 async function handleVersionCheck(res: ServerResponse): Promise<void> {
