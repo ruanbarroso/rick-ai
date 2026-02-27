@@ -4468,12 +4468,44 @@ function checkForUpdates() {
 
 /**
  * Poll /health until Rick comes back online after a restart.
+ *
+ * Two complementary mechanisms run in parallel:
+ *  1. HTTP polling: fetch /health every 3 s. When it returns {status:'ok'},
+ *     show success and reload.
+ *  2. WebSocket reconnect: setting deployInProgress=true makes the auth_ok
+ *     handler (handleServerMessage) auto-reload as soon as the WS reconnects
+ *     to the new container — even if the health poll hasn't fired yet.
+ *
+ * A `done` flag prevents both paths from triggering simultaneously.
+ *
  * @param {string|null} expectedVersion - if known, verify the new version matches
  */
 function waitForRestart(expectedVersion) {
+  var done = false;
   var attempts = 0;
-  var maxAttempts = 60; // 60 * 3s = 3 minutes max
+  var maxAttempts = 80; // 80 * 3s = 4 minutes max
+
+  // Signal the WebSocket auth_ok handler to auto-reload on reconnect.
+  // This is the primary recovery path when the container swaps and the WS
+  // reconnects before the health poll succeeds.
+  deployInProgress = true;
+
   var interval = setInterval(function() {
+    if (done) return;
+
+    // Check timeout BEFORE firing the fetch to avoid a race where both the
+    // timeout message and a success response would try to update the UI
+    // on the same tick.
+    if (attempts >= maxAttempts) {
+      done = true;
+      clearInterval(interval);
+      codeOpStatus('Timeout aguardando reinicio. Recarregue a pagina manualmente.', { error: true });
+      var btn = document.getElementById('btn-check-updates');
+      if (btn) btn.disabled = false;
+      applyVersionPrimaryButtonState();
+      return;
+    }
+
     attempts++;
     var pct = Math.min(85 + Math.floor(attempts * 0.25), 99);
     codeOpStatus('Aguardando Rick reiniciar... (' + attempts + '/' + maxAttempts + ')', { spinning: true, progress: pct });
@@ -4481,21 +4513,17 @@ function waitForRestart(expectedVersion) {
     fetch('/health', { signal: AbortSignal.timeout(3000) })
       .then(function(r) { return r.json(); })
       .then(function(data) {
+        if (done) return;
         if (data.status === 'ok') {
+          done = true;
+          // Disable the WS path so auth_ok doesn't trigger a second reload.
+          deployInProgress = false;
           clearInterval(interval);
           codeOpStatus('Atualizacao instalada com sucesso!', { success: true, progress: 100 });
           setTimeout(function() { location.reload(); }, 2000);
         }
       })
-      .catch(function() { /* still down, keep polling */ });
-
-    if (attempts >= maxAttempts) {
-      clearInterval(interval);
-      codeOpStatus('Timeout aguardando reinicio. Recarregue a pagina manualmente.', { error: true });
-      var btn = document.getElementById('btn-check-updates');
-      if (btn) btn.disabled = false;
-      applyVersionPrimaryButtonState();
-    }
+      .catch(function() { /* server still down, keep polling */ });
   }, 3000);
 }
 
