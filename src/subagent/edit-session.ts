@@ -1071,8 +1071,42 @@ git add -A
 if git diff --cached --quiet 2>/dev/null; then
   echo "[publish] Nenhuma alteracao para commitar"
 else
-  git commit -m "publish: atualizado via /publish do Rick AI" 2>&1
-  echo "[publish] Commit criado"
+  # Gera mensagem de commit dinamica com base nas mudancas
+  FILE_COUNT=$(git diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
+  CHANGED_FILES=$(git diff --cached --name-only 2>/dev/null)
+  SHORTSTAT=$(git diff --cached --shortstat 2>/dev/null | sed 's/^ //')
+
+  # Detecta a area principal das mudancas
+  if echo "$CHANGED_FILES" | grep -q "^src/"; then
+    AREA="src"
+  elif echo "$CHANGED_FILES" | grep -q "^scripts/"; then
+    AREA="scripts"
+  elif echo "$CHANGED_FILES" | grep -q "^\.github/\|^Dockerfile\|^docker-compose"; then
+    AREA="infra"
+  else
+    AREA="config"
+  fi
+
+  # Lista os arquivos mais relevantes (ate 3, sem caminho completo)
+  TOP_FILES=$(echo "$CHANGED_FILES" | head -3 | while read -r f; do basename "$f"; done | paste -sd ', ')
+
+  # Monta a mensagem conforme quantidade de arquivos
+  if [ "$FILE_COUNT" -eq 1 ]; then
+    COMMIT_TITLE="feat($AREA): atualiza $TOP_FILES"
+  elif [ "$FILE_COUNT" -le 4 ]; then
+    COMMIT_TITLE="feat($AREA): atualiza $TOP_FILES"
+  else
+    COMMIT_TITLE="feat($AREA): atualiza $FILE_COUNT arquivos"
+  fi
+
+  COMMIT_MSG="\${COMMIT_TITLE}
+
+\${SHORTSTAT}
+
+Publicado via /publish do Rick AI"
+
+  git commit -m "$COMMIT_MSG" 2>&1
+  echo "[publish] Commit criado: $COMMIT_TITLE"
 fi
 
 # Push
