@@ -804,7 +804,7 @@ const EXPORT_INCLUDES = [
 ];
 
 async function handleCodeExport(res: ServerResponse): Promise<void> {
-  const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
+  const projectDir = getProjectDir();
 
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -877,7 +877,7 @@ async function handleCodeExport(res: ServerResponse): Promise<void> {
 // ==================== CODE IMPORT ====================
 
 async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
+  const projectDir = getProjectDir();
 
   try {
     // Read the entire request body

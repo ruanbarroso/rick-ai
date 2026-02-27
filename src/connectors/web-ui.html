@@ -3262,24 +3262,18 @@ function showTyping(composing) {
   scrollToBottom();
 }
 
+// Stores the latest QR code data so it can be shown when the user opens settings.
+var pendingQrData = null;
+
 function showQrCode(data) {
-  var overlay = document.getElementById('qr-overlay');
+  // Just store the data and update the overlay content — do NOT make it visible
+  // automatically or expand the settings section. The QR code must only appear
+  // when the user explicitly opens Settings → Conectores.
+  pendingQrData = data;
   var content = document.getElementById('qr-content');
-  content.textContent = data;
-  overlay.classList.add('visible');
+  if (content) content.textContent = data;
 
-  // Expand the "Conectores" section in settings so the QR code is visible
-  document.querySelectorAll('.settings-section-header').forEach(function(h) {
-    if (h.querySelector('h3') && h.querySelector('h3').textContent.trim() === 'Conectores') {
-      if (h.classList.contains('collapsed')) {
-        h.classList.remove('collapsed');
-        var body = h.nextElementSibling;
-        if (body) body.classList.remove('collapsed');
-      }
-    }
-  });
-
-  // Notify the user with a toast to check settings
+  // Notify the user with a subtle toast to check settings
   showToast('QR code do WhatsApp disponível em Configurações → Conectores');
 }
 
@@ -3773,6 +3767,22 @@ function openSettings() {
   document.getElementById('settings-overlay').classList.add('visible');
   document.getElementById('settings-panel').classList.add('visible');
 
+  // If there is a pending QR code, show it and expand the Conectores section
+  // so the user finds it immediately after opening settings.
+  if (pendingQrData) {
+    var overlay = document.getElementById('qr-overlay');
+    if (overlay) overlay.classList.add('visible');
+    document.querySelectorAll('.settings-section-header').forEach(function(h) {
+      if (h.querySelector('h3') && h.querySelector('h3').textContent.trim() === 'Conectores') {
+        if (h.classList.contains('collapsed')) {
+          h.classList.remove('collapsed');
+          var body = h.nextElementSibling;
+          if (body) body.classList.remove('collapsed');
+        }
+      }
+    });
+  }
+
   // Request current settings
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'get_settings' }));
@@ -4210,8 +4220,9 @@ function updateWhatsAppStatusBadge() {
     badge.className = 'settings-status connected';
     badge.innerHTML = '<span class="status-dot green"></span>Conectado';
     if (disconnectBtn) disconnectBtn.disabled = false;
-    // Hide QR code when connected
+    // Hide QR code and clear pending data when connected
     if (qrOverlay) qrOverlay.classList.remove('visible');
+    pendingQrData = null;
   } else {
     badge.className = 'settings-status disconnected';
     badge.innerHTML = '<span class="status-dot red"></span>Desconectado';
