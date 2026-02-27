@@ -450,7 +450,14 @@ interface LatestVersionInfo {
 }
 
 function getProjectDir(): string {
-  return process.env.HOST_PROJECT_DIR || process.cwd();
+  const dir = process.env.HOST_PROJECT_DIR;
+  if (!dir) {
+    throw new Error(
+      "HOST_PROJECT_DIR não está definido. " +
+      "Esta variável é obrigatória para operações que acessam o filesystem do host via Docker socket."
+    );
+  }
+  return dir;
 }
 
 function getVersionCachePath(): string {

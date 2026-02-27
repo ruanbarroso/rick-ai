@@ -14,6 +14,23 @@ import type { MediaAttachment } from "../llm/types.js";
 const execFileAsync = promisify(execFile);
 
 /**
+ * Return the HOST filesystem path to the project directory.
+ * This is required for Docker-in-Docker operations (build, run with -v) because
+ * commands go through the Docker socket and need real host paths, not container paths.
+ */
+function getHostProjectDir(): string {
+  const dir = process.env.HOST_PROJECT_DIR;
+  if (!dir) {
+    throw new Error(
+      "HOST_PROJECT_DIR não está definido. " +
+      "Esta variável é obrigatória para o modo de edição porque o Docker precisa de paths do host. " +
+      "Defina HOST_PROJECT_DIR no .env apontando para o diretório do projeto no host (ex: /home/ubuntu/rick-ai)."
+    );
+  }
+  return dir;
+}
+
+/**
  * Write a prompt to a temporary file on the HOST, docker-cp it into the container,
  * then delete the host file. Returns the path inside the container.
  *
@@ -348,7 +365,7 @@ export class EditSession {
       "Construindo agora (pode levar alguns minutos na primeira vez)..._"
     );
 
-    const projectDir = process.env.HOST_PROJECT_DIR || process.cwd();
+    const projectDir = getHostProjectDir();
     await execFileAsync(
       "docker",
       [
@@ -373,7 +390,7 @@ export class EditSession {
   async start(env: Record<string, string>): Promise<void> {
     await this.ensureImageExists();
 
-    const projectDir = process.env.HOST_PROJECT_DIR || process.cwd();
+    const projectDir = getHostProjectDir();
 
     // Create staging directory with copy of current source on the HOST.
     // We copy src/, package.json, tsconfig.json, package-lock.json from the host project,
@@ -872,7 +889,7 @@ export class EditSession {
     this.state = "deploying";
     await this.sendMessage("*Iniciando deploy seguro...*\nEtapas: build (inclui tsc) → smoke test → swap → watchdog");
 
-    const projectDir = process.env.HOST_PROJECT_DIR || process.cwd();
+    const projectDir = getHostProjectDir();
 
     const child = spawn("docker", [
       "run", "--rm",
@@ -1060,7 +1077,7 @@ export class EditSession {
     await this.sendMessage(`\`[publish]\` Iniciando deploy + push...`, "tool_use");
     this.state = "deploying";
 
-    const projectDir = process.env.HOST_PROJECT_DIR || process.cwd();
+    const projectDir = getHostProjectDir();
 
     // Write the push script to a temp file on the host, then mount it into the container.
     // This avoids shell injection from the token and keeps the script readable.

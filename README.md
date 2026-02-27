@@ -311,7 +311,7 @@ Host Docker (cluster-24g)
 | `OWNER_PHONE` | No | — | Owner's phone number for permission checks |
 | `MAX_MEMORY_ITEMS` | No | `1000` | Max structured memories per user |
 | `CONVERSATION_HISTORY_LIMIT` | No | `20` | Max messages in conversation context |
-| `HOST_PROJECT_DIR` | No | `process.cwd()` | Host path to project dir (for edit mode staging). Falls back to working directory. |
+| `HOST_PROJECT_DIR` | No | `$PWD` | Host path to project dir (for edit mode / deploy). Auto-injected by docker-compose via `$PWD`. |
 | `VECTOR_DB_MAX_SIZE_GB` | No | `36` | Max vector DB size in GB before eviction |
 | `DISK_CHECK_INTERVAL_MINUTES` | No | `10` | Disk check interval in minutes |
 | `HEALTH_ONLY` | No | — | When `true`, starts only health server + DB (no connectors). Used by deploy smoke test. |

@@ -7,6 +7,8 @@ services:
         COMMIT_DATE: ${RICK_COMMIT_DATE:-unknown}
     restart: unless-stopped
     env_file: .env
+    environment:
+      - HOST_PROJECT_DIR=${HOST_PROJECT_DIR:-${PWD}}
     ports:
       - "80:80"
     volumes:
