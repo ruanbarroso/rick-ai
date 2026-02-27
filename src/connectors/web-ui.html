@@ -1766,7 +1766,7 @@
 <div id="login-screen">
   <img class="login-avatar" id="login-avatar" alt="Rick AI">
   <h1>Rick AI</h1>
-  <p>Assistente pessoal multi-canal</p>
+  <p>Assistente multi-canal</p>
   <div class="login-form">
     <input type="password" id="password-input" placeholder="Senha" autocomplete="current-password" autofocus>
     <button id="login-btn" onclick="doLogin()">Entrar</button>
@@ -1882,7 +1882,6 @@
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM8 9h8v10H8V9zm7.5-5l-1-1h-5l-1 1H5v2h14V4h-3.5z"/></svg>
           </button>
           <audio id="audio-preview-player" controls preload="metadata"></audio>
-          <span class="audio-duration" id="audio-preview-duration"></span>
           <button class="audio-send" onclick="sendMessage()" title="Enviar">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
           </button>
@@ -3424,6 +3423,94 @@ function autoResize(el) {
 // ==================== AUDIO RECORDING ====================
 // toggleRecording removed — mic button now calls startRecording() directly
 
+// ---- WebM EBML duration fix ----
+// MediaRecorder blobs often have Duration = 0 or missing in the EBML SegmentInfo.
+// This causes "--:--" in audio players after page reload (browsers can't seek without range support).
+// We inject the correct duration into the WebM header before saving/sending the blob.
+
+function readEbmlVint(bytes, offset) {
+  var first = bytes[offset];
+  if (first >= 0x80) return { value: first & 0x7F, length: 1 };
+  if (first >= 0x40) return { value: ((first & 0x3F) << 8) | bytes[offset + 1], length: 2 };
+  if (first >= 0x20) return { value: ((first & 0x1F) << 16) | (bytes[offset + 1] << 8) | bytes[offset + 2], length: 3 };
+  if (first >= 0x10) return { value: ((first & 0x0F) << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3], length: 4 };
+  return { value: -1, length: 8 }; // Unknown-size VINT
+}
+
+async function fixWebmDuration(blob, durationMs) {
+  if (!blob || !(durationMs > 0)) return blob;
+  try {
+    var buf = await blob.arrayBuffer();
+    var bytes = new Uint8Array(buf);
+
+    // Locate SegmentInfo element (EBML ID: 0x1549A966) within the first 4 KB
+    var siStart = -1;
+    for (var i = 0; i < Math.min(bytes.length - 8, 4096); i++) {
+      if (bytes[i] === 0x15 && bytes[i+1] === 0x49 && bytes[i+2] === 0xA9 && bytes[i+3] === 0x66) {
+        siStart = i;
+        break;
+      }
+    }
+    if (siStart === -1) return blob;
+
+    // Parse the VINT size of SegmentInfo to find where its content starts
+    var vint = readEbmlVint(bytes, siStart + 4);
+    var siDataStart = siStart + 4 + vint.length;
+
+    // Scan SegmentInfo content (up to 512 bytes) for Duration element (EBML ID: 0x4489)
+    var scanLimit = Math.min(siDataStart + 512, bytes.length - 11);
+    for (var j = siDataStart; j < scanLimit; j++) {
+      if (bytes[j] === 0x44 && bytes[j + 1] === 0x89) {
+        // Duration element found — must be 8-byte float64 (size VINT: 0x88)
+        if (bytes[j + 2] === 0x88) {
+          var dv = new DataView(buf);
+          var existing = dv.getFloat64(j + 3, false); // big-endian
+          if (existing > 0 && isFinite(existing)) return blob; // Already valid, nothing to fix
+          // Overwrite the value in a copy of the buffer
+          var copy = new Uint8Array(buf.slice(0));
+          new DataView(copy.buffer).setFloat64(j + 3, durationMs, false);
+          return new Blob([copy], { type: blob.type });
+        }
+        return blob; // Unusual size encoding — don't modify
+      }
+    }
+
+    // Duration element absent — insert it at the start of SegmentInfo content
+    // Element layout: ID (2 bytes) + VINT size 0x88 (1 byte) + float64 value (8 bytes) = 11 bytes
+    var durEl = new Uint8Array(11);
+    durEl[0] = 0x44; durEl[1] = 0x89; // Duration EBML ID
+    durEl[2] = 0x88;                   // VINT: 8 bytes
+    new DataView(durEl.buffer).setFloat64(3, durationMs, false);
+
+    var result = new Uint8Array(bytes.length + 11);
+    result.set(bytes.subarray(0, siDataStart), 0);
+    result.set(durEl, siDataStart);
+    result.set(bytes.subarray(siDataStart), siDataStart + 11);
+
+    // Update SegmentInfo size VINT if it holds a known (non-unknown) size
+    var vintValue = vint.value;
+    var isUnknownSize = vintValue === -1 ||
+      (vint.length === 1 && vintValue === 0x7F) ||
+      (vint.length === 2 && vintValue === 0x3FFF) ||
+      (vint.length === 3 && vintValue === 0x1FFFFF) ||
+      (vint.length === 4 && vintValue === 0x0FFFFFFF);
+    if (!isUnknownSize) {
+      var newSize = vintValue + 11;
+      var voff = siStart + 4;
+      if (vint.length === 1) result[voff] = 0x80 | newSize;
+      else if (vint.length === 2) { result[voff] = 0x40 | (newSize >> 8); result[voff+1] = newSize & 0xFF; }
+      else if (vint.length === 3) { result[voff] = 0x20 | (newSize >> 16); result[voff+1] = (newSize >> 8) & 0xFF; result[voff+2] = newSize & 0xFF; }
+      else if (vint.length === 4) { result[voff] = 0x10 | (newSize >> 24); result[voff+1] = (newSize >> 16) & 0xFF; result[voff+2] = (newSize >> 8) & 0xFF; result[voff+3] = newSize & 0xFF; }
+    }
+
+    return new Blob([result], { type: blob.type });
+  } catch (e) {
+    console.warn('[Rick] fixWebmDuration failed:', e);
+    return blob; // Safe fallback — return original blob
+  }
+}
+// ---- end WebM EBML duration fix ----
+
 function updateRecordingTimer() {
   var elapsed = Math.floor((Date.now() - recordingStartedAt) / 1000);
   var min = Math.floor(elapsed / 60);
@@ -3471,7 +3558,7 @@ function startRecording() {
       if (e.data.size > 0) audioChunks.push(e.data);
     };
 
-    mediaRecorder.onstop = function() {
+    mediaRecorder.onstop = async function() {
       stream.getTracks().forEach(function(t) { t.stop(); });
       if (recordingCanceled) {
         audioChunks = [];
@@ -3479,6 +3566,14 @@ function startRecording() {
         return;
       }
       var blob = new Blob(audioChunks, { type: mimeType });
+      var durationMs = Date.now() - recordingStartedAt;
+
+      // Fix WebM EBML duration so browsers show the correct time after page reload.
+      // MediaRecorder blobs often have Duration = 0 in the EBML header, causing "--:--".
+      if (mimeType.indexOf('webm') !== -1) {
+        blob = await fixWebmDuration(blob, durationMs);
+      }
+
       var localUrl = URL.createObjectURL(blob);
 
       // Store as pending audio (WhatsApp-style: preview before sending)
@@ -3488,16 +3583,6 @@ function startRecording() {
       var previewBar = document.getElementById('audio-preview-bar');
       var player = document.getElementById('audio-preview-player');
       player.src = localUrl;
-
-      // Show duration once metadata loads
-      var durationEl = document.getElementById('audio-preview-duration');
-      var elapsed = Math.floor((Date.now() - recordingStartedAt) / 1000);
-      durationEl.textContent = formatDuration(elapsed);
-      player.onloadedmetadata = function() {
-        if (player.duration && isFinite(player.duration)) {
-          durationEl.textContent = formatDuration(player.duration);
-        }
-      };
 
       document.getElementById('recording-bar').classList.remove('visible');
       previewBar.classList.add('visible');

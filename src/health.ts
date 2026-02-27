@@ -165,12 +165,35 @@ export function startHealthServer(port: number): void {
           return;
         }
         const { data, mime_type } = result.rows[0];
+        const buffer: Buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        const totalLength = buffer.length;
+        const rangeHeader = req.headers["range"];
+
+        if (rangeHeader) {
+          const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
+          if (match) {
+            const start = match[1] ? parseInt(match[1], 10) : Math.max(0, totalLength - parseInt(match[2] || "0", 10));
+            const end = match[2] ? Math.min(parseInt(match[2], 10), totalLength - 1) : totalLength - 1;
+            const chunkLength = end - start + 1;
+            res.writeHead(206, {
+              "Content-Type": mime_type,
+              "Content-Range": `bytes ${start}-${end}/${totalLength}`,
+              "Accept-Ranges": "bytes",
+              "Content-Length": chunkLength,
+              "Cache-Control": "public, max-age=31536000, immutable",
+            });
+            res.end(buffer.subarray(start, end + 1));
+            return;
+          }
+        }
+
         res.writeHead(200, {
           "Content-Type": mime_type,
-          "Content-Length": Buffer.byteLength(data),
+          "Content-Length": totalLength,
+          "Accept-Ranges": "bytes",
           "Cache-Control": "public, max-age=31536000, immutable",
         });
-        res.end(data);
+        res.end(buffer);
       } catch (err) {
         logger.error({ err }, "Failed to serve media blob");
         res.writeHead(500);

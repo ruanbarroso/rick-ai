@@ -299,14 +299,18 @@ export class Agent {
         return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias);
       }
 
-      // If sessions are running but none done, tell user to wait
-      if (this.sessionManager.getRunningSessions().length > 0) {
-        return "O sub-agente ainda esta trabalhando... Aguarde um momento.";
-      }
-
       // Classify the task — does it need a sub-agent?
       const classification = await classifyTask(fullText);
-      if (classification) {
+
+      // If a sub-agent is already running, only block new DELEGATE tasks.
+      // SELF tasks (save memory, answer questions, etc.) are handled normally
+      // by the main session, independently of any running sub-agent.
+      if (this.sessionManager.getRunningSessions().length > 0) {
+        if (classification) {
+          return "O sub-agente ainda esta trabalhando... Aguarde um momento.";
+        }
+        // SELF task — fall through to handleSimpleChat below
+      } else if (classification) {
         return this.delegateToSubAgent(
           userPhone,
           connectorName,

@@ -20,7 +20,7 @@ async function main() {
   console.log(`
   ╔══════════════════════════════════╗
   ║          RICK AI v2.1           ║
-  ║   Assistente pessoal multi-canal ║
+  ║      Assistente multi-canal      ║
   ║   + Sub-agentes (Claude/Search) ║
   ║   + SQLite fallback             ║
   ╚══════════════════════════════════╝
