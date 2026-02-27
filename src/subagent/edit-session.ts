@@ -409,14 +409,17 @@ export class EditSession {
       "Construindo agora (pode levar alguns minutos na primeira vez)..._"
     );
 
-    const projectDir = await getHostProjectDir();
+    // docker build reads the context from the CLI side (inside this container),
+    // so we use the local /app path where docker/ is mounted read-only.
+    // The Dockerfile's COPY instructions reference paths relative to this context.
+    const localAppDir = process.cwd(); // /app inside the container
     await execFileAsync(
       "docker",
       [
         "build",
         "-t", "subagent-edit",
-        "-f", `${projectDir}/docker/subagent-edit.Dockerfile`,
-        projectDir,
+        "-f", `${localAppDir}/docker/subagent-edit.Dockerfile`,
+        localAppDir,
       ],
       { timeout: 600_000 } // 10 minutes max for first build
     );
