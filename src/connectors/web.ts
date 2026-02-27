@@ -8,7 +8,7 @@ import { httpServer } from "../health.js";
 import { config } from "../config/env.js";
 import { configSet, SETTINGS_KEY_MAP } from "../memory/config-store.js";
 import { isPostgres, query } from "../memory/database.js";
-import { logger } from "../config/logger.js";
+import { logger, getLogBuffer } from "../config/logger.js";
 import { ClaudeOAuthService } from "../auth/claude-oauth.js";
 import { OpenAIOAuthService } from "../auth/openai-oauth.js";
 import { GeminiProvider } from "../llm/providers/gemini.js";
@@ -254,6 +254,9 @@ export class WebConnector implements Connector {
               break;
             case "start_subagent":
               await this.handleStartSubAgent(ws);
+              break;
+            case "get_logs":
+              this.handleGetLogs(ws);
               break;
             default:
               logger.warn({ type: msg.type }, "Unknown WebSocket message type");
@@ -613,6 +616,16 @@ export class WebConnector implements Connector {
       logger.error({ err }, "Failed to save settings");
       this.send(ws, { type: "settings_saved", success: false, error: "Erro ao salvar configuracoes." });
     }
+  }
+
+  // ==================== Logs ====================
+
+  /**
+   * Return the in-memory log buffer to the requesting client.
+   */
+  private handleGetLogs(ws: WebSocket): void {
+    const entries = getLogBuffer();
+    this.send(ws, { type: "logs", entries });
   }
 
   // ==================== Sessions ====================

@@ -1543,6 +1543,65 @@
   .status-dot.red { background: var(--danger); }
   .status-dot.gray { background: var(--text-muted); }
 
+  /* ==================== LOG VIEWER ==================== */
+  .log-viewer {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    max-height: 320px;
+    overflow-y: auto;
+    font-family: 'SFMono-Regular', Consolas, 'Courier New', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+  }
+
+  .log-viewer::-webkit-scrollbar { width: 5px; }
+  .log-viewer::-webkit-scrollbar-track { background: transparent; }
+  .log-viewer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .log-entry {
+    display: flex;
+    gap: 10px;
+    padding: 2px 0;
+    border-bottom: 1px solid rgba(42, 51, 72, 0.4);
+    word-break: break-all;
+  }
+
+  .log-entry:last-child { border-bottom: none; }
+
+  .log-ts {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    opacity: 0.65;
+    white-space: nowrap;
+  }
+
+  .log-level {
+    flex-shrink: 0;
+    font-weight: 700;
+    width: 36px;
+    text-align: center;
+  }
+
+  .log-level.info  { color: var(--text-muted); }
+  .log-level.warn  { color: #f59e0b; }
+  .log-level.error { color: var(--danger); }
+  .log-level.fatal { color: #ff3b3b; font-weight: 900; }
+  .log-level.debug { color: #6366f1; }
+  .log-level.trace { color: #475569; }
+
+  .log-msg { color: var(--text); flex: 1; min-width: 0; }
+  .log-ctx { color: var(--text-muted); opacity: 0.7; margin-left: 4px; font-size: 0.73rem; }
+
+  .logs-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 24px 0;
+    font-size: 0.82rem;
+    opacity: 0.6;
+  }
+
   .provider-block {
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -2145,6 +2204,33 @@
       </div>
     </div>
 
+    <!-- Server Logs -->
+    <div class="settings-section">
+      <div class="settings-section-header collapsed" onclick="toggleSection(this)">
+        <h3>Logs do Servidor</h3>
+        <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+      </div>
+      <div class="settings-section-body collapsed">
+        <p class="settings-hint">Ultimas 500 entradas de log do servidor (apenas em memoria). Mais recente no topo.</p>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+          <select id="log-level-filter" onchange="applyLogFilter()" style="padding:7px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.85rem;outline:none;cursor:pointer;">
+            <option value="all">Todos os niveis</option>
+            <option value="info">Info+</option>
+            <option value="warn">Warn+</option>
+            <option value="error">Error+</option>
+          </select>
+          <div style="flex:1;"></div>
+          <button class="settings-action-btn" onclick="refreshLogs()">Atualizar</button>
+          <button class="settings-action-btn" onclick="copyLogs()">Copiar</button>
+          <button class="settings-action-btn" onclick="downloadLogs()">Baixar</button>
+        </div>
+        <div class="log-viewer" id="log-viewer">
+          <div class="logs-empty">Clique em "Atualizar" para carregar os logs.</div>
+        </div>
+        <div id="log-count" style="margin-top:6px;font-size:0.75rem;color:var(--text-muted);text-align:right;"></div>
+      </div>
+    </div>
+
     <!-- Dev Repository (EASTER EGG) -->
     <div class="settings-section" id="dev-repo-section" style="display:none;">
       <div class="settings-section-header collapsed" onclick="toggleSection(this)">
@@ -2588,6 +2674,10 @@ function handleServerMessage(msg) {
     case 'edit_mode':
       editModeActive = !!msg.active;
       updateEditModeUI();
+      break;
+
+    case 'logs':
+      renderLogs(msg.entries || []);
       break;
 
     case 'error':
@@ -3763,6 +3853,137 @@ function toggleSidebar() {
 function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sidebar-backdrop').classList.remove('visible');
+}
+
+// ==================== SERVER LOGS ====================
+var cachedLogs = [];
+var LOG_LEVEL_ORDER = { trace: 0, debug: 1, info: 2, warn: 3, error: 4, fatal: 5 };
+
+function refreshLogs() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'get_logs' }));
+  }
+}
+
+function renderLogs(entries) {
+  cachedLogs = entries || [];
+  applyLogFilter();
+}
+
+function applyLogFilter() {
+  var filter = document.getElementById('log-level-filter');
+  var minLevel = filter ? filter.value : 'all';
+  var minOrder = minLevel === 'all' ? -1 : (LOG_LEVEL_ORDER[minLevel] !== undefined ? LOG_LEVEL_ORDER[minLevel] : 2);
+
+  var filtered = cachedLogs.filter(function(e) {
+    if (minLevel === 'all') return true;
+    var lvlOrder = LOG_LEVEL_ORDER[e.level] !== undefined ? LOG_LEVEL_ORDER[e.level] : 2;
+    return lvlOrder >= minOrder;
+  });
+
+  var viewer = document.getElementById('log-viewer');
+  if (!viewer) return;
+
+  if (filtered.length === 0) {
+    viewer.innerHTML = '<div class="logs-empty">Nenhum log encontrado para o filtro selecionado.</div>';
+    var countEl = document.getElementById('log-count');
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+
+  // Renderiza mais recente no topo (reverse sem mutar o array original)
+  var html = '';
+  for (var i = filtered.length - 1; i >= 0; i--) {
+    html += renderLogEntry(filtered[i]);
+  }
+  viewer.innerHTML = html;
+
+  var countEl = document.getElementById('log-count');
+  if (countEl) {
+    countEl.textContent = filtered.length + ' entradas' +
+      (filtered.length < cachedLogs.length ? ' (de ' + cachedLogs.length + ' totais)' : '');
+  }
+}
+
+function renderLogEntry(entry) {
+  var ts = '';
+  try {
+    var d = new Date(entry.timestamp);
+    ts = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch(e) { ts = entry.timestamp || ''; }
+
+  var level = entry.level || 'info';
+  var msg = escapeHtml(entry.msg || '');
+
+  // Campos extras (contexto) — excluir os já exibidos
+  var skip = { timestamp: true, level: true, msg: true };
+  var ctxParts = [];
+  for (var k in entry) {
+    if (!Object.prototype.hasOwnProperty.call(entry, k) || skip[k]) continue;
+    var val = entry[k];
+    if (val === null || val === undefined) continue;
+    var valStr = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    ctxParts.push(escapeHtml(k) + '=' + escapeHtml(valStr));
+  }
+  var ctx = ctxParts.length > 0
+    ? '<span class="log-ctx">' + ctxParts.join(' ') + '</span>'
+    : '';
+
+  return '<div class="log-entry">' +
+    '<span class="log-ts">' + ts + '</span>' +
+    '<span class="log-level ' + escapeHtml(level) + '">' + escapeHtml(level.toUpperCase().slice(0, 3)) + '</span>' +
+    '<span class="log-msg">' + msg + ctx + '</span>' +
+    '</div>';
+}
+
+function formatLogsAsText() {
+  var filter = document.getElementById('log-level-filter');
+  var minLevel = filter ? filter.value : 'all';
+  var minOrder = minLevel === 'all' ? -1 : (LOG_LEVEL_ORDER[minLevel] !== undefined ? LOG_LEVEL_ORDER[minLevel] : 2);
+
+  var filtered = cachedLogs.filter(function(e) {
+    if (minLevel === 'all') return true;
+    var lvlOrder = LOG_LEVEL_ORDER[e.level] !== undefined ? LOG_LEVEL_ORDER[e.level] : 2;
+    return lvlOrder >= minOrder;
+  });
+
+  return filtered.map(function(e) {
+    var skip = { timestamp: true, level: true, msg: true };
+    var ctx = [];
+    for (var k in e) {
+      if (!Object.prototype.hasOwnProperty.call(e, k) || skip[k]) continue;
+      ctx.push(k + '=' + JSON.stringify(e[k]));
+    }
+    var levelPad = (e.level || 'info').toUpperCase();
+    while (levelPad.length < 5) levelPad += ' ';
+    return (e.timestamp || '') + ' [' + levelPad + '] ' + (e.msg || '') +
+      (ctx.length ? ' {' + ctx.join(', ') + '}' : '');
+  }).join('\n');
+}
+
+function copyLogs() {
+  var text = formatLogsAsText();
+  if (!text) { showToast('Nenhum log para copiar.'); return; }
+  navigator.clipboard.writeText(text)
+    .then(function() { showToast('Logs copiados!'); })
+    .catch(function() { showToast('Falha ao copiar. Tente baixar o arquivo.'); });
+}
+
+function downloadLogs() {
+  var text = formatLogsAsText();
+  if (!text) { showToast('Nenhum log para baixar.'); return; }
+  var ts = new Date().toISOString().replace(/[:.]/g, '-');
+  var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'server-logs-' + ts + '.txt';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
 }
 
 // ==================== SETTINGS ====================
