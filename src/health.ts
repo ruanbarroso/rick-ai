@@ -563,7 +563,10 @@ async function handleVersionCheck(res: ServerResponse): Promise<void> {
       }
     }
 
-    const hasUpdate = latest ? (current.sha !== "unknown" && latest.sha !== current.sha) : false;
+    // When current SHA is "unknown" (e.g. fresh install without --build-arg), we cannot
+    // compare versions — but we know there IS a version available on GitHub, so treat it
+    // as an update so the user can install and get proper version tracking from then on.
+    const hasUpdate = latest ? (current.sha === "unknown" || latest.sha !== current.sha) : false;
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ current, latest, hasUpdate, latestSource }));
