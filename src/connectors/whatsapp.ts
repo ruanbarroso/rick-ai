@@ -150,7 +150,8 @@ export class WhatsAppConnector implements Connector {
           logger.info({ attempt: this.reconnectAttempts, delay }, "Reconnecting...");
           setTimeout(() => this.start(), delay);
         } else if (!shouldReconnect) {
-          logger.error("Logged out. Delete auth_info folder and restart.");
+          logger.warn("Logged out — clearing stale auth_info so next connect generates a fresh QR.");
+          await fs.rm(AUTH_DIR, { recursive: true, force: true }).catch(() => {});
         }
       }
 
