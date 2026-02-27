@@ -3364,6 +3364,8 @@ function showTyping(composing) {
 
 // Stores the latest QR code data so it can be shown when the user opens settings.
 var pendingQrData = null;
+// Flag: só exibe o QR automaticamente se o usuário clicou em "Conectar"
+var userRequestedConnect = false;
 
 function showQrCode(data) {
   pendingQrData = data;
@@ -3373,10 +3375,16 @@ function showQrCode(data) {
   // Remove o loading do botão assim que o QR chegar
   setConnectBtnLoading(false);
 
-  // Exibe o overlay do QR automaticamente assim que o código chegar,
-  // sem exigir que o usuário clique em "Conectar" uma segunda vez.
+  // Exibe o overlay do QR apenas se o usuário solicitou a conexão,
+  // evitando que o QR apareça automaticamente ao abrir as configurações.
+  if (!userRequestedConnect) return;
+
   var qrOverlay = document.getElementById('qr-overlay');
   if (qrOverlay) qrOverlay.classList.add('visible');
+
+  // Esconde o botão "Conectar" enquanto o QR estiver visível
+  var connectBtn = document.getElementById('connect-whatsapp-btn');
+  if (connectBtn) connectBtn.style.display = 'none';
 }
 
 function isAtBottom() {
@@ -4446,6 +4454,8 @@ function updateWhatsAppStatusBadge() {
   } else {
     badge.className = 'settings-status disconnected';
     badge.innerHTML = '<span class="status-dot red"></span>Desconectado';
+    // Reseta o flag para que o QR não seja exibido automaticamente na próxima vez
+    userRequestedConnect = false;
     if (connectBtn) connectBtn.style.display = '';
     if (disconnectBtn) disconnectBtn.style.display = 'none';
     setConnectBtnLoading(false);
@@ -4467,9 +4477,13 @@ function setConnectBtnLoading(loading) {
 function connectWhatsApp() {
   var qrOverlay = document.getElementById('qr-overlay');
   if (!qrOverlay) return;
+  userRequestedConnect = true;
   if (pendingQrData) {
     // QR code já recebido — exibe imediatamente sem loading
     qrOverlay.classList.add('visible');
+    // Esconde o botão "Conectar" enquanto o QR estiver visível
+    var connectBtn = document.getElementById('connect-whatsapp-btn');
+    if (connectBtn) connectBtn.style.display = 'none';
   } else {
     if (ws && ws.readyState === WebSocket.OPEN) {
       setConnectBtnLoading(true);
