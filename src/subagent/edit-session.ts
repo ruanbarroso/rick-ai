@@ -522,7 +522,7 @@ export class EditSession {
       this.activeProvider === "claude"
         ? "Claude Code"
         : this.activeProvider === "openai"
-        ? "GPT-4o"
+        ? "GPT-5.3 Codex"
         : "Gemini Pro";
 
     const welcomeMsg =

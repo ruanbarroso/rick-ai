@@ -310,7 +310,7 @@ function makeOpenAIAdapter(history, userContent) {
             ? { "OpenAI-Organization": process.env.OPENAI_ACCOUNT_ID }
             : {}),
         },
-        body: JSON.stringify({ model: "gpt-4o", messages, tools: openaiTools }),
+        body: JSON.stringify({ model: "gpt-5.3-codex", messages, tools: openaiTools }),
       });
 
       if (!res.ok) {
@@ -353,7 +353,7 @@ function makeOpenAIAdapter(history, userContent) {
 // ── Gemini adapter ───────────────────────────────────────────────────────────
 function makeGeminiAdapter(history, userContent) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const MODEL = "gemini-2.5-pro-latest";
+  const MODEL = "gemini-3.1-pro-preview";
   const BASE = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}`;
   const geminiTools = [{ functionDeclarations: toolDeclarations }];
   const systemInstruction = systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined;

@@ -65,7 +65,7 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 | Gemini 3.1 Pro Preview | Google | Sub-agent fallback |
 | Gemini 3 Flash Preview | Google | Sub-agent last resort |
 
-No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect via your existing Pro/Max subscriptions. API key fallback models (`claude-sonnet-4-20250514`, `gpt-4o-mini`) are used when OAuth is not configured.
+No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect via your existing Pro/Max subscriptions. API key fallback models (`claude-opus-4-6`, `gpt-5.3-codex`) are used when OAuth is not configured.
 
 ### Persistent Memory
 
@@ -107,7 +107,7 @@ Each sub-agent gets a unique Rick variant name (Rick Prime, Pickle Rick, Evil Ri
 
 Rick can edit his own source code:
 
-1. `/edit` — Starts an edit session. Creates a staging copy of `src/`, launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-4o → Gemini Pro**, chosen automatically based on which credentials are available.
+1. `/edit` — Starts an edit session. Creates a staging copy of `src/`, launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-5.3 Codex → Gemini 3.1 Pro**, chosen automatically based on which credentials are available.
 2. Send prompts describing what to change — the active provider edits the files directly inside the isolated container.
 3. `/deploy` — Triggers the deploy pipeline:
    - Backup current `src/` → build candidate image → smoke test (health-only mode) → swap containers → 60s watchdog → rollback on failure
@@ -287,7 +287,7 @@ Host Docker (cluster-24g)
 │   └── agent.mjs + Playwright + Chromium
 │
 └── subagent-edit-*                # Ephemeral, created per /edit session
-    └── edit-agent.mjs (Claude Code CLI / GPT-4o / Gemini Pro) + Playwright
+    └── edit-agent.mjs (Claude Code CLI / GPT-5.3 Codex / Gemini 3.1 Pro) + Playwright
 ```
 
 ## Environment Variables
@@ -297,9 +297,9 @@ Host Docker (cluster-24g)
 | `GEMINI_API_KEY` | Yes | — | Google AI Studio API key |
 | `GEMINI_MODEL` | No | `gemini-3-flash-preview` | Override Gemini model name |
 | `ANTHROPIC_API_KEY` | No | — | Anthropic API key (alternative to OAuth) |
-| `ANTHROPIC_MODEL` | No | `claude-sonnet-4-20250514` | Override Anthropic model name (API key mode) |
+| `ANTHROPIC_MODEL` | No | `claude-opus-4-6` | Override Anthropic model name |
 | `OPENAI_API_KEY` | No | — | OpenAI API key (alternative to OAuth) |
-| `OPENAI_MODEL` | No | `gpt-4o-mini` | Override OpenAI model name (API key mode) |
+| `OPENAI_MODEL` | No | `gpt-5.3-codex` | Override OpenAI model name |
 | `DATABASE_URL` | No | — | PostgreSQL connection string. If unset, Rick uses SQLite. |
 | `VECTOR_DATABASE_URL` | No | — | pgvector connection string (semantic memory) |
 | `MEMORY_ENCRYPTION_KEY` | No | — | Passphrase for AES-256-GCM encryption of credential memories. If unset, credentials stored as plaintext. |

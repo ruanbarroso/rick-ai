@@ -1224,7 +1224,7 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
         return (
           "Nenhum modelo disponivel para o modo de edicao.\n\n" +
           "- */conectar claude* — recomendado (Claude Code com edicao autonoma)\n" +
-          "- */conectar gpt* — alternativa (GPT-4o com edicao de arquivos)\n" +
+          "- */conectar gpt* — alternativa (GPT-5.3 Codex com edicao de arquivos)\n" +
           "- Gemini Pro e usado automaticamente quando configurado no servidor"
         );
       }
