@@ -1,7 +1,8 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from "node:http";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { logger } from "./config/logger.js";
 import { query } from "./memory/database.js";
 import { config } from "./config/env.js";
@@ -449,15 +450,45 @@ interface LatestVersionInfo {
   checkedAt: string;
 }
 
-function getProjectDir(): string {
-  const dir = process.env.HOST_PROJECT_DIR;
-  if (!dir) {
-    throw new Error(
-      "HOST_PROJECT_DIR não está definido. " +
-      "Esta variável é obrigatória para operações que acessam o filesystem do host via Docker socket."
-    );
+let _hostProjectDir: string | undefined;
+
+/**
+ * Return the HOST filesystem path to the project directory.
+ * Auto-detects from Docker mount inspection when HOST_PROJECT_DIR is not set.
+ */
+async function getProjectDir(): Promise<string> {
+  if (_hostProjectDir) return _hostProjectDir;
+
+  const envDir = process.env.HOST_PROJECT_DIR;
+  if (envDir) {
+    _hostProjectDir = envDir;
+    return envDir;
   }
-  return dir;
+
+  // Auto-detect from container mounts
+  try {
+    const execFileAsync = promisify(execFile);
+    const { stdout: hostname } = await execFileAsync("cat", ["/etc/hostname"]);
+    const containerId = hostname.trim();
+    const { stdout: inspectJson } = await execFileAsync("docker", [
+      "inspect", "--format", "{{json .Mounts}}", containerId,
+    ]);
+    const mounts = JSON.parse(inspectJson.trim()) as Array<{ Source: string; Destination: string }>;
+    for (const m of mounts) {
+      if (m.Destination === "/app/data") {
+        const detected = m.Source.replace(/\/data$/, "");
+        logger.info({ detected }, "Auto-detected HOST_PROJECT_DIR from container mounts");
+        _hostProjectDir = detected;
+        return detected;
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to auto-detect HOST_PROJECT_DIR");
+  }
+
+  throw new Error(
+    "HOST_PROJECT_DIR não está definido e não foi possível detectá-lo automaticamente."
+  );
 }
 
 function getVersionCachePath(): string {
@@ -587,7 +618,7 @@ async function handleVersionCheck(res: ServerResponse): Promise<void> {
 // ==================== UPDATE (download GitHub zip + deploy) ====================
 
 async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const projectDir = getProjectDir();
+  const projectDir = await getProjectDir();
 
   try {
     logger.info("Update: downloading latest code from GitHub...");
@@ -729,7 +760,7 @@ const EXPORT_INCLUDES = [
 ];
 
 async function handleCodeExport(res: ServerResponse): Promise<void> {
-  const projectDir = getProjectDir();
+  const projectDir = await getProjectDir();
 
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -794,7 +825,7 @@ async function handleCodeExport(res: ServerResponse): Promise<void> {
 // ==================== CODE IMPORT ====================
 
 async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const projectDir = getProjectDir();
+  const projectDir = await getProjectDir();
 
   try {
     // Read the entire request body

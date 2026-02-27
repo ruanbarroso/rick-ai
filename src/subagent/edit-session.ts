@@ -14,20 +14,64 @@ import type { MediaAttachment } from "../llm/types.js";
 const execFileAsync = promisify(execFile);
 
 /**
+ * Cached host project directory (resolved once).
+ */
+let _hostProjectDir: string | undefined;
+
+/**
  * Return the HOST filesystem path to the project directory.
  * This is required for Docker-in-Docker operations (build, run with -v) because
  * commands go through the Docker socket and need real host paths, not container paths.
+ *
+ * Resolution order:
+ * 1. HOST_PROJECT_DIR env var (explicit config)
+ * 2. Auto-detect from Docker mount inspection (finds the host path mounted to /app)
  */
-function getHostProjectDir(): string {
-  const dir = process.env.HOST_PROJECT_DIR;
-  if (!dir) {
-    throw new Error(
-      "HOST_PROJECT_DIR não está definido. " +
-      "Esta variável é obrigatória para o modo de edição porque o Docker precisa de paths do host. " +
-      "Defina HOST_PROJECT_DIR no .env apontando para o diretório do projeto no host (ex: /home/ubuntu/rick-ai)."
-    );
+async function getHostProjectDir(): Promise<string> {
+  if (_hostProjectDir) return _hostProjectDir;
+
+  // 1. Explicit config
+  const envDir = process.env.HOST_PROJECT_DIR;
+  if (envDir) {
+    _hostProjectDir = envDir;
+    return envDir;
   }
-  return dir;
+
+  // 2. Auto-detect: inspect our own container's mounts to find what host path is bound to /app
+  try {
+    const { stdout: hostname } = await execFileAsync("cat", ["/etc/hostname"]);
+    const containerId = hostname.trim();
+    const { stdout: inspectJson } = await execFileAsync("docker", [
+      "inspect", "--format", "{{json .Mounts}}", containerId,
+    ]);
+    const mounts = JSON.parse(inspectJson.trim()) as Array<{ Source: string; Destination: string }>;
+    // Look for a bind mount whose destination contains /app (data, auth_info, scripts all mount under /app)
+    // We want the parent: if /home/ubuntu/rick-ai/data -> /app/data, the project dir is /home/ubuntu/rick-ai
+    for (const m of mounts) {
+      if (m.Destination === "/app/data") {
+        const detected = m.Source.replace(/\/data$/, "");
+        logger.info({ detected }, "Auto-detected HOST_PROJECT_DIR from container mounts");
+        _hostProjectDir = detected;
+        return detected;
+      }
+    }
+    // Fallback: try /app/scripts mount
+    for (const m of mounts) {
+      if (m.Destination === "/app/scripts") {
+        const detected = m.Source.replace(/\/scripts$/, "");
+        logger.info({ detected }, "Auto-detected HOST_PROJECT_DIR from /app/scripts mount");
+        _hostProjectDir = detected;
+        return detected;
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to auto-detect HOST_PROJECT_DIR from container mounts");
+  }
+
+  throw new Error(
+    "HOST_PROJECT_DIR não está definido e não foi possível detectá-lo automaticamente. " +
+    "Defina HOST_PROJECT_DIR no .env apontando para o diretório do projeto no host (ex: /home/ubuntu/rick-ai)."
+  );
 }
 
 /**
@@ -365,7 +409,7 @@ export class EditSession {
       "Construindo agora (pode levar alguns minutos na primeira vez)..._"
     );
 
-    const projectDir = getHostProjectDir();
+    const projectDir = await getHostProjectDir();
     await execFileAsync(
       "docker",
       [
@@ -390,7 +434,7 @@ export class EditSession {
   async start(env: Record<string, string>): Promise<void> {
     await this.ensureImageExists();
 
-    const projectDir = getHostProjectDir();
+    const projectDir = await getHostProjectDir();
 
     // Create staging directory with copy of current source on the HOST.
     // We copy src/, package.json, tsconfig.json, package-lock.json from the host project,
@@ -889,7 +933,7 @@ export class EditSession {
     this.state = "deploying";
     await this.sendMessage("*Iniciando deploy seguro...*\nEtapas: build (inclui tsc) → smoke test → swap → watchdog");
 
-    const projectDir = getHostProjectDir();
+    const projectDir = await getHostProjectDir();
 
     const child = spawn("docker", [
       "run", "--rm",
@@ -1077,7 +1121,7 @@ export class EditSession {
     await this.sendMessage(`\`[publish]\` Iniciando deploy + push...`, "tool_use");
     this.state = "deploying";
 
-    const projectDir = getHostProjectDir();
+    const projectDir = await getHostProjectDir();
 
     // Write the push script to a temp file on the host, then mount it into the container.
     // This avoids shell injection from the token and keeps the script readable.
