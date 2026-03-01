@@ -683,6 +683,14 @@ export class WebConnector implements Connector {
 
     const response = await this.manager.handleIncomingMessage(incoming);
 
+    // Re-resolve adminUserId if it was null (first message may have created the admin user)
+    if (this.adminUserId === null && this.userService) {
+      try {
+        const admin = await this.userService.getAdminUser();
+        if (admin) this.adminUserId = admin.id;
+      } catch (_) { /* best-effort */ }
+    }
+
     if (response) {
       const respPayload: Record<string, any> = { type: "message", text: response, from: "agent" };
       if (clientSessionId) respPayload.sessionId = clientSessionId;

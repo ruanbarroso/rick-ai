@@ -618,10 +618,18 @@ export class MemoryService {
     // Create new user
     const isOwner =
       config.ownerPhone !== "" && phone.includes(config.ownerPhone);
-    result = await query(
-      `INSERT INTO users (phone, name, is_owner) VALUES ($1, $2, $3) RETURNING *`,
-      [phone, name || null, isOwner]
-    );
+    // If this is the owner, set RBAC fields so they're immediately active as admin
+    if (isOwner) {
+      result = await query(
+        `INSERT INTO users (phone, name, is_owner, role, status, display_name) VALUES ($1, $2, $3, 'admin', 'active', $2) RETURNING *`,
+        [phone, name || null, isOwner]
+      );
+    } else {
+      result = await query(
+        `INSERT INTO users (phone, name, is_owner) VALUES ($1, $2, $3) RETURNING *`,
+        [phone, name || null, isOwner]
+      );
+    }
     logger.info({ phone, isOwner }, "New user created");
     return result.rows[0];
   }
