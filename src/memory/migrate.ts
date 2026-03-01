@@ -376,27 +376,14 @@ export async function runMigrations(): Promise<void> {
   await runVectorMigrations();
 
   // ==================== ADMIN BOOTSTRAP ====================
-  // On fresh installs, migration 010 updates 0 rows (no users exist yet).
-  // Check if any admin exists; if not, try to promote an is_owner user.
-  // If there's still no admin, create one so the Web UI works out of the box.
+  // Admin is a unique Web UI-only user with no phone number.
+  // On fresh installs (or if admin was accidentally deleted), create one.
   const existingAdmin = await query(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`);
   if (existingAdmin.rows.length === 0) {
-    // Try promoting an existing is_owner user that migration 010 missed
     await query(
-      `UPDATE users SET role = 'admin', status = 'active', display_name = COALESCE(display_name, name, 'Admin') WHERE is_owner = TRUE AND role IS NULL`
+      `INSERT INTO users (phone, display_name, role, status, is_owner) VALUES ('', 'Admin', 'admin', 'active', TRUE)`
     );
-    const promoted = await query(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`);
-    if (promoted.rows.length === 0) {
-      // Still no admin — create one for the Web UI (phone from OWNER_PHONE env, or empty)
-      const ownerPhone = process.env.OWNER_PHONE || "";
-      await query(
-        `INSERT INTO users (phone, display_name, role, status, is_owner) VALUES ($1, 'Admin', 'admin', 'active', TRUE)`,
-        [ownerPhone]
-      );
-      logger.info("Bootstrap: created admin user for fresh install");
-    } else {
-      logger.info("Bootstrap: promoted existing is_owner user to admin");
-    }
+    logger.info("Bootstrap: created admin user for fresh install");
   }
 
   // Backfill created_by in vector DB embeddings with the admin user ID.

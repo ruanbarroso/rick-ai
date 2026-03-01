@@ -125,7 +125,9 @@ export class Agent {
   private async handleMessageInternal(msg: IncomingMessage): Promise<string> {
     const { connectorName, userId: userPhone, userName, text: rawText, media, imageMedias, quotedText, audioUrl, imageUrls, fileInfos } = msg;
     const numericUserId = msg.numericUserId;
-    const userRole: UserRole = msg.userRole ?? "admin"; // Default to admin for Web UI (pre-RBAC compat)
+    // Web UI always sends messages as the admin user (the only Web UI user).
+    // For connectors (WhatsApp), userRole comes from resolveUser() and can be null (pending).
+    const userRole: UserRole = msg.userRole !== undefined ? msg.userRole : "admin";
 
     // Get or create user (legacy — only needed when numericUserId is not available)
     // When RBAC is active, the user was already resolved by the connector.

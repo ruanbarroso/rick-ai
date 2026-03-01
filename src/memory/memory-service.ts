@@ -615,22 +615,13 @@ export class MemoryService {
       return result.rows[0];
     }
 
-    // Create new user
-    const isOwner =
-      config.ownerPhone !== "" && phone.includes(config.ownerPhone);
-    // If this is the owner, set RBAC fields so they're immediately active as admin
-    if (isOwner) {
-      result = await query(
-        `INSERT INTO users (phone, name, is_owner, role, status, display_name) VALUES ($1, $2, $3, 'admin', 'active', $2) RETURNING *`,
-        [phone, name || null, isOwner]
-      );
-    } else {
-      result = await query(
-        `INSERT INTO users (phone, name, is_owner) VALUES ($1, $2, $3) RETURNING *`,
-        [phone, name || null, isOwner]
-      );
-    }
-    logger.info({ phone, isOwner }, "New user created");
+    // Create new user — always as pending with no role.
+    // Admin is a unique Web UI-only user created by bootstrap; phone users never auto-promote.
+    result = await query(
+      `INSERT INTO users (phone, name, is_owner) VALUES ($1, $2, FALSE) RETURNING *`,
+      [phone, name || null]
+    );
+    logger.info({ phone }, "New user created (pending)");
     return result.rows[0];
   }
 
