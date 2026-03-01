@@ -19,7 +19,6 @@ const VECTOR_MIGRATIONS = [
       -- Main embeddings table
       CREATE TABLE IF NOT EXISTS memory_embeddings (
         id SERIAL PRIMARY KEY,
-        user_phone VARCHAR(50) NOT NULL,
         content TEXT NOT NULL,
         category VARCHAR(100) NOT NULL DEFAULT 'conversation',
         source VARCHAR(50) NOT NULL DEFAULT 'auto',
@@ -30,8 +29,7 @@ const VECTOR_MIGRATIONS = [
       );
 
       -- Indexes for filtering
-      CREATE INDEX IF NOT EXISTS idx_embeddings_user ON memory_embeddings(user_phone);
-      CREATE INDEX IF NOT EXISTS idx_embeddings_category ON memory_embeddings(user_phone, category);
+      CREATE INDEX IF NOT EXISTS idx_embeddings_category ON memory_embeddings(category);
       CREATE INDEX IF NOT EXISTS idx_embeddings_created ON memory_embeddings(created_at DESC);
 
       -- HNSW index for fast cosine similarity search
@@ -60,6 +58,13 @@ const VECTOR_MIGRATIONS = [
     // NOTE: Backfilling created_by with the admin user ID is done in
     // backfillVectorCreatedBy() (called from runMigrations) because the
     // vector DB is a separate database and can't reference the users table.
+  },
+  {
+    name: "004_drop_user_phone",
+    sql: `
+      DROP INDEX IF EXISTS idx_embeddings_user;
+      ALTER TABLE memory_embeddings DROP COLUMN IF EXISTS user_phone;
+    `,
   },
 ];
 

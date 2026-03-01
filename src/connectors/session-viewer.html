@@ -550,21 +550,29 @@ function updateSessionState(state) {
   var dot = document.getElementById('status-dot');
   var text = document.getElementById('status-text');
   var banner = document.getElementById('done-banner');
+  var composeBar = document.querySelector('.compose-bar');
+  var attachPreview = document.getElementById('attachments-preview');
 
   dot.className = 'status-dot';
   if (state === 'running' || state === 'starting') {
     dot.classList.add('running');
     text.textContent = 'Trabalhando...';
     banner.classList.remove('visible');
+    composeBar.style.display = 'flex';
   } else if (state === 'done') {
     dot.classList.add('done');
     text.textContent = 'Concluido';
+    banner.textContent = 'Tarefa concluida — somente leitura';
     banner.classList.add('visible');
+    composeBar.style.display = 'none';
+    attachPreview.classList.remove('visible');
   } else if (state === 'killed') {
     dot.classList.add('offline');
     text.textContent = 'Encerrado';
-    banner.textContent = 'Sessao encerrada';
+    banner.textContent = 'Sessao encerrada — somente leitura';
     banner.classList.add('visible');
+    composeBar.style.display = 'none';
+    attachPreview.classList.remove('visible');
   } else {
     dot.classList.add('offline');
     text.textContent = 'Conectando...';
@@ -813,6 +821,9 @@ function blobToBase64(blob) {
 }
 
 function sendMessage() {
+  // Guard: reject sends on ended sessions
+  if (sessionState === 'done' || sessionState === 'killed') return;
+
   var input = document.getElementById('msg-input');
   var text = input.value.trim();
 

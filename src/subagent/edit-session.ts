@@ -1148,7 +1148,7 @@ export class EditSession {
       for (const category of sensitiveCategories) {
         if (githubToken) break;
         try {
-          const mems = await this.memoryService.listMemories(this.userId, category);
+          const mems = await this.memoryService.listGlobalMemories(category);
           for (const mem of mems) {
             const keyLower = mem.key.toLowerCase().replace(/[^a-z0-9_]/g, "_");
             if (tokenKeys.some((tk) => keyLower.includes(tk)) || keyLower.includes("github")) {
@@ -1455,7 +1455,7 @@ echo "[publish] Codigo publicado com sucesso em github.com/${targetRepo}"
       try {
         const sensitiveCategories = ["credenciais", "tokens", "senhas", "secrets", "passwords", "credentials"];
         for (const category of sensitiveCategories) {
-          const mems = await this.memoryService.listMemories(this.userId, category);
+          const mems = await this.memoryService.listGlobalMemories(category);
           for (const mem of mems) {
             // "github_token" → "RICK_SECRET_GITHUB_TOKEN"
             const envKey = `RICK_SECRET_${mem.key

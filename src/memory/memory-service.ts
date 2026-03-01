@@ -8,7 +8,6 @@ import { hasAuthorityOver } from "../auth/permissions.js";
 
 export interface Memory {
   id: number;
-  user_phone: string;
   category: string;
   key: string;
   value: string;
@@ -47,35 +46,6 @@ export interface ConversationMessage {
 
 export class MemoryService {
   // ==================== MEMORY CRUD ====================
-
-  /**
-   * Save a memory (legacy — no RBAC checks).
-   * @deprecated Use rememberV2() for RBAC-aware writes.
-   */
-  async remember(
-    userPhone: string,
-    key: string,
-    value: string,
-    category: string = "general",
-    metadata: Record<string, any> = {}
-  ): Promise<Memory> {
-    // Encrypt values in sensitive categories (credentials, passwords, etc.)
-    const storedValue = isSensitiveCategory(category) ? encryptValue(value) : value;
-
-    const result = await query(
-      `INSERT INTO memories (user_phone, category, key, value, metadata)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (user_phone, category, key)
-       DO UPDATE SET value = $4, metadata = $5, updated_at = NOW()
-       RETURNING *`,
-      [userPhone, category, key, storedValue, JSON.stringify(metadata)]
-    );
-    logger.info({ userPhone, category, key }, "Memory saved");
-    // Return with decrypted value so callers see plaintext
-    const row = result.rows[0];
-    row.value = decryptValue(row.value);
-    return row;
-  }
 
   /**
    * Save a memory with RBAC hierarchy enforcement.
@@ -133,8 +103,8 @@ export class MemoryService {
 
     // Upsert using global unique constraint (category, key)
     const result = await query(
-      `INSERT INTO memories (category, key, value, metadata, created_by, user_id, user_phone)
-       VALUES ($1, $2, $3, $4, $5, $5, '')
+      `INSERT INTO memories (category, key, value, metadata, created_by, user_id)
+       VALUES ($1, $2, $3, $4, $5, $5)
        ON CONFLICT (category, key)
        DO UPDATE SET value = $3, metadata = $4, created_by = $5, updated_at = NOW()
        RETURNING *`,
@@ -159,121 +129,6 @@ export class MemoryService {
       mem.value = decryptValue(mem.value);
     }
     return memories;
-  }
-
-  async recall(
-    userPhone: string,
-    searchTerm: string
-  ): Promise<Memory[]> {
-    // First try exact key match
-    let result = await query(
-      `SELECT * FROM memories 
-       WHERE user_phone = $1 AND LOWER(key) = LOWER($2)
-       ORDER BY updated_at DESC`,
-      [userPhone, searchTerm]
-    );
-
-    if (result.rows.length > 0) return this.decryptMemories(result.rows);
-
-    // Then try full-text search (PostgreSQL only — SQLite skips to LIKE)
-    // NOTE: Full-text search won't match encrypted values — this is by design.
-    // Encrypted credentials are found via exact key match above.
-    if (isPostgres()) {
-      result = await query(
-        `SELECT *, ts_rank(
-          to_tsvector('portuguese', key || ' ' || value),
-          plainto_tsquery('portuguese', $2)
-         ) as rank
-         FROM memories 
-         WHERE user_phone = $1 
-           AND to_tsvector('portuguese', key || ' ' || value) @@ plainto_tsquery('portuguese', $2)
-         ORDER BY rank DESC
-         LIMIT 10`,
-        [userPhone, searchTerm]
-      );
-
-      if (result.rows.length > 0) return this.decryptMemories(result.rows);
-    }
-
-    // Fallback to LIKE (ILIKE on PG, LIKE on SQLite — adapter handles it)
-    result = await query(
-      `SELECT * FROM memories 
-       WHERE user_phone = $1 
-         AND (key ILIKE $2 OR value ILIKE $2)
-       ORDER BY updated_at DESC
-       LIMIT 10`,
-      [userPhone, `%${searchTerm}%`]
-    );
-
-    return this.decryptMemories(result.rows);
-  }
-
-  async forget(
-    userPhone: string,
-    key: string,
-    category?: string
-  ): Promise<number> {
-    let result;
-    if (category) {
-      result = await query(
-        `DELETE FROM memories 
-         WHERE user_phone = $1 AND LOWER(key) = LOWER($2) AND category = $3`,
-        [userPhone, key, category]
-      );
-    } else {
-      result = await query(
-        `DELETE FROM memories 
-         WHERE user_phone = $1 AND LOWER(key) = LOWER($2)`,
-        [userPhone, key]
-      );
-    }
-    logger.info(
-      { userPhone, key, deleted: result.rowCount },
-      "Memory forgotten"
-    );
-    return result.rowCount || 0;
-  }
-
-  async forgetCategory(
-    userPhone: string,
-    category: string
-  ): Promise<number> {
-    const result = await query(
-      `DELETE FROM memories WHERE user_phone = $1 AND category = $2`,
-      [userPhone, category]
-    );
-    return result.rowCount || 0;
-  }
-
-  async forgetAll(userPhone: string): Promise<number> {
-    const result = await query(
-      `DELETE FROM memories WHERE user_phone = $1`,
-      [userPhone]
-    );
-    return result.rowCount || 0;
-  }
-
-  async listMemories(
-    userPhone: string,
-    category?: string
-  ): Promise<Memory[]> {
-    if (category) {
-      const result = await query(
-        `SELECT * FROM memories 
-         WHERE user_phone = $1 AND category = $2
-         ORDER BY category, key`,
-        [userPhone, category]
-      );
-      return this.decryptMemories(result.rows);
-    }
-
-    const result = await query(
-      `SELECT * FROM memories 
-       WHERE user_phone = $1
-       ORDER BY category, key`,
-      [userPhone]
-    );
-    return this.decryptMemories(result.rows);
   }
 
   // ==================== RBAC-AWARE MEMORY QUERIES ====================
@@ -408,98 +263,8 @@ export class MemoryService {
   /** Counter to throttle message_log cleanup (run every ~100 saves) */
   private saveCounter = 0;
 
-  async saveMessage(
-    userPhone: string,
-    role: "user" | "assistant",
-    content: string,
-    modelUsed?: string,
-    tokensUsed?: number,
-    audioUrl?: string,
-    imageUrls?: string[],
-    messageType?: "text" | "tool_use",
-    fileInfos?: FileInfo[]
-  ): Promise<void> {
-    // Store image URLs as JSON array string in image_url column
-    const imageUrlValue = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
-    const fileInfosValue = fileInfos && fileInfos.length > 0 ? JSON.stringify(fileInfos) : null;
-    await query(
-      `INSERT INTO conversations (user_phone, role, content, model_used, tokens_used, audio_url, image_url, message_type, file_infos)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [userPhone, role, content, modelUsed || null, tokensUsed || null, audioUrl || null, imageUrlValue, messageType || "text", fileInfosValue]
-    );
-
-    // Prune old conversation messages for this user (keep most recent N)
-    this.saveCounter++;
-    if (this.saveCounter % 20 === 0) {
-      // Run cleanup every 20 messages to avoid per-insert overhead
-      query(
-        `DELETE FROM conversations WHERE user_phone = $1 AND id NOT IN (
-           SELECT id FROM conversations WHERE user_phone = $1 ORDER BY created_at DESC LIMIT $2
-         )`,
-        [userPhone, MemoryService.MAX_CONVERSATION_MESSAGES]
-      ).catch((err) => logger.warn({ err }, "Conversation pruning failed"));
-    }
-
-    // Prune message_log every ~100 saves
-    if (this.saveCounter % 100 === 0) {
-      query(
-        `DELETE FROM message_log WHERE id NOT IN (
-           SELECT id FROM message_log ORDER BY created_at DESC LIMIT $1
-         )`,
-        [MemoryService.MAX_MESSAGE_LOG_ENTRIES]
-      ).catch((err) => logger.warn({ err }, "Message log pruning failed"));
-    }
-  }
-
-  async getConversationHistory(
-    userPhone: string,
-    limit?: number
-  ): Promise<ConversationMessage[]> {
-    const maxMessages = limit || config.conversationHistoryLimit;
-    const result = await query(
-      `SELECT role, content, created_at, audio_url, image_url, message_type, file_infos FROM conversations
-       WHERE user_phone = $1
-       ORDER BY created_at DESC
-       LIMIT $2`,
-      [userPhone, maxMessages]
-    );
-    // Parse image_url: could be JSON array string or legacy single URL
-    return result.rows.reverse().map((row: any) => {
-      const msg: ConversationMessage = { role: row.role, content: row.content };
-      if (row.created_at) msg.created_at = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
-      if (row.message_type) msg.message_type = row.message_type;
-      if (row.audio_url) msg.audio_url = row.audio_url;
-      if (row.image_url) {
-        try {
-          const parsed = JSON.parse(row.image_url);
-          msg.image_urls = Array.isArray(parsed) ? parsed : [row.image_url];
-        } catch {
-          // Legacy single URL string
-          msg.image_urls = [row.image_url];
-        }
-      }
-      if (row.file_infos) {
-        try {
-          const parsed = JSON.parse(row.file_infos);
-          msg.file_infos = Array.isArray(parsed) ? parsed : undefined;
-        } catch {
-          // Ignore malformed JSON
-        }
-      }
-      return msg;
-    });
-  }
-
-  async clearConversation(userPhone: string): Promise<void> {
-    await query(`DELETE FROM conversations WHERE user_phone = $1`, [
-      userPhone,
-    ]);
-  }
-
-  // ==================== RBAC-AWARE CONVERSATION METHODS ====================
-
   /**
-   * Save a message using user_id instead of user_phone.
+   * Save a message using user_id.
    */
   async saveMessageByUserId(
     userId: number,
@@ -515,8 +280,8 @@ export class MemoryService {
     const imageUrlValue = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
     const fileInfosValue = fileInfos && fileInfos.length > 0 ? JSON.stringify(fileInfos) : null;
     await query(
-      `INSERT INTO conversations (user_id, user_phone, role, content, model_used, tokens_used, audio_url, image_url, message_type, file_infos)
-       VALUES ($1, '', $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO conversations (user_id, role, content, model_used, tokens_used, audio_url, image_url, message_type, file_infos)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [userId, role, content, modelUsed || null, tokensUsed || null, audioUrl || null, imageUrlValue, messageType || "text", fileInfosValue]
     );
 
@@ -589,64 +354,43 @@ export class MemoryService {
 
   // ==================== USER MANAGEMENT ====================
 
+  /**
+   * Get or create a user by phone number (legacy connector path).
+   * Returns the user's numeric ID and display name.
+   */
   async getOrCreateUser(
     phone: string,
-    name?: string
+    displayName?: string
   ): Promise<{
     id: number;
     phone: string;
-    name: string | null;
-    is_owner: boolean;
+    displayName: string | null;
   }> {
     // Try to get existing user
-    let result = await query(`SELECT * FROM users WHERE phone = $1`, [
+    let result = await query(`SELECT id, phone, display_name FROM users WHERE phone = $1`, [
       phone,
     ]);
 
     if (result.rows.length > 0) {
-      // Update name if provided and different
-      if (name && name !== result.rows[0].name) {
+      // Update display_name if provided and different
+      if (displayName && displayName !== result.rows[0].display_name) {
         await query(
-          `UPDATE users SET name = $1, updated_at = NOW() WHERE phone = $2`,
-          [name, phone]
+          `UPDATE users SET display_name = $1, updated_at = NOW() WHERE phone = $2`,
+          [displayName, phone]
         );
-        result.rows[0].name = name;
+        result.rows[0].display_name = displayName;
       }
-      return result.rows[0];
+      return { id: result.rows[0].id, phone: result.rows[0].phone, displayName: result.rows[0].display_name };
     }
 
     // Create new user — always as pending with no role.
     // Admin is a unique Web UI-only user created by bootstrap; phone users never auto-promote.
     result = await query(
-      `INSERT INTO users (phone, name, is_owner) VALUES ($1, $2, FALSE) RETURNING *`,
-      [phone, name || null]
+      `INSERT INTO users (phone, display_name) VALUES ($1, $2) RETURNING id, phone, display_name`,
+      [phone, displayName || null]
     );
     logger.info({ phone }, "New user created (pending)");
-    return result.rows[0];
-  }
-
-  // ==================== CONTEXT BUILDING ====================
-
-  async buildMemoryContext(userPhone: string): Promise<string> {
-    const memories = await this.listMemories(userPhone);
-    if (memories.length === 0) return "";
-
-    const grouped: Record<string, Memory[]> = {};
-    for (const mem of memories) {
-      if (!grouped[mem.category]) grouped[mem.category] = [];
-      grouped[mem.category].push(mem);
-    }
-
-    let context = "\n--- MEMORIAS DO USUARIO ---\n";
-    for (const [category, mems] of Object.entries(grouped)) {
-      context += `\n[${category.toUpperCase()}]\n`;
-      for (const mem of mems) {
-        context += `- ${mem.key}: ${mem.value}\n`;
-      }
-    }
-    context += "--- FIM DAS MEMORIAS ---\n";
-
-    return context;
+    return { id: result.rows[0].id, phone: result.rows[0].phone, displayName: result.rows[0].display_name };
   }
 
   // ==================== MESSAGE TRACKING ====================

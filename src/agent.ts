@@ -41,8 +41,8 @@ export class Agent {
   /** Tracks whether it's the first message in an edit session (use -p) vs continuation (use --continue) */
   private editFirstPromptSent = false;
 
-  /** Phone of user in current edit session (for token refresh) */
-  private editUserPhone: string | null = null;
+  /** User ID of user in current edit session (for token refresh) */
+  private editUserId: number | null = null;
 
   /**
    * Per-user message processing lock. Serializes handleMessage calls to prevent
@@ -129,10 +129,11 @@ export class Agent {
     // For connectors (WhatsApp), userRole comes from resolveUser() and can be null (pending).
     const userRole: UserRole = msg.userRole !== undefined ? msg.userRole : "admin";
 
-    // Get or create user (legacy — only needed when numericUserId is not available)
-    // When RBAC is active, the user was already resolved by the connector.
+    // Get or create user — always yields a numeric user.id for DB operations.
+    // When RBAC is active (numericUserId available), the user was already resolved by the connector.
+    // Otherwise, fall back to legacy phone-based lookup.
     const user = numericUserId
-      ? { id: numericUserId, phone: userPhone, name: userName || null, is_owner: userRole === "admin" }
+      ? { id: numericUserId, phone: userPhone, displayName: userName || null }
       : await this.memory.getOrCreateUser(userPhone, userName);
 
     // If message is a reply to another message, prepend quoted context
@@ -163,17 +164,17 @@ export class Agent {
       if (this.editSession.getState() === "auth_expired") {
         // Check if this looks like a Claude OAuth code (contains # separator)
         if (fullText.includes("#") && this.claudeOAuth.hasPendingAuth()) {
-          const result = await this.cmdExchangeClaudeCode(userPhone, fullText);
+          const result = await this.cmdExchangeClaudeCode(user.id, fullText);
           if (result?.includes("conectado com sucesso")) {
             // Token exchanged — re-inject into edit session
-            const newToken = await this.claudeOAuth.getValidToken(userPhone);
+            const newToken = await this.claudeOAuth.getValidToken(user.id);
             if (newToken && this.editSession) {
               let refreshToken: string | undefined;
               try {
                 const { query: dbQuery } = await import("./memory/db.js");
                 const r = await dbQuery(
-                  `SELECT refresh_token FROM oauth_tokens WHERE user_phone = $1 AND provider = 'claude' AND is_active = TRUE`,
-                  [userPhone]
+                  `SELECT refresh_token FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
+                  [user.id]
                 );
                 refreshToken = r.rows[0]?.refresh_token;
               } catch (_) { /* ignore */ }
@@ -276,20 +277,20 @@ export class Agent {
     // Check for direct commands first (only for text messages)
     // handleCommand returns null if not a command, or a string (possibly empty) if it is
     if (!routingMedia) {
-      const commandResult = await this.handleCommand(userPhone, connectorName, fullText, numericUserId, userRole);
+      const commandResult = await this.handleCommand(userPhone, connectorName, fullText, user.id, userRole);
       if (commandResult !== null) return commandResult;
     }
 
     // If there's a pending delegation waiting for credentials, handle it
     if (this.pendingDelegation && !routingMedia) {
-      return this.handlePendingCredential(userPhone, connectorName, fullText, numericUserId, userRole);
+      return this.handlePendingCredential(userPhone, connectorName, fullText, user.id, userRole);
     }
 
     // Show typing indicator while processing (classification + LLM call can take several seconds)
     await this.connectorManager.setTyping(connectorName, userPhone, true);
     try {
       // Keep OAuth tokens fresh — needed for sub-agent LLM fallback
-      await this.ensureOAuthTokens(userPhone);
+      await this.ensureOAuthTokens(user.id);
 
       // Collect all images for potential sub-agent forwarding
       const allImageMedias: MediaAttachment[] = [];
@@ -313,7 +314,7 @@ export class Agent {
       const userHasDoneSessions = this.sessionManager.hasDoneSessionsForUser(userPhone);
       if (userHasDoneSessions && !msg.skipSubAgentRelay) {
         logger.info({ userPhone, userRole, doneSessions: this.sessionManager.getDoneSessionsForUser(userPhone).length }, "Routing to sub-agent relay (user has done sessions)");
-        const relayResult = await this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos, numericUserId);
+        const relayResult = await this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos, user.id);
         // null means the message is a SELF task that doesn't relate to the session — fall through to normal chat
         if (relayResult !== null) return relayResult;
         logger.info({ userPhone }, "Sub-agent relay returned null — falling through to normal classification");
@@ -351,7 +352,7 @@ export class Agent {
           imageUrls,
           allImageMedias,
           fileInfos,
-          numericUserId
+          user.id
         );
       }
 
@@ -366,7 +367,7 @@ export class Agent {
       } else if (!routingMedia && imageMedias && imageMedias.length > 0) {
         allMedia = imageMedias.length === 1 ? imageMedias[0] : imageMedias;
       }
-      return this.handleSimpleChat(userPhone, user.name, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, numericUserId);
+      return this.handleSimpleChat(userPhone, user.displayName, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, user.id);
     } finally {
       await this.connectorManager.setTyping(connectorName, userPhone, false);
     }
@@ -384,16 +385,13 @@ export class Agent {
     imageUrls?: string[],
     fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
     userRole: UserRole = "admin",
-    numericUserId?: number
+    userId?: number
   ): Promise<string> {
     // RBAC: Use global memory context with role-based filtering
     const memoryContext = await this.memory.buildGlobalMemoryContext(userRole);
-    const semanticContext = await this.buildSemanticContext(userPhone, text, userRole);
+    const semanticContext = await this.buildSemanticContext(userId!, text, userRole);
 
-    // Use user_id-based history if available, otherwise fallback to phone-based
-    const history = numericUserId
-      ? await this.memory.getConversationHistoryByUserId(numericUserId)
-      : await this.memory.getConversationHistory(userPhone);
+    const history = await this.memory.getConversationHistoryByUserId(userId!);
 
     const systemPrompt = this.buildSystemPrompt(userName, memoryContext, semanticContext, userRole, true);
 
@@ -410,11 +408,7 @@ export class Agent {
     ];
 
     // Save user message BEFORE the LLM call so it persists even if the call fails/crashes
-    if (numericUserId) {
-      await this.memory.saveMessageByUserId(numericUserId, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
-    } else {
-      await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
-    }
+    await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
 
     let response;
     try {
@@ -424,17 +418,13 @@ export class Agent {
       return `Erro no Gemini: ${err.message?.substring(0, 200) || "erro desconhecido"}.\nTente novamente em alguns segundos.`;
     }
 
-    if (numericUserId) {
-      await this.memory.saveMessageByUserId(numericUserId, "assistant", response.content, response.model, response.tokensUsed);
-    } else {
-      await this.memory.saveMessage(userPhone, "assistant", response.content, response.model, response.tokensUsed);
-    }
+    await this.memory.saveMessageByUserId(userId!, "assistant", response.content, response.model, response.tokensUsed);
 
     // RBAC: Only extract memories and embed if user role allows learning
     if (canLearn(userRole)) {
-      await this.extractAndSaveMemories(userPhone, text, response.content, userRole, numericUserId);
+      await this.extractAndSaveMemories(userId!, text, response.content, userRole);
 
-      this.autoEmbedConversation(userPhone, text, response.content, numericUserId).catch(
+      this.autoEmbedConversation(userId!, text, response.content).catch(
         (err) => logger.warn({ err }, "Failed to auto-embed conversation")
       );
     }
@@ -456,13 +446,13 @@ export class Agent {
     imageUrls?: string[],
     imageMedias?: MediaAttachment[],
     fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
-    numericUserId?: number
+    userId?: number
   ): Promise<string> {
     // Build env vars for the sub-agent container — all available LLM keys
     const env: Record<string, string> = {};
 
     // Anthropic (Claude) — try OAuth token first, then API key
-    const claudeToken = await this.claudeOAuth.getValidToken(userPhone);
+    const claudeToken = await this.claudeOAuth.getValidToken(userId!);
     if (claudeToken) {
       env.ANTHROPIC_ACCESS_TOKEN = claudeToken;
     } else if (config.anthropic?.apiKey) {
@@ -470,7 +460,7 @@ export class Agent {
     }
 
     // OpenAI (GPT) — try OAuth token first, then API key
-    const openaiToken = await this.openaiOAuth.getValidToken(userPhone);
+    const openaiToken = await this.openaiOAuth.getValidToken(userId!);
     if (openaiToken) {
       env.OPENAI_ACCESS_TOKEN = openaiToken.accessToken;
       if (openaiToken.accountId) {
@@ -525,7 +515,7 @@ export class Agent {
 
     for (const hint of expandedHints) {
       if (resolved[hint]) continue;
-      const found = await this.findCredentialInMemory(userPhone, hint);
+      const found = await this.findCredentialInMemory(userId!, hint);
       if (found) {
         resolved[hint] = found;
         logger.info({ hint, found: found.substring(0, 20) + "..." }, "Credential found in memory");
@@ -546,11 +536,7 @@ export class Agent {
       };
 
       const missingList = missing.map((m) => `*${m}*`).join(", ");
-      if (numericUserId) {
-        await this.memory.saveMessageByUserId(numericUserId, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
-      } else {
-        await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
-      }
+      await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
       return `Vou precisar de credenciais para ${missingList} pra fazer isso.\n\nMe manda as credenciais de *${missing[0]}* (usuario, senha, token, o que for necessario).`;
     }
 
@@ -558,17 +544,13 @@ export class Agent {
       logger.info({ missing, resolved: Object.keys(resolved) }, "Proceeding with partial credentials");
     }
 
-    if (numericUserId) {
-      await this.memory.saveMessageByUserId(numericUserId, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
-    } else {
-      await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
-    }
+    await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
 
     // Start the sub-agent container
     let session;
     try {
       session = await this.sessionManager.createSession(
-        userMessage, connectorName, userPhone, resolved, env, imageMedias, numericUserId
+        userMessage, connectorName, userPhone, resolved, env, imageMedias, userId
       );
     } catch (err) {
       logger.error({ err }, "Sub-agent session failed");
@@ -582,11 +564,7 @@ export class Agent {
 
     const ack = `O *${rickName}* vai cuidar disso pra voce, pode acompanhar aqui:\n${sessionUrl}`;
 
-    if (numericUserId) {
-      await this.memory.saveMessageByUserId(numericUserId, "assistant", ack);
-    } else {
-      await this.memory.saveMessage(userPhone, "assistant", ack);
-    }
+    await this.memory.saveMessageByUserId(userId!, "assistant", ack);
 
     return ack;
   }
@@ -595,7 +573,7 @@ export class Agent {
    * Search user's memories for credentials matching a service name.
    * Looks in categories: senhas, credenciais, tokens, contatos, general.
    */
-  private async findCredentialInMemory(userPhone: string, service: string): Promise<string | null> {
+  private async findCredentialInMemory(userId: number, service: string): Promise<string | null> {
     // Search by key match in credential-related categories (global memories)
     const results = await this.memory.recallGlobal(service);
 
@@ -686,7 +664,7 @@ export class Agent {
     userPhone: string,
     connectorName: string,
     text: string,
-    numericUserId?: number,
+    userId: number,
     userRole: UserRole = "admin"
   ): Promise<string> {
     const pending = this.pendingDelegation!;
@@ -702,11 +680,7 @@ export class Agent {
     const currentMissing = pending.missingCredentials[0];
 
     // Save the credential to memory (global in RBAC model)
-    if (numericUserId) {
-      await this.memory.rememberV2(currentMissing, text.trim(), "credenciais", numericUserId, userRole);
-    } else {
-      await this.memory.remember(userPhone, currentMissing, text.trim(), "credenciais");
-    }
+    await this.memory.rememberV2(currentMissing, text.trim(), "credenciais", userId, userRole);
     pending.resolvedCredentials[currentMissing] = text.trim();
     pending.missingCredentials.shift();
 
@@ -733,7 +707,7 @@ export class Agent {
       undefined, // imageUrls
       undefined, // imageMedias
       undefined, // fileInfos
-      numericUserId
+      userId
     );
   }
 
@@ -749,7 +723,7 @@ export class Agent {
     imageUrls?: string[],
     imageMedias?: MediaAttachment[],
     fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
-    numericUserId?: number
+    userId?: number
   ): Promise<string | null> {
     const doneSessions = this.sessionManager.getDoneSessionsForUser(userPhone);
     if (doneSessions.length === 0) return "Nenhuma sessao pendente.";
@@ -819,11 +793,7 @@ export class Agent {
     }
 
     // CASE 2: Continuation — relay to the most recent done session
-    if (numericUserId) {
-      await this.memory.saveMessageByUserId(numericUserId, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
-    } else {
-      await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
-    }
+    await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
 
     this.sessionManager.sendToSession(mostRecent.id, text, imageMedias, audioUrl, imageUrls, fileInfos).catch(async (err) => {
       logger.error({ err }, "Sub-agent relay failed");
@@ -839,10 +809,10 @@ export class Agent {
   /**
    * Ensure the LLM service has the user's OAuth tokens if they're connected.
    */
-  private async ensureOAuthTokens(userPhone: string): Promise<void> {
+  private async ensureOAuthTokens(userId: number): Promise<void> {
     // Claude
     try {
-      const claudeToken = await this.claudeOAuth.getValidToken(userPhone);
+      const claudeToken = await this.claudeOAuth.getValidToken(userId);
       this.llm.setAnthropicOAuthToken(claudeToken);
     } catch (err) {
       logger.warn({ err }, "Failed to get Claude OAuth token");
@@ -851,7 +821,7 @@ export class Agent {
 
     // OpenAI
     try {
-      const openaiData = await this.openaiOAuth.getValidToken(userPhone);
+      const openaiData = await this.openaiOAuth.getValidToken(userId);
       if (openaiData) {
         this.llm.setOpenAIOAuthToken(openaiData.accessToken, openaiData.accountId);
       } else {
@@ -944,7 +914,7 @@ IMPORTANTE SOBRE SUB-AGENTE:
     userPhone: string,
     connectorName: string,
     text: string,
-    numericUserId?: number,
+    userId: number,
     userRole: UserRole = "admin"
   ): Promise<string | null> {
     const lower = text.trim().toLowerCase();
@@ -953,12 +923,12 @@ IMPORTANTE SOBRE SUB-AGENTE:
 
     // /conectar claude
     if (lower === "/conectar claude") {
-      return this.cmdConnectClaude(userPhone);
+      return this.cmdConnectClaude(userId);
     }
 
     // /conectar gpt
     if (lower === "/conectar gpt" || lower === "/conectar openai") {
-      return this.cmdConnectGPT(userPhone);
+      return this.cmdConnectGPT(userId);
     }
 
     // /conectar (generic)
@@ -968,12 +938,12 @@ IMPORTANTE SOBRE SUB-AGENTE:
 
     // /desconectar claude
     if (lower === "/desconectar claude") {
-      return this.cmdDisconnectClaude(userPhone);
+      return this.cmdDisconnectClaude(userId);
     }
 
     // /desconectar gpt
     if (lower === "/desconectar gpt" || lower === "/desconectar openai") {
-      return this.cmdDisconnectGPT(userPhone);
+      return this.cmdDisconnectGPT(userId);
     }
 
     // /desconectar (generic)
@@ -983,19 +953,19 @@ IMPORTANTE SOBRE SUB-AGENTE:
 
     // Check if user is pasting a Claude OAuth code (contains # and not a command)
     if (this.claudeOAuth.hasPendingAuth() && text.includes("#") && !text.startsWith("/")) {
-      const exchangeResult = await this.cmdExchangeClaudeCode(userPhone, text);
+      const exchangeResult = await this.cmdExchangeClaudeCode(userId, text);
       if (exchangeResult) return exchangeResult;
     }
 
     // Check if user is pasting an OpenAI OAuth callback URL
     if (this.openaiOAuth.hasPendingAuth() && text.includes("localhost") && text.includes("code=")) {
-      return this.cmdExchangeGPTCallback(userPhone, text);
+      return this.cmdExchangeGPTCallback(userId, text);
     }
 
     // ==================== MEMORY COMMANDS ====================
 
     if (lower.startsWith("/lembrar ")) {
-      return this.cmdRemember(userPhone, text.slice(9).trim(), numericUserId, userRole);
+      return this.cmdRemember(userPhone, text.slice(9).trim(), userId, userRole);
     }
 
     if (lower.startsWith("/esquecer ")) {
@@ -1020,16 +990,12 @@ IMPORTANTE SOBRE SUB-AGENTE:
     // ==================== CONVERSATION COMMANDS ====================
 
     if (lower === "/limpar") {
-      if (numericUserId) {
-        await this.memory.clearConversationByUserId(numericUserId);
-      } else {
-        await this.memory.clearConversation(userPhone);
-      }
+      await this.memory.clearConversationByUserId(userId);
       return "Historico de conversa limpo! Comecamos do zero.";
     }
 
     if (lower.startsWith("/modelo") || lower === "/modelo") {
-      return this.cmdShowModels(userPhone);
+      return this.cmdShowModels(userId);
     }
 
     if (lower.startsWith("/vsearch ") || lower.startsWith("/vbuscar ")) {
@@ -1044,7 +1010,7 @@ IMPORTANTE SOBRE SUB-AGENTE:
     // ==================== EDIT MODE ====================
 
     if (lower === "/edit") {
-      return this.cmdStartEdit(userPhone, connectorName);
+      return this.cmdStartEdit(userId, connectorName);
     }
 
     // /exit and /deploy are handled in the edit mode block at top of handleMessage
@@ -1057,11 +1023,11 @@ IMPORTANTE SOBRE SUB-AGENTE:
     }
 
     if (lower === "/help" || lower === "/ajuda") {
-      return this.cmdHelp(userPhone);
+      return this.cmdHelp(userId);
     }
 
     if (lower === "/status") {
-      return this.cmdStatus(userPhone, numericUserId);
+      return this.cmdStatus(userId);
     }
 
     return null;
@@ -1069,8 +1035,8 @@ IMPORTANTE SOBRE SUB-AGENTE:
 
   // ==================== CLAUDE OAUTH ====================
 
-  private async cmdConnectClaude(userPhone: string): Promise<string> {
-    const status = await this.claudeOAuth.isConnected(userPhone);
+  private async cmdConnectClaude(userId: number): Promise<string> {
+    const status = await this.claudeOAuth.isConnected(userId);
     if (status.connected) {
       return `Ja conectado ao Claude! (${status.email || "conta conectada"})\n\nPara desconectar: /desconectar claude`;
     }
@@ -1093,17 +1059,17 @@ O link expira em 10 minutos.`;
   }
 
   private async cmdExchangeClaudeCode(
-    userPhone: string,
+    userId: number,
     rawCode: string
   ): Promise<string | null> {
-    const result = await this.claudeOAuth.exchangeCode(userPhone, rawCode);
+    const result = await this.claudeOAuth.exchangeCode(userId, rawCode);
 
     if (!result.success) {
       return result.error || "Erro ao conectar. Tente novamente com /conectar claude.";
     }
 
     // Set the token in LLM service immediately
-    const token = await this.claudeOAuth.getValidToken(userPhone);
+    const token = await this.claudeOAuth.getValidToken(userId);
     if (token) {
       this.llm.setAnthropicOAuthToken(token);
     }
@@ -1115,13 +1081,13 @@ Conta: ${result.email || "conectada"}
 O sub-agente agora pode usar o Claude Opus. O token e renovado automaticamente.`;
   }
 
-  private async cmdDisconnectClaude(userPhone: string): Promise<string> {
-    const status = await this.claudeOAuth.isConnected(userPhone);
+  private async cmdDisconnectClaude(userId: number): Promise<string> {
+    const status = await this.claudeOAuth.isConnected(userId);
     if (!status.connected) {
       return "Nao esta conectado ao Claude. Use /conectar claude.";
     }
 
-    await this.claudeOAuth.disconnect(userPhone);
+    await this.claudeOAuth.disconnect(userId);
     this.llm.setAnthropicOAuthToken(null);
 
     const active = this.llm.getActiveModel();
@@ -1134,8 +1100,8 @@ O sub-agente agora pode usar o Claude Opus. O token e renovado automaticamente.`
 
   // ==================== GPT OAUTH (DEVICE AUTH) ====================
 
-  private async cmdConnectGPT(userPhone: string): Promise<string> {
-    const status = await this.openaiOAuth.isConnected(userPhone);
+  private async cmdConnectGPT(userId: number): Promise<string> {
+    const status = await this.openaiOAuth.isConnected(userId);
     if (status.connected) {
       return `Ja conectado ao GPT! (${status.email || "conta conectada"})\n\nPara desconectar: /desconectar gpt`;
     }
@@ -1161,17 +1127,17 @@ O link expira em 10 minutos.`;
   }
 
   private async cmdExchangeGPTCallback(
-    userPhone: string,
+    userId: number,
     rawUrl: string
   ): Promise<string> {
-    const result = await this.openaiOAuth.exchangeCallback(userPhone, rawUrl);
+    const result = await this.openaiOAuth.exchangeCallback(userId, rawUrl);
 
     if (!result.success) {
       return result.error || "Erro ao conectar. Tente novamente com /conectar gpt.";
     }
 
     // Set the token in LLM service immediately
-    const tokenData = await this.openaiOAuth.getValidToken(userPhone);
+    const tokenData = await this.openaiOAuth.getValidToken(userId);
     if (tokenData) {
       this.llm.setOpenAIOAuthToken(tokenData.accessToken, tokenData.accountId);
     }
@@ -1183,13 +1149,13 @@ Conta: ${result.email || "conectada"}
 O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado automaticamente.`;
   }
 
-  private async cmdDisconnectGPT(userPhone: string): Promise<string> {
-    const status = await this.openaiOAuth.isConnected(userPhone);
+  private async cmdDisconnectGPT(userId: number): Promise<string> {
+    const status = await this.openaiOAuth.isConnected(userId);
     if (!status.connected) {
       return "Nao esta conectado ao GPT. Use /conectar gpt.";
     }
 
-    await this.openaiOAuth.disconnect(userPhone);
+    await this.openaiOAuth.disconnect(userId);
     this.llm.setOpenAIOAuthToken(null);
 
     const active = this.llm.getActiveModel();
@@ -1202,9 +1168,9 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
 
   // ==================== MODEL COMMANDS ====================
 
-  private async cmdShowModels(userPhone: string): Promise<string> {
-    const claudeStatus = await this.claudeOAuth.isConnected(userPhone);
-    const gptStatus = await this.openaiOAuth.isConnected(userPhone);
+  private async cmdShowModels(userId: number): Promise<string> {
+    const claudeStatus = await this.claudeOAuth.isConnected(userId);
+    const gptStatus = await this.openaiOAuth.isConnected(userId);
 
     return `*Modelos do ${config.agentName}:*
 
@@ -1220,7 +1186,7 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
 
   // ==================== MEMORY COMMANDS ====================
 
-  private async cmdRemember(userPhone: string, input: string, numericUserId?: number, userRole: UserRole = "admin"): Promise<string> {
+  private async cmdRemember(userPhone: string, input: string, userId: number, userRole: UserRole = "admin"): Promise<string> {
     const eqIndex = input.indexOf("=");
     if (eqIndex === -1) {
       return 'Formato: /lembrar [categoria:]chave = valor\nExemplo: /lembrar senhas:gmail = minha_senha123';
@@ -1240,14 +1206,9 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
       return 'Formato: /lembrar [categoria:]chave = valor';
     }
 
-    // Use RBAC-aware rememberV2 if numericUserId is available
-    if (numericUserId) {
-      const result = await this.memory.rememberV2(keyPart, value, category, numericUserId, userRole);
-      if (result.blocked) {
-        return `Nao foi possivel salvar: a memoria *${keyPart}* foi criada por um admin e nao pode ser sobrescrita.`;
-      }
-    } else {
-      await this.memory.remember(userPhone, keyPart, value, category);
+    const result = await this.memory.rememberV2(keyPart, value, category, userId, userRole);
+    if (result.blocked) {
+      return `Nao foi possivel salvar: a memoria *${keyPart}* foi criada por um admin e nao pode ser sobrescrita.`;
     }
 
     const sensitiveCategories = ["senhas", "passwords", "secrets", "tokens"];
@@ -1345,16 +1306,16 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
 
   // ==================== EDIT MODE COMMANDS ====================
 
-  private async cmdStartEdit(userPhone: string, connectorName: string): Promise<string> {
+  private async cmdStartEdit(userId: number, connectorName: string): Promise<string> {
     if (this.editSession) {
       return "Voce ja esta no modo de edicao. Use */exit* para sair ou */deploy* para aplicar.";
     }
 
     // Provider priority: Claude → OpenAI → Gemini Pro
-    const claudeToken = await this.claudeOAuth.getValidToken(userPhone);
+    const claudeToken = await this.claudeOAuth.getValidToken(userId);
     let activeProvider: import("./subagent/edit-session.js").EditProvider = "claude";
     if (!claudeToken) {
-      const gptToken = await this.openaiOAuth.getValidToken(userPhone);
+      const gptToken = await this.openaiOAuth.getValidToken(userId);
       if (gptToken) {
         activeProvider = "openai";
       } else if (config.gemini?.apiKey) {
@@ -1371,18 +1332,18 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
 
     // Auth expired callback: tries to refresh token, if fails sends OAuth link
     const authExpiredCb: AuthExpiredCallback = async () => {
-      logger.info({ userPhone }, "Edit session auth expired — attempting refresh");
+      logger.info({ userId }, "Edit session auth expired — attempting refresh");
 
       // Try automatic refresh first
-      const newToken = await this.claudeOAuth.getValidToken(userPhone);
+      const newToken = await this.claudeOAuth.getValidToken(userId);
       if (newToken) {
         // Refresh worked — re-inject into container
         let refreshToken: string | undefined;
         try {
           const { query: dbQuery } = await import("./memory/db.js");
           const r = await dbQuery(
-            `SELECT refresh_token FROM oauth_tokens WHERE user_phone = $1 AND provider = 'claude' AND is_active = TRUE`,
-            [userPhone]
+            `SELECT refresh_token FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
+            [userId]
           );
           refreshToken = r.rows[0]?.refresh_token;
         } catch (_) { /* ignore */ }
@@ -1396,7 +1357,7 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
       // Refresh failed — need re-auth. Send OAuth link.
       const { authUrl } = this.claudeOAuth.startAuth();
       await this.connectorManager.sendMessage(
-        connectorName, userPhone,
+        connectorName, String(userId),
         `*Token do Claude expirou!*\n\n` +
         `A sessao de edicao continua ativa — so preciso de um novo token.\n\n` +
         `1. Abra este link:\n${authUrl}\n\n` +
@@ -1408,15 +1369,15 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
 
     // Proactive token refresh callback — called before each Claude invocation
     const getFreshTokenCb: GetFreshTokenCallback = async () => {
-      const token = await this.claudeOAuth.getValidToken(userPhone);
+      const token = await this.claudeOAuth.getValidToken(userId);
       if (!token) return null;
 
       let refreshToken: string | undefined;
       try {
         const { query: dbQuery } = await import("./memory/db.js");
         const r = await dbQuery(
-          `SELECT refresh_token FROM oauth_tokens WHERE user_phone = $1 AND provider = 'claude' AND is_active = TRUE`,
-          [userPhone]
+          `SELECT refresh_token FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
+          [userId]
         );
         refreshToken = r.rows[0]?.refresh_token;
       } catch (_) { /* ignore */ }
@@ -1452,13 +1413,13 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
       }
       this.editSession = null;
       this.editFirstPromptSent = false;
-      this.editUserPhone = null;
+      this.editUserId = null;
     };
 
     const session = new EditSession(
       this.connectorManager,
       connectorName,
-      userPhone,
+      String(userId),
       authExpiredCb,
       getFreshTokenCb,
       saveHistoryCb,
@@ -1479,8 +1440,8 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
       try {
         const { query } = await import("./memory/db.js");
         const result = await query(
-          `SELECT refresh_token FROM oauth_tokens WHERE user_phone = $1 AND provider = 'claude' AND is_active = TRUE`,
-          [userPhone]
+          `SELECT refresh_token FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
+          [userId]
         );
         if (result.rows[0]?.refresh_token) {
           env.CLAUDE_REFRESH_TOKEN = result.rows[0].refresh_token;
@@ -1488,7 +1449,7 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
       } catch (_) { /* ignore */ }
     } else if (activeProvider === "openai") {
       // OpenAI credentials (OAuth token or API key)
-      const gptToken = await this.openaiOAuth.getValidToken(userPhone);
+      const gptToken = await this.openaiOAuth.getValidToken(userId);
       if (gptToken) {
         env.OPENAI_ACCESS_TOKEN = gptToken.accessToken;
         if (gptToken.accountId) env.OPENAI_ACCOUNT_ID = gptToken.accountId;
@@ -1503,14 +1464,14 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
     // If start() throws, we reset the state in the catch block.
     this.editSession = session;
     this.editFirstPromptSent = false;
-    this.editUserPhone = userPhone;
+    this.editUserId = userId;
     try {
       await session.start(env);
       return ""; // Welcome message is sent by EditSession.start()
     } catch (err) {
       this.editSession = null;
       this.editFirstPromptSent = false;
-      this.editUserPhone = null;
+      this.editUserId = null;
       logger.error({ err }, "Failed to start edit session");
       return `Erro ao iniciar modo de edicao: ${(err as Error).message}`;
     }
@@ -1544,7 +1505,7 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
     await this.editSession.close();
     this.editSession = null;
     this.editFirstPromptSent = false;
-    this.editUserPhone = null;
+    this.editUserId = null;
     return "*Modo de edicao encerrado.* Todas as mudancas foram descartadas.";
   }
 
@@ -1584,11 +1545,11 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
 
   // ==================== INFO COMMANDS ====================
 
-  private async cmdHelp(userPhone: string): Promise<string> {
+  private async cmdHelp(userId: number): Promise<string> {
     const vectorStatus = this.vectorMemory ? "ativa" : "desativada";
 
-    const claudeStatus = await this.claudeOAuth.isConnected(userPhone);
-    const gptStatus = await this.openaiOAuth.isConnected(userPhone);
+    const claudeStatus = await this.claudeOAuth.isConnected(userId);
+    const gptStatus = await this.openaiOAuth.isConnected(userId);
 
     const claudeInfo = claudeStatus.connected ? `Conectado (${claudeStatus.email || ""})` : "desconectado";
     const gptInfo = gptStatus.connected ? `Conectado (${gptStatus.email || ""})` : "desconectado";
@@ -1628,12 +1589,10 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
 "Lembra que meu email e x@y.com"`;
   }
 
-  private async cmdStatus(userPhone: string, numericUserId?: number): Promise<string> {
+  private async cmdStatus(userId: number): Promise<string> {
     // Use global memory list (memories are global in RBAC model)
     const memories = await this.memory.listGlobalMemories();
-    const history = numericUserId
-      ? await this.memory.getConversationHistoryByUserId(numericUserId)
-      : await this.memory.getConversationHistory(userPhone);
+    const history = await this.memory.getConversationHistoryByUserId(userId);
 
     let vectorInfo = "desativada";
     let diskInfo = "";
@@ -1651,8 +1610,8 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
       }
     }
 
-    const claudeStatus = await this.claudeOAuth.isConnected(userPhone);
-    const gptStatus = await this.openaiOAuth.isConnected(userPhone);
+    const claudeStatus = await this.claudeOAuth.isConnected(userId);
+    const gptStatus = await this.openaiOAuth.isConnected(userId);
 
     const claudeInfo = claudeStatus.connected
       ? `Conectado (${claudeStatus.email || ""})`
@@ -1696,7 +1655,7 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
 
   // ==================== AUTO-EXTRACTION ====================
 
-  private async buildSemanticContext(userPhone: string, queryText: string, userRole: UserRole = "admin"): Promise<string> {
+  private async buildSemanticContext(userId: number, queryText: string, userRole: UserRole = "admin"): Promise<string> {
     if (!this.vectorMemory) return "";
 
     try {
@@ -1704,7 +1663,7 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
       const results = await this.vectorMemory.searchGlobal(queryText, 5, 0.35);
       if (results.length === 0) {
         // Fallback to legacy per-user search if no global results
-        const legacyResults = await this.vectorMemory.search(userPhone, queryText, 5, 0.35);
+        const legacyResults = await this.vectorMemory.searchGlobal(queryText, 5, 0.35);
         if (legacyResults.length === 0) return "";
 
         let context = "\n--- MEMORIAS SEMANTICAS (relevantes ao contexto) ---\n";
@@ -1735,10 +1694,9 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
   }
 
   private async autoEmbedConversation(
-    userPhone: string,
+    userId: number,
     userMessage: string,
-    assistantResponse: string,
-    numericUserId?: number
+    assistantResponse: string
   ): Promise<void> {
     if (!this.vectorMemory) return;
 
@@ -1761,18 +1719,17 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
       await this.vectorMemory.storeGlobal(content, "conversation", "auto", {
         user_message: userMessage.substring(0, 200),
         timestamp: new Date().toISOString(),
-      }, numericUserId);
+      }, userId);
     } catch (err) {
       logger.warn({ err }, "Failed to embed conversation");
     }
   }
 
   private async extractAndSaveMemories(
-    userPhone: string,
+    userId: number,
     userMessage: string,
     assistantResponse: string,
-    userRole: UserRole = "admin",
-    numericUserId?: number
+    userRole: UserRole = "admin"
   ): Promise<void> {
     // Quick regex patterns for CREDENTIAL cases only.
     // Personal data (name, email, city, etc.) is handled by the LLM extraction
@@ -1786,11 +1743,7 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
       if (match) {
         try {
           if (pattern.category === "senhas" && match[1] && match[2]) {
-            if (numericUserId) {
-              await this.memory.rememberV2(match[1].trim(), match[2].trim(), "senhas", numericUserId, userRole);
-            } else {
-              await this.memory.remember(userPhone, match[1].trim(), match[2].trim(), "senhas");
-            }
+            await this.memory.rememberV2(match[1].trim(), match[2].trim(), "senhas", userId, userRole);
           }
         } catch (err) {
           logger.warn({ err, pattern: pattern.regex.source }, "Failed to auto-save memory");
@@ -1819,7 +1772,7 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
         { trigger: matched ? "assistant_confirmed" : "user_credential_intent", userHasCred: !!userHasCred },
         "extractAndSaveMemories: triggering LLM extraction"
       );
-      this.llmExtractMemories(userPhone, userMessage, assistantResponse, userRole, numericUserId).catch((err) => {
+      this.llmExtractMemories(userId, userMessage, assistantResponse, userRole).catch((err) => {
         logger.warn({ err: err?.message || err }, "LLM memory extraction failed (outer catch)");
       });
     }
@@ -1913,11 +1866,10 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
    * Only called when the assistant confirmed it saved/remembered something.
    */
   private async llmExtractMemories(
-    userPhone: string,
+    userId: number,
     userMessage: string,
     assistantResponse: string,
-    userRole: UserRole = "admin",
-    numericUserId?: number
+    userRole: UserRole = "admin"
   ): Promise<void> {
     const extractPrompt = `Extraia informacoes estruturadas da mensagem do usuario para salvar em memoria.
 
@@ -1949,7 +1901,7 @@ Se nao houver nada para extrair, retorne VAZIO (apenas essa palavra).
 Retorne APENAS as linhas de extracao, nada mais.`;
 
     try {
-      logger.info({ userPhone, msgSnippet: userMessage.substring(0, 80) }, "llmExtractMemories: calling Gemini for extraction");
+      logger.info({ userId, msgSnippet: userMessage.substring(0, 80) }, "llmExtractMemories: calling Gemini for extraction");
       const result = await this.llm.chat(
         [{ role: "user", content: extractPrompt }],
         undefined
@@ -1990,29 +1942,24 @@ Retorne APENAS as linhas de extracao, nada mais.`;
             finalValue = this.mergeCredentialValues(existing.value, value);
             if (finalValue === existing.value && value !== existing.value) {
               logger.info(
-                { userPhone, key: normalizedKey },
+                { userId, key: normalizedKey },
                 "Preserved richer existing credential value"
               );
             }
           }
         }
 
-        // RBAC: Use rememberV2 with hierarchy enforcement when numericUserId is available
-        if (numericUserId) {
-          const result = await this.memory.rememberV2(normalizedKey, finalValue, normalizedCategory, numericUserId, userRole);
-          if (result.blocked) {
-            logger.info(
-              { userPhone, category: normalizedCategory, key: normalizedKey, existingValue: result.existingValue?.substring(0, 50) },
-              "LLM extraction blocked by hierarchy"
-            );
-            continue;
-          }
-        } else {
-          // Legacy fallback — no RBAC checks
-          await this.memory.remember(userPhone, normalizedKey, finalValue, normalizedCategory);
+        // RBAC: Use rememberV2 with hierarchy enforcement
+        const memResult = await this.memory.rememberV2(normalizedKey, finalValue, normalizedCategory, userId, userRole);
+        if (memResult.blocked) {
+          logger.info(
+            { userId, category: normalizedCategory, key: normalizedKey, existingValue: memResult.existingValue?.substring(0, 50) },
+            "LLM extraction blocked by hierarchy"
+          );
+          continue;
         }
         logger.info(
-          { userPhone, category: normalizedCategory, key: normalizedKey, valueLen: finalValue.length },
+          { userId, category: normalizedCategory, key: normalizedKey, valueLen: finalValue.length },
           "LLM extracted and saved memory"
         );
       }
@@ -2057,7 +2004,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
       },
 
       startEditMode: async (connectorName: string, userId: string) => {
-        const result = await this.cmdStartEdit(userId, connectorName);
+        const result = await this.cmdStartEdit(Number(userId), connectorName);
         if (result === "") {
           // Success — notify web clients
           webConnector.notifyEditMode(true);
@@ -2075,11 +2022,8 @@ Retorne APENAS as linhas de extracao, nada mais.`;
       },
 
       getConversationHistory: async (userPhone: string, limit?: number, numericUserId?: number) => {
-        // Use user_id-based history if available (RBAC), otherwise fallback to phone-based
-        if (numericUserId) {
-          return this.memory.getConversationHistoryByUserId(numericUserId, limit);
-        }
-        return this.memory.getConversationHistory(userPhone, limit);
+        // Always use user_id-based history
+        return this.memory.getConversationHistoryByUserId(numericUserId!, limit);
       },
 
       getSessionHistory: async (sessionId: string) => {
@@ -2131,26 +2075,23 @@ Retorne APENAS as linhas de extracao, nada mais.`;
       },
 
       clearConversation: async (userPhone: string, numericUserId?: number) => {
-        // Use user_id-based clear if available (RBAC), otherwise fallback to phone-based
-        if (numericUserId) {
-          await this.memory.clearConversationByUserId(numericUserId);
-        } else {
-          await this.memory.clearConversation(userPhone);
-        }
+        // Always use user_id-based clear
+        await this.memory.clearConversationByUserId(numericUserId!);
       },
 
       createBlankSubAgentSession: async (connectorName: string, userId: string): Promise<string> => {
         // Build env vars for the sub-agent container (same as delegateToSubAgent)
+        const numUserId = Number(userId);
         const env: Record<string, string> = {};
 
-        const claudeToken = await this.claudeOAuth.getValidToken(userId);
+        const claudeToken = await this.claudeOAuth.getValidToken(numUserId);
         if (claudeToken) {
           env.ANTHROPIC_ACCESS_TOKEN = claudeToken;
         } else if (config.anthropic?.apiKey) {
           env.ANTHROPIC_API_KEY = config.anthropic.apiKey;
         }
 
-        const openaiToken = await this.openaiOAuth.getValidToken(userId);
+        const openaiToken = await this.openaiOAuth.getValidToken(numUserId);
         if (openaiToken) {
           env.OPENAI_ACCESS_TOKEN = openaiToken.accessToken;
           if (openaiToken.accountId) env.OPENAI_ACCOUNT_ID = openaiToken.accountId;
@@ -2176,7 +2117,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         const sessionUrl = `${baseUrl}/s/${session.id}`;
 
         const ack = `Sessao *${rickName}* aberta e aguardando sua primeira tarefa:\n${sessionUrl}`;
-        await this.memory.saveMessage(userId, "assistant", ack);
+        await this.memory.saveMessageByUserId(numUserId, "assistant", ack);
         return ack;
       },
     };

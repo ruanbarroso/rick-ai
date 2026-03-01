@@ -717,8 +717,12 @@ export class WebConnector implements Connector {
       const devRepo = process.env.DEV_REPO_URL || "";
       const githubToken = process.env.GITHUB_TOKEN || "";
 
-      const anthropicConn = await this.claudeOAuth.isConnected(config.ownerPhone);
-      const openaiConn = await this.openaiOAuth.isConnected(config.ownerPhone);
+      const anthropicConn = this.adminUserId != null
+        ? await this.claudeOAuth.isConnected(this.adminUserId)
+        : { connected: false };
+      const openaiConn = this.adminUserId != null
+        ? await this.openaiOAuth.isConnected(this.adminUserId)
+        : { connected: false };
 
       this.send(ws, {
         type: "settings",
@@ -1007,14 +1011,19 @@ export class WebConnector implements Connector {
         return;
       }
 
+      if (this.adminUserId == null) {
+        this.send(ws, { type: "oauth_result", provider, success: false, error: "Admin user not resolved yet." });
+        return;
+      }
+
       if (provider === "anthropic") {
-        const res = await this.claudeOAuth.exchangeCode(config.ownerPhone, input);
+        const res = await this.claudeOAuth.exchangeCode(this.adminUserId, input);
         this.send(ws, { type: "oauth_result", provider, success: res.success, error: res.error || null, email: res.email || null });
         return;
       }
 
       if (provider === "openai") {
-        const res = await this.openaiOAuth.exchangeCallback(config.ownerPhone, input);
+        const res = await this.openaiOAuth.exchangeCallback(this.adminUserId, input);
         this.send(ws, { type: "oauth_result", provider, success: res.success, error: res.error || null, email: res.email || null });
         return;
       }
@@ -1028,13 +1037,17 @@ export class WebConnector implements Connector {
 
   private async handleOAuthDisconnect(ws: WebSocket, provider: string): Promise<void> {
     try {
+      if (this.adminUserId == null) {
+        this.send(ws, { type: "oauth_result", provider, success: false, error: "Admin user not resolved yet." });
+        return;
+      }
       if (provider === "anthropic") {
-        await this.claudeOAuth.disconnect(config.ownerPhone);
+        await this.claudeOAuth.disconnect(this.adminUserId);
         this.send(ws, { type: "oauth_result", provider, success: true });
         return;
       }
       if (provider === "openai") {
-        await this.openaiOAuth.disconnect(config.ownerPhone);
+        await this.openaiOAuth.disconnect(this.adminUserId);
         this.send(ws, { type: "oauth_result", provider, success: true });
         return;
       }

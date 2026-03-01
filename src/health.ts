@@ -346,7 +346,7 @@ async function handleAgentApi(
         return;
       }
       const category = url.searchParams.get("category") || undefined;
-      const memories = await registeredMemoryService.listMemories(session.userPhone, category);
+      const memories = await registeredMemoryService.listGlobalMemories(category);
       const result = memories.map((m: any) => ({
         key: m.key,
         value: m.value,
@@ -372,7 +372,7 @@ async function handleAgentApi(
         jsonResponse(res, 400, { error: "Parametro 'key' e obrigatorio" });
         return;
       }
-      const memories = await registeredMemoryService.listMemories(session.userPhone, category);
+      const memories = await registeredMemoryService.listGlobalMemories(category);
       const found = memories.find(
         (m: any) => m.key.toLowerCase() === key.toLowerCase(),
       );
@@ -400,7 +400,7 @@ async function handleAgentApi(
         return;
       }
       const limit = Math.min(parseInt(url.searchParams.get("limit") || "5"), 20);
-      const results = await registeredVectorMemory.search(session.userPhone, q, limit);
+      const results = await registeredVectorMemory.searchGlobal(q, limit);
       logger.info(
         { sessionId: session.sessionId, query: q, limit, count: results.length },
         "Agent API: semantic search",
@@ -423,7 +423,8 @@ async function handleAgentApi(
         return;
       }
       const limit = Math.min(parseInt(url.searchParams.get("limit") || "20"), 100);
-      const messages = await registeredMemoryService.getConversationHistory(session.userPhone, limit);
+      const user = await registeredMemoryService.getOrCreateUser(session.userPhone);
+      const messages = await registeredMemoryService.getConversationHistoryByUserId(user.id, limit);
       logger.info(
         { sessionId: session.sessionId, limit, count: messages.length },
         "Agent API: conversations requested",

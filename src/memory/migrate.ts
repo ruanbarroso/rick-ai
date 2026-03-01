@@ -255,6 +255,15 @@ const MIGRATIONS: Migration[] = [
     // SQLite: skip DROP (inline UNIQUE can't be dropped; old constraint is a superset, harmless)
     statements: [], // populated dynamically in runMigrations()
   },
+
+  {
+    name: "012_drop_legacy_columns",
+    // Drop legacy columns: user_phone, is_owner, name from users table;
+    // user_phone from memories, conversations, oauth_tokens.
+    // Also add UNIQUE(user_id, provider) to oauth_tokens for the new ON CONFLICT clause.
+    // Backend-specific — populated dynamically in runMigrations().
+    statements: [], // populated dynamically
+  },
 ];
 
 export async function runMigrations(): Promise<void> {
@@ -330,6 +339,125 @@ export async function runMigrations(): Promise<void> {
     }
   }
 
+  // Populate migration 012: drop legacy columns.
+  const m012 = MIGRATIONS.find((m) => m.name === "012_drop_legacy_columns");
+  if (m012 && m012.statements.length === 0) {
+    if (isPostgres()) {
+      m012.statements = [
+        // -- oauth_tokens: add UNIQUE(user_id, provider) before dropping user_phone --
+        // First, drop the old constraint that uses user_phone
+        `ALTER TABLE oauth_tokens DROP CONSTRAINT IF EXISTS oauth_tokens_user_phone_provider_key`,
+        // Create the new unique constraint on (user_id, provider)
+        `CREATE UNIQUE INDEX IF NOT EXISTS oauth_tokens_user_id_provider_unique ON oauth_tokens(user_id, provider)`,
+
+        // -- Drop legacy indexes that reference user_phone --
+        `DROP INDEX IF EXISTS idx_memories_user`,
+        `DROP INDEX IF EXISTS idx_memories_category`,
+        `DROP INDEX IF EXISTS idx_conversations_user`,
+        `DROP INDEX IF EXISTS idx_oauth_tokens_user_provider`,
+
+        // -- Drop user_phone from all tables --
+        `ALTER TABLE memories DROP COLUMN IF EXISTS user_phone`,
+        `ALTER TABLE conversations DROP COLUMN IF EXISTS user_phone`,
+        `ALTER TABLE oauth_tokens DROP COLUMN IF EXISTS user_phone`,
+
+        // -- Drop is_owner and name from users --
+        `ALTER TABLE users DROP COLUMN IF EXISTS is_owner`,
+        `ALTER TABLE users DROP COLUMN IF EXISTS name`,
+      ];
+    } else {
+      // SQLite: can't DROP COLUMN if it's part of an inline constraint or index.
+      // For SQLite, we recreate tables without the legacy columns.
+
+      // -- oauth_tokens: recreate without user_phone, with UNIQUE(user_id, provider) --
+      m012.statements = [
+        `CREATE TABLE IF NOT EXISTS oauth_tokens_new (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           user_id INTEGER,
+           provider TEXT NOT NULL,
+           access_token TEXT NOT NULL,
+           refresh_token TEXT NOT NULL,
+           expires_at INTEGER NOT NULL,
+           scopes TEXT DEFAULT '[]',
+           account_email TEXT,
+           org_name TEXT,
+           is_active INTEGER DEFAULT 1,
+           created_at TEXT DEFAULT (datetime('now')),
+           updated_at TEXT DEFAULT (datetime('now')),
+           UNIQUE(user_id, provider)
+         )`,
+        `INSERT OR IGNORE INTO oauth_tokens_new (id, user_id, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, is_active, created_at, updated_at)
+         SELECT id, user_id, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, is_active, created_at, updated_at FROM oauth_tokens`,
+        `DROP TABLE oauth_tokens`,
+        `ALTER TABLE oauth_tokens_new RENAME TO oauth_tokens`,
+        `CREATE INDEX IF NOT EXISTS idx_oauth_tokens_uid_provider ON oauth_tokens(user_id, provider)`,
+
+        // -- memories: recreate without user_phone --
+        `CREATE TABLE IF NOT EXISTS memories_new (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           category TEXT NOT NULL DEFAULT 'general',
+           key TEXT NOT NULL,
+           value TEXT NOT NULL,
+           metadata TEXT DEFAULT '{}',
+           user_id INTEGER,
+           created_by INTEGER,
+           created_at TEXT DEFAULT (datetime('now')),
+           updated_at TEXT DEFAULT (datetime('now')),
+           UNIQUE(category, key)
+         )`,
+        `INSERT OR IGNORE INTO memories_new (id, category, key, value, metadata, user_id, created_by, created_at, updated_at)
+         SELECT id, category, key, value, metadata, user_id, created_by, created_at, updated_at FROM memories`,
+        `DROP TABLE memories`,
+        `ALTER TABLE memories_new RENAME TO memories`,
+        `CREATE INDEX IF NOT EXISTS idx_memories_uid ON memories(user_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_memories_created_by ON memories(created_by)`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS memories_category_key_unique ON memories(category, key)`,
+
+        // -- conversations: drop user_phone (SQLite 3.35+ supports ALTER TABLE DROP COLUMN
+        //    for columns not in indexes or constraints — user_phone is in idx_conversations_user) --
+        `DROP INDEX IF EXISTS idx_conversations_user`,
+        `CREATE TABLE IF NOT EXISTS conversations_new (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           user_id INTEGER,
+           role TEXT NOT NULL,
+           content TEXT NOT NULL,
+           model_used TEXT,
+           tokens_used INTEGER,
+           audio_url TEXT,
+           image_url TEXT,
+           message_type TEXT DEFAULT 'text',
+           file_infos TEXT,
+           created_at TEXT DEFAULT (datetime('now'))
+         )`,
+        `INSERT INTO conversations_new (id, user_id, role, content, model_used, tokens_used, audio_url, image_url, message_type, file_infos, created_at)
+         SELECT id, user_id, role, content, model_used, tokens_used, audio_url, image_url, message_type, file_infos, created_at FROM conversations`,
+        `DROP TABLE conversations`,
+        `ALTER TABLE conversations_new RENAME TO conversations`,
+        `CREATE INDEX IF NOT EXISTS idx_conversations_uid ON conversations(user_id, created_at DESC)`,
+
+        // -- users: drop is_owner and name columns --
+        // SQLite 3.35+ supports ALTER TABLE DROP COLUMN for simple columns
+        // But these columns may be part of the original CREATE TABLE inline definition.
+        // Recreate the table to be safe.
+        `CREATE TABLE IF NOT EXISTS users_new (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           phone TEXT UNIQUE,
+           role TEXT DEFAULT NULL,
+           status TEXT DEFAULT 'pending',
+           display_name TEXT,
+           profile TEXT DEFAULT '{}',
+           last_activity_at TEXT,
+           created_at TEXT DEFAULT (datetime('now')),
+           updated_at TEXT DEFAULT (datetime('now'))
+         )`,
+        `INSERT INTO users_new (id, phone, role, status, display_name, profile, last_activity_at, created_at, updated_at)
+         SELECT id, phone, role, status, display_name, profile, last_activity_at, created_at, updated_at FROM users`,
+        `DROP TABLE users`,
+        `ALTER TABLE users_new RENAME TO users`,
+      ];
+    }
+  }
+
   // Run all migrations that haven't been applied yet.
   // This handles both fresh databases (runs everything) and legacy databases
   // (001_rebased_schema already registered, but newer migrations like 002_* need to run).
@@ -381,7 +509,7 @@ export async function runMigrations(): Promise<void> {
   const existingAdmin = await query(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`);
   if (existingAdmin.rows.length === 0) {
     await query(
-      `INSERT INTO users (phone, display_name, role, status, is_owner) VALUES ('', 'Admin', 'admin', 'active', TRUE)`
+      `INSERT INTO users (phone, display_name, role, status) VALUES ('', 'Admin', 'admin', 'active')`
     );
     logger.info("Bootstrap: created admin user for fresh install");
   }

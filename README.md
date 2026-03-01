@@ -370,22 +370,23 @@ Build-time arguments (injected via Docker):
 ### Structured DB
 
 ```sql
-users (id, phone, name, is_owner, role, status, display_name, profile JSONB,
+users (id, phone, role, status, display_name, profile JSONB,
        last_activity_at, created_at, updated_at)
   -- role: NULL (pending) | 'admin' | 'dev' | 'business'
   -- status: 'pending' | 'active' | 'blocked'
 connector_identities (id, user_id, connector, external_id, display_name, created_at)
   -- Maps connector-specific IDs to users (e.g., WhatsApp phone → user)
   -- UNIQUE (connector, external_id)
-memories (id, user_phone, category, key, value, metadata, user_id, created_by,
+memories (id, category, key, value, metadata, user_id, created_by,
           created_at, updated_at)
   -- Global memories with RBAC hierarchy enforcement via created_by
   -- UNIQUE (category, key) -- global unique constraint
   -- GIN index on to_tsvector('portuguese', key || ' ' || value)
-conversations (id, user_phone, user_id, role, content, model_used, tokens_used, created_at)
+conversations (id, user_id, role, content, model_used, tokens_used, created_at)
   -- user_id for RBAC-aware history isolation
 message_log (id, wa_message_id, author, content, created_at)
-oauth_tokens (id, user_phone, user_id, provider, access_token, refresh_token, expires_at, ...)
+oauth_tokens (id, user_id, provider, access_token, refresh_token, expires_at, ...)
+  -- UNIQUE (user_id, provider)
 audio_blobs (id, data BYTEA, mime_type, created_at)
   -- Stores both audio and image binary data
 session_messages (id, session_id, user_id, role, content, created_at)
@@ -399,7 +400,7 @@ config_store (key, value, updated_at)
 ### Vector DB
 
 ```sql
-memory_embeddings (id, user_phone, content, category, source, embedding vector(768),
+memory_embeddings (id, content, category, source, embedding vector(768),
                    metadata, hit_count, last_hit_at, created_by, created_at)
   -- Global embeddings with created_by for RBAC context
   -- HNSW index (m=16, ef_construction=64, cosine distance)

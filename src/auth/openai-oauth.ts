@@ -155,7 +155,7 @@ export class OpenAIOAuthService {
    * - Just the code parameter value
    */
   async exchangeCallback(
-    userPhone: string,
+    userId: number,
     rawInput: string
   ): Promise<{ success: boolean; error?: string; email?: string }> {
     let code: string | null = null;
@@ -236,13 +236,13 @@ export class OpenAIOAuthService {
       const accountId = extractAccountId(tokens) || null;
       const email = extractEmail(tokens) || null;
 
-      await this.saveTokens(userPhone, tokens, accountId, email);
+      await this.saveTokens(userId, tokens, accountId, email);
 
       // Clean up pending auth
       this.pendingAuths.delete(pending.state);
 
       logger.info(
-        { userPhone, email, accountId },
+        { userId, email, accountId },
         "OpenAI OAuth: connected successfully"
       );
 
@@ -256,8 +256,8 @@ export class OpenAIOAuthService {
   /**
    * Get a valid access token. Auto-refreshes if expired.
    */
-  async getValidToken(userPhone: string): Promise<{ accessToken: string; accountId: string | null } | null> {
-    const stored = await this.loadTokens(userPhone);
+  async getValidToken(userId: number): Promise<{ accessToken: string; accountId: string | null } | null> {
+    const stored = await this.loadTokens(userId);
     if (!stored) return null;
 
     if (stored.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
@@ -265,7 +265,7 @@ export class OpenAIOAuthService {
     }
 
     if (!stored.refreshToken) {
-      await this.disconnect(userPhone);
+      await this.disconnect(userId);
       return null;
     }
 
@@ -273,19 +273,19 @@ export class OpenAIOAuthService {
       const refreshed = await this.refreshTokens(stored.refreshToken);
       const accountId = extractAccountId(refreshed) || stored.accountId;
       const email = extractEmail(refreshed) || stored.accountEmail;
-      await this.saveTokens(userPhone, refreshed, accountId, email);
+      await this.saveTokens(userId, refreshed, accountId, email);
 
-      logger.info({ userPhone }, "OpenAI OAuth: token refreshed");
+      logger.info({ userId }, "OpenAI OAuth: token refreshed");
       return { accessToken: refreshed.access_token, accountId };
     } catch (err) {
-      logger.error({ err, userPhone }, "OpenAI OAuth: refresh failed");
-      await this.markDisconnected(userPhone);
+      logger.error({ err, userId }, "OpenAI OAuth: refresh failed");
+      await this.markDisconnected(userId);
       return null;
     }
   }
 
-  async isConnected(userPhone: string): Promise<{ connected: boolean; email?: string }> {
-    const stored = await this.loadTokens(userPhone);
+  async isConnected(userId: number): Promise<{ connected: boolean; email?: string }> {
+    const stored = await this.loadTokens(userId);
     if (!stored) return { connected: false };
 
     const isExpired = stored.expiresAt <= Date.now();
@@ -297,12 +297,12 @@ export class OpenAIOAuthService {
     };
   }
 
-  async disconnect(userPhone: string): Promise<void> {
+  async disconnect(userId: number): Promise<void> {
     await query(
-      `DELETE FROM oauth_tokens WHERE user_phone = $1 AND provider = 'openai'`,
-      [userPhone]
+      `DELETE FROM oauth_tokens WHERE user_id = $1 AND provider = 'openai'`,
+      [userId]
     );
-    logger.info({ userPhone }, "OpenAI OAuth: disconnected");
+    logger.info({ userId }, "OpenAI OAuth: disconnected");
   }
 
   hasPendingAuth(): boolean {
@@ -331,7 +331,7 @@ export class OpenAIOAuthService {
   }
 
   private async saveTokens(
-    userPhone: string,
+    userId: number,
     tokens: TokenResponse,
     accountId: string | null,
     email: string | null
@@ -339,9 +339,9 @@ export class OpenAIOAuthService {
     const expiresAt = Date.now() + (tokens.expires_in || 3600) * 1000;
 
     await query(
-      `INSERT INTO oauth_tokens (user_phone, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, is_active, updated_at)
+      `INSERT INTO oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, is_active, updated_at)
        VALUES ($1, 'openai', $2, $3, $4, $5, $6, $7, TRUE, NOW())
-       ON CONFLICT (user_phone, provider)
+       ON CONFLICT (user_id, provider)
        DO UPDATE SET
          access_token = excluded.access_token,
          refresh_token = excluded.refresh_token,
@@ -352,7 +352,7 @@ export class OpenAIOAuthService {
          is_active = TRUE,
          updated_at = NOW()`,
       [
-        userPhone,
+        userId,
         tokens.access_token,
         tokens.refresh_token,
         expiresAt,
@@ -363,12 +363,12 @@ export class OpenAIOAuthService {
     );
   }
 
-  private async loadTokens(userPhone: string): Promise<OpenAIOAuthTokens | null> {
+  private async loadTokens(userId: number): Promise<OpenAIOAuthTokens | null> {
     const result = await query(
       `SELECT access_token, refresh_token, expires_at, account_email, org_name
        FROM oauth_tokens 
-       WHERE user_phone = $1 AND provider = 'openai' AND is_active = TRUE`,
-      [userPhone]
+       WHERE user_id = $1 AND provider = 'openai' AND is_active = TRUE`,
+      [userId]
     );
 
     if (result.rows.length === 0) return null;
@@ -383,11 +383,11 @@ export class OpenAIOAuthService {
     };
   }
 
-  private async markDisconnected(userPhone: string): Promise<void> {
+  private async markDisconnected(userId: number): Promise<void> {
     await query(
       `UPDATE oauth_tokens SET is_active = FALSE, updated_at = NOW()
-       WHERE user_phone = $1 AND provider = 'openai'`,
-      [userPhone]
+       WHERE user_id = $1 AND provider = 'openai'`,
+      [userId]
     );
   }
 }
