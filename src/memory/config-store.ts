@@ -48,8 +48,8 @@ export async function configSet(key: string, value: string): Promise<void> {
     `INSERT INTO config (key, value, updated_at)
      VALUES ($1, $2, NOW())
      ON CONFLICT (key)
-     DO UPDATE SET value = $2, updated_at = NOW()`,
-    [key, value]
+     DO UPDATE SET value = $3, updated_at = NOW()`,
+    [key, value, value]
   );
   logger.info({ key }, "Config saved to database");
 }
