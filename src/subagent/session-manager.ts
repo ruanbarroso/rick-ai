@@ -582,7 +582,7 @@ export class SessionManager {
     proc.on("exit", (code) => {
       logger.info({ sessionId: session.id, exitCode: code }, "Sub-agent process exited");
       this.processes.delete(session.id);
-      if (session.state === "running" || session.state === "starting") {
+      if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
         session.state = "done";
         session.updatedAt = Date.now();
         this.sendToUser(session, "(Sub-agente encerrou)");
@@ -590,6 +590,7 @@ export class SessionManager {
         if (this.onSessionMessage) {
           this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
         }
+        this.updateSessionStatus(session.id, "done").catch(() => {});
       }
     });
 
@@ -629,6 +630,24 @@ export class SessionManager {
             );
             this.sendToUser(session, statusText, "tool_use");
           }
+          break;
+
+        case "waiting_user":
+          // Agent finished processing this turn — waiting for user's next message.
+          // Session stays alive; compose bar shown to user.
+          session.state = "waiting_user";
+          session.updatedAt = Date.now();
+          if (msg.result) {
+            session.output += msg.result + "\n";
+            if (msg.result !== session.lastMessageText) {
+              this.sendToUser(session, msg.result);
+            }
+          }
+          // Notify session viewers of state change
+          if (this.onSessionMessage) {
+            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+          }
+          logger.info({ sessionId: session.id }, "Sub-agent waiting for user input");
           break;
 
         case "done":

@@ -69,6 +69,7 @@ body {
   display: inline-block;
 }
 .status-dot.running { background: #4ade80; animation: pulse 2s infinite; }
+.status-dot.waiting { background: #1da1f2; }
 .status-dot.done { background: #f59e0b; }
 .status-dot.offline { background: #6b7280; }
 
@@ -613,6 +614,11 @@ function updateSessionState(state) {
   if (state === 'running' || state === 'starting') {
     dot.classList.add('running');
     text.textContent = 'Trabalhando...';
+    banner.classList.remove('visible');
+    composeBar.style.display = 'flex';
+  } else if (state === 'waiting_user') {
+    dot.classList.add('waiting');
+    text.textContent = 'Aguardando sua resposta';
     banner.classList.remove('visible');
     composeBar.style.display = 'flex';
   } else if (state === 'done') {

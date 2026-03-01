@@ -13,7 +13,8 @@
  *   { type: "ready", providers: [...], tools: [...] }
  *   { type: "message", text: "..." }
  *   { type: "status", message: "..." }
- *   { type: "done", result: "..." }
+ *   { type: "waiting_user", result: "..." }  — turn complete, waiting for next user message
+ *   { type: "done", result: "..." }           — session finished (explicit end)
  *   { type: "error", message: "..." }
  */
 
@@ -48,6 +49,10 @@ function emitStatus(message) {
 
 function emitDone(result) {
   emit({ type: "done", result });
+}
+
+function emitWaitingUser(result) {
+  emit({ type: "waiting_user", result });
 }
 
 function emitError(message) {
@@ -275,16 +280,18 @@ const agentName = process.env.AGENT_NAME || "Rick";
 const SYSTEM_PROMPT = `Voce e ${agentName} Sub-Agent, um agente autonomo executando dentro de um container Docker.
 
 Sua tarefa e realizar o que o usuario pedir usando as ferramentas disponiveis.
+Voce mantem o contexto de toda a conversa — mensagens anteriores do usuario sao lembradas.
 
 REGRAS:
 1. Responda sempre em portugues brasileiro.
 2. Use as ferramentas para completar a tarefa. NAO invente resultados.
-3. Quando terminar, emita um resumo claro do que foi feito.
-4. Se precisar de informacoes do Rick (credenciais, memorias), use as ferramentas rick_memory e rick_search.
-5. Credenciais tambem estao disponiveis como variaveis de ambiente RICK_SECRET_* no container.
-6. Para tarefas de codigo: clone o repositorio, faca as alteracoes, rode testes se possivel.
-7. Para pesquisa web: use web_fetch para acessar URLs e extrair informacoes.
-8. Seja conciso nas mensagens intermediarias, detalhado no resultado final.
+3. Quando terminar uma etapa, emita um resumo claro do que foi feito.
+4. Se precisar de informacoes adicionais do usuario (credenciais, esclarecimentos), PERGUNTE — voce recebera a resposta na proxima mensagem.
+5. Se precisar de informacoes do ${agentName} (credenciais, memorias), use as ferramentas rick_memory e rick_search.
+6. Credenciais tambem estao disponiveis como variaveis de ambiente RICK_SECRET_* no container.
+7. Para tarefas de codigo: clone o repositorio, faca as alteracoes, rode testes se possivel.
+8. Para pesquisa web: use web_fetch para acessar URLs e extrair informacoes.
+9. Seja conciso nas mensagens intermediarias, detalhado no resultado final.
 
 FERRAMENTAS DISPONIVEIS: ${toolNames.join(", ")}`;
 
@@ -325,9 +332,15 @@ async function callGemini(contents) {
   };
 }
 
+// Module-level conversation histories — persist between turns
+let geminiHistory = [];
+let openaiHistory = null; // initialized on first use
+let claudeHistory = [];
+
 async function runGeminiLoop(userText) {
   const MAX_ITER = 25;
-  let contents = [{ role: "user", parts: [{ text: userText }] }];
+  geminiHistory.push({ role: "user", parts: [{ text: userText }] });
+  let contents = geminiHistory;
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
     const { texts, toolCalls, modelParts } = await callGemini(contents);
@@ -375,10 +388,11 @@ async function runOpenAILoop(userText) {
   }));
 
   const MAX_ITER = 25;
-  let messages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: userText },
-  ];
+  if (!openaiHistory) {
+    openaiHistory = [{ role: "system", content: SYSTEM_PROMPT }];
+  }
+  openaiHistory.push({ role: "user", content: userText });
+  let messages = openaiHistory;
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -435,7 +449,8 @@ async function runClaudeLoop(userText) {
   }));
 
   const MAX_ITER = 25;
-  let messages = [{ role: "user", content: userText }];
+  claudeHistory.push({ role: "user", content: userText });
+  let messages = claudeHistory;
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
     const headers = {
@@ -532,7 +547,9 @@ rl.on("line", async (line) => {
       result = await runClaudeLoop(userText);
     }
 
-    emitDone(result);
+    // Signal that we're done processing this turn but ready for more input.
+    // The session stays alive — the host will show the compose bar again.
+    emitWaitingUser(result);
   } catch (err) {
     emitError(err.message || "Erro desconhecido no sub-agente.");
   }
