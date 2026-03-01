@@ -1132,11 +1132,16 @@ export class EditSession {
     this.state = "publishing";
 
     // ---- Step 1: Resolve GitHub token ----
-    await this.sendMessage(`\`[publish]\` Buscando credencial GitHub nas memorias...`, "tool_use");
+    // Check config store / env var first (set via Web UI settings)
+    let githubToken: string | null = process.env.GITHUB_TOKEN || null;
 
-    let githubToken: string | null = null;
+    if (githubToken) {
+      await this.sendMessage(`\`[publish]\` Token GitHub encontrado nas configuracoes.`, "tool_use");
+    } else {
+      await this.sendMessage(`\`[publish]\` Buscando credencial GitHub nas memorias...`, "tool_use");
+    }
 
-    if (this.memoryService) {
+    if (!githubToken && this.memoryService) {
       const sensitiveCategories = ["credenciais", "tokens", "senhas", "secrets", "passwords", "credentials"];
       const tokenKeys = ["github_token", "github_pat", "gh_token", "github_personal_access_token", "github"];
 
@@ -1170,8 +1175,9 @@ export class EditSession {
 
     if (!githubToken) {
       await this.sendMessage(
-        "*Publish cancelado:* Nenhum token GitHub encontrado nas memorias do Rick.\n\n" +
-        "Salve um token com:\n" +
+        "*Publish cancelado:* Nenhum token GitHub encontrado.\n\n" +
+        "Configure na Web UI: *Configuracoes → GitHub → Personal Access Token*\n\n" +
+        "Ou salve via memoria:\n" +
         "`/lembrar credenciais:github_token = ghp_seuTokenAqui`\n\n" +
         "O token precisa ter permissao de escrita (push) no repositorio.",
       );

@@ -472,6 +472,11 @@ export class Agent {
       env.PGVECTOR_URL = config.vectorDatabaseUrl;
     }
 
+    // GitHub token (from config store / Web UI settings)
+    if (process.env.GITHUB_TOKEN) {
+      env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+    }
+
     // Expand generic "email" hint into actual email providers found in memory
     const emailProviders = ["outlook", "gmail", "hotmail", "yahoo", "protonmail"];
     let expandedHints = [...credentialHints];

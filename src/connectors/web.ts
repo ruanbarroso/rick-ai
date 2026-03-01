@@ -715,6 +715,7 @@ export class WebConnector implements Connector {
       const dbUrl = process.env.DATABASE_URL || "";
       const vectorUrl = process.env.VECTOR_DATABASE_URL || "";
       const devRepo = process.env.DEV_REPO_URL || "";
+      const githubToken = process.env.GITHUB_TOKEN || "";
 
       const anthropicConn = await this.claudeOAuth.isConnected(config.ownerPhone);
       const openaiConn = await this.openaiOAuth.isConnected(config.ownerPhone);
@@ -735,6 +736,8 @@ export class WebConnector implements Connector {
           databaseUrl: dbUrl,
           vectorDatabaseUrl: vectorUrl,
           devRepoUrl: devRepo,
+          githubToken: mask(githubToken),
+          githubTokenSet: !!githubToken,
           whatsappConnected: this.whatsappConnector?.isConnected() || false,
           editModeActive: this.agentBridge?.isEditModeActive() || false,
           dbBackend: isPostgres() ? "postgresql" : "sqlite",

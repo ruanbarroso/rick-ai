@@ -98,6 +98,7 @@ export const SETTINGS_KEY_MAP: Record<string, string> = {
   vectorDatabaseUrl: "VECTOR_DATABASE_URL",
   devRepoUrl: "DEV_REPO_URL",
   webAuthPassword: "WEB_AUTH_PASSWORD",
+  githubToken: "GITHUB_TOKEN",
 };
 
 /**

@@ -500,12 +500,21 @@ function getVersionCachePath(): string {
 
 async function fetchLatestFromGitHub(): Promise<LatestVersionInfo | null> {
   try {
+    const headers: Record<string, string> = {
+      "Accept": "application/vnd.github.v3+json",
+      "User-Agent": "RickAI",
+    };
+    // Use GITHUB_TOKEN for authenticated requests (5000 req/hour vs 60 unauthenticated)
+    const ghToken = process.env.GITHUB_TOKEN;
+    if (ghToken) {
+      headers["Authorization"] = `token ${ghToken}`;
+    }
     const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits/main`, {
-      headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "RickAI" },
+      headers,
       signal: AbortSignal.timeout(8000),
     });
     if (!resp.ok) {
-      logger.warn({ status: resp.status }, "Version check: GitHub API returned non-OK");
+      logger.warn({ status: resp.status, authenticated: !!ghToken }, "Version check: GitHub API returned non-OK");
       return null;
     }
 
