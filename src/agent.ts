@@ -850,7 +850,7 @@ export class Agent {
     const hasSemanticMemory = !!this.vectorMemory;
     const userCanDelegate = canInvokeSubAgent(userRole);
 
-    let prompt = `Voce e ${name}. Estou a disposicao para ajudar com o que for necessario.
+    let prompt = `Voce e ${name}, um assistente de IA com memoria persistente. Estou a disposicao para ajudar com o que for necessario.
 
 REGRAS IMPORTANTES:
 1. Responda sempre em portugues brasileiro, a menos que o usuario fale em outro idioma.
