@@ -3125,11 +3125,23 @@ function handleServerMessage(msg) {
         sessionStorage.removeItem('rick_ota_reopen_settings');
         setTimeout(function() {
           openSettings();
-          // Give version API time to reflect the new .rick-version
+          // Show "Atualizado" badge immediately — no need to re-check GitHub
           setTimeout(function() {
             loadVersionInfo();
-            checkForUpdates();
-          }, 2000);
+            var badge = document.getElementById('version-badge');
+            var updateInline = document.getElementById('update-inline');
+            if (badge) {
+              badge.style.display = 'inline-block';
+              badge.style.background = 'rgba(74,222,128,0.15)';
+              badge.style.color = '#4ade80';
+              badge.textContent = 'Atualizado';
+            }
+            if (updateInline) updateInline.style.display = 'none';
+            var refreshBtn = document.getElementById('version-refresh-btn');
+            if (refreshBtn) refreshBtn.style.display = 'none';
+            versionPrimaryAction = 'check';
+            applyVersionPrimaryButtonState();
+          }, 500);
         }, 300);
       }
       document.getElementById('login-screen').style.display = 'none';
