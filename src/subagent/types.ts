@@ -57,6 +57,8 @@ export interface SubAgentSession {
   numericUserId: number | null;
   /** Accumulated output from the sub-agent */
   output: string;
+  /** Last text emitted via "message" event — used to deduplicate "done" result */
+  lastMessageText?: string;
   /** Pending question from sub-agent to user */
   pendingQuestion: string | null;
   createdAt: number;

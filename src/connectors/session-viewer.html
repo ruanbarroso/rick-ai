@@ -380,6 +380,67 @@ body {
 }
 
 .empty-state.hidden { display: none; }
+
+/* Tool use terminal blocks (matches web-ui.html style) */
+.tool-use-block {
+  flex-shrink: 0;
+  align-self: flex-start;
+  max-width: 85%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  overflow: hidden;
+  animation: msgIn 0.2s ease-out;
+  font-family: 'SF Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 0.8rem;
+}
+.tool-use-block .terminal-header {
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  cursor: pointer;
+}
+.tool-use-block .terminal-title {
+  flex: 1;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #8b949e;
+  letter-spacing: 0.04em;
+}
+.tool-use-block .terminal-body {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 240px;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.tool-use-block .terminal-body::-webkit-scrollbar { width: 4px; }
+.tool-use-block .terminal-body::-webkit-scrollbar-track { background: transparent; }
+.tool-use-block .terminal-body::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+.tool-use-block .terminal-line {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tool-use-block .tl-time { color: #484f58; font-size: 0.68rem; flex-shrink: 0; min-width: 32px; user-select: none; }
+.tool-use-block .tl-arrow { color: #3fb950; flex-shrink: 0; user-select: none; }
+.tool-use-block .tl-tool { color: #79c0ff; font-weight: 600; flex-shrink: 0; }
+.tool-use-block .tl-arg { color: #7ee787; opacity: 0.85; word-break: break-all; min-width: 0; }
+.tool-use-block .tl-plain { color: #7ee787; word-break: break-all; }
+.tool-use-block .terminal-toggle { font-size: 0.72rem; color: #8b949e; flex-shrink: 0; transition: transform 0.2s ease; line-height: 1; }
+.tool-use-block.minimized .terminal-toggle { transform: rotate(-90deg); }
+.tool-use-block.minimized .terminal-header { border-bottom: none; }
+.tool-use-block.minimized .terminal-body { display: none; }
 </style>
 </head>
 <body>
@@ -504,7 +565,104 @@ function renderText(text) {
   return s;
 }
 
-function appendMessage(text, role) {
+// ==================== TOOL USE BLOCKS ====================
+
+function formatToolLine(text, timeStr) {
+  var timeEl = '<span class="tl-time">' + timeStr + '</span>';
+  var arrowEl = '<span class="tl-arrow">&#9656;</span>';
+  var segments = [];
+  var regex = /`([^`]*)`/g;
+  var match;
+  var lastIdx = 0;
+  var first = true;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      var plain = text.slice(lastIdx, match.index).trim();
+      if (plain) segments.push({ type: 'plain', val: plain });
+    }
+    if (first) { segments.push({ type: 'tool', val: match[1] }); first = false; }
+    else { segments.push({ type: 'arg', val: match[1] }); }
+    lastIdx = regex.lastIndex;
+  }
+  if (lastIdx < text.length) {
+    var remainder = text.slice(lastIdx).trim();
+    if (remainder) segments.push({ type: first ? 'tool' : 'plain', val: remainder });
+  }
+  if (segments.length === 0) segments.push({ type: 'plain', val: text });
+  var contentHtml = segments.map(function(s) {
+    var escaped = s.val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (s.type === 'tool') return '<span class="tl-tool">' + escaped + '</span>';
+    if (s.type === 'arg')  return '<span class="tl-arg">' + escaped + '</span>';
+    return '<span class="tl-plain">' + escaped + '</span>';
+  }).join(' ');
+  return timeEl + arrowEl + contentHtml;
+}
+
+function makeToolUseBlock() {
+  // Minimize all existing tool blocks
+  var existing = document.querySelectorAll('.tool-use-block');
+  for (var i = 0; i < existing.length; i++) existing[i].classList.add('minimized');
+
+  var block = document.createElement('div');
+  block.className = 'tool-use-block';
+  block.innerHTML =
+    '<div class="terminal-header">' +
+      '<div class="terminal-title">ferramentas</div>' +
+      '<div class="terminal-toggle">&#9662;</div>' +
+    '</div>' +
+    '<div class="terminal-body"></div>';
+  var header = block.querySelector('.terminal-header');
+  header.addEventListener('click', function() {
+    if (block.classList.contains('minimized')) {
+      var all = document.querySelectorAll('.tool-use-block');
+      for (var j = 0; j < all.length; j++) all[j].classList.add('minimized');
+      block.classList.remove('minimized');
+    } else {
+      block.classList.add('minimized');
+    }
+  });
+  return block;
+}
+
+function appendToolLine(text, timeStr) {
+  var empty = document.getElementById('empty-state');
+  if (empty) empty.classList.add('hidden');
+  var container = document.getElementById('messages');
+  var typing = document.getElementById('typing-indicator');
+  // Group into existing block or create new
+  var prevEl = typing.previousElementSibling;
+  var block;
+  if (prevEl && prevEl.classList.contains('tool-use-block')) {
+    block = prevEl;
+  } else {
+    block = makeToolUseBlock();
+    container.insertBefore(block, typing);
+  }
+  var body = block.querySelector('.terminal-body');
+  var line = document.createElement('div');
+  line.className = 'terminal-line';
+  line.innerHTML = formatToolLine(text, timeStr);
+  body.appendChild(line);
+  body.scrollTop = body.scrollHeight;
+  container.scrollTop = container.scrollHeight;
+}
+
+// ==================== MESSAGE RENDERING ====================
+
+function appendMessage(text, role, messageType) {
+  // System state messages (e.g. {"state":"done"}) — don't render as bubbles
+  if (role === 'system' || messageType === 'system') {
+    try { var sys = JSON.parse(text); if (sys.state) updateSessionState(sys.state); } catch(e) {}
+    return;
+  }
+
+  // Tool use → terminal block
+  if (messageType === 'tool_use') {
+    var ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    appendToolLine(text, ts);
+    return;
+  }
+
   var empty = document.getElementById('empty-state');
   if (empty) empty.classList.add('hidden');
 
@@ -524,7 +682,22 @@ function appendMessage(text, role) {
   container.scrollTop = container.scrollHeight;
 }
 
-function appendHistoryMessage(text, role, timestamp) {
+function appendHistoryMessage(text, role, timestamp, messageType) {
+  // System state messages — don't render, just update state
+  if (role === 'system' || messageType === 'system') {
+    try { var sys = JSON.parse(text); if (sys.state) updateSessionState(sys.state); } catch(e) {}
+    return;
+  }
+
+  var timeStr = (timestamp ? new Date(timestamp) : new Date())
+    .toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  // Tool use → terminal block
+  if (messageType === 'tool_use') {
+    appendToolLine(text, timeStr);
+    return;
+  }
+
   var empty = document.getElementById('empty-state');
   if (empty) empty.classList.add('hidden');
 
@@ -537,8 +710,7 @@ function appendHistoryMessage(text, role, timestamp) {
 
   var time = document.createElement('div');
   time.className = 'time';
-  var t = timestamp ? new Date(timestamp) : new Date();
-  time.textContent = t.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  time.textContent = timeStr;
   div.appendChild(time);
 
   container.insertBefore(div, typing);
@@ -606,14 +778,14 @@ function connect() {
 
     switch (msg.type) {
       case 'message':
-        appendMessage(msg.text, msg.role);
+        appendMessage(msg.text, msg.role, msg.messageType);
         break;
 
       case 'session_history':
         // Load existing messages
         var msgs = msg.messages || [];
         for (var i = 0; i < msgs.length; i++) {
-          appendHistoryMessage(msgs[i].content, msgs[i].role, msgs[i].created_at);
+          appendHistoryMessage(msgs[i].content, msgs[i].role, msgs[i].created_at, msgs[i].message_type);
         }
         // Scroll to bottom after loading history
         var container = document.getElementById('messages');
@@ -632,16 +804,6 @@ function connect() {
           updateSessionState(msg.session.state);
         }
         break;
-    }
-
-    // Check for system messages (state changes)
-    if (msg.type === 'message' && msg.role === 'system') {
-      try {
-        var sys = JSON.parse(msg.text);
-        if (sys.state) {
-          updateSessionState(sys.state);
-        }
-      } catch(e) {}
     }
   };
 

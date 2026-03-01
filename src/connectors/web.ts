@@ -1077,11 +1077,11 @@ export class WebConnector implements Connector {
    * Broadcast a message to all public session WebSocket subscribers for a given session.
    * Called by the SessionManager's onSessionMessage callback.
    */
-  broadcastToSessionSubscribers(sessionId: string, role: string, text: string): void {
+  broadcastToSessionSubscribers(sessionId: string, role: string, text: string, messageType?: string): void {
     const subs = this.sessionSubscribers.get(sessionId);
     if (!subs || subs.size === 0) return;
 
-    const payload = JSON.stringify({ type: "message", role, text, time: new Date().toISOString() });
+    const payload = JSON.stringify({ type: "message", role, text, messageType: messageType || "text", time: new Date().toISOString() });
     for (const ws of subs) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(payload);

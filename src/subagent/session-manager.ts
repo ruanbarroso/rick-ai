@@ -34,7 +34,7 @@ export function getSessionRickName(sessionId: string): string {
 }
 
 /** Callback for broadcasting messages to public session subscribers (WebSocket viewers). */
-export type SessionMessageCallback = (sessionId: string, role: string, text: string) => void;
+export type SessionMessageCallback = (sessionId: string, role: string, text: string, messageType?: string) => void;
 
 /**
  * Manages unified sub-agent sessions — container lifecycle, NDJSON stdin/stdout relay.
@@ -369,7 +369,7 @@ export class SessionManager {
 
     // Notify session viewers of state change
     if (this.onSessionMessage) {
-      this.onSessionMessage(sessionId, "system", JSON.stringify({ state: "killed" }));
+      this.onSessionMessage(sessionId, "system", JSON.stringify({ state: "killed" }), "system");
     }
 
     // Persist final state to DB (session_messages are NOT deleted — kept for audit)
@@ -588,7 +588,7 @@ export class SessionManager {
         this.sendToUser(session, "(Sub-agente encerrou)");
         // Notify session viewers of state change
         if (this.onSessionMessage) {
-          this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }));
+          this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
         }
       }
     });
@@ -612,6 +612,7 @@ export class SessionManager {
           if (msg.text) {
             session.output += msg.text + "\n";
             session.updatedAt = Date.now();
+            session.lastMessageText = msg.text;
             this.sendToUser(session, msg.text);
           }
           break;
@@ -619,7 +620,14 @@ export class SessionManager {
         case "status":
           // Status updates (tool execution, LLM switching, context rotation)
           if (msg.message) {
-            this.sendToUser(session, `_${msg.message}_`);
+            // Format for terminal block: wrap tool name and args in backticks
+            // Input: "Executando: read_file (path.js)"  →  "Executando: `read_file` `path.js`"
+            const statusText = msg.message.replace(
+              /^(Executando:\s*)(\S+?)(?:\s+\(([^)]+)\))?$/,
+              (_: string, prefix: string, tool: string, arg?: string) =>
+                arg ? `${prefix}\`${tool}\` \`${arg}\`` : `${prefix}\`${tool}\``
+            );
+            this.sendToUser(session, statusText, "tool_use");
           }
           break;
 
@@ -628,11 +636,15 @@ export class SessionManager {
           session.updatedAt = Date.now();
           if (msg.result) {
             session.output += msg.result + "\n";
-            this.sendToUser(session, msg.result);
+            // Only send the result if it wasn't already sent as the last "message" event
+            // (the LLM loop emits intermediate text AND done.result, causing duplicates)
+            if (msg.result !== session.lastMessageText) {
+              this.sendToUser(session, msg.result);
+            }
           }
-          // Notify session viewers of state change
+          // Notify session viewers of state change (not rendered as a chat bubble)
           if (this.onSessionMessage) {
-            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }));
+            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
           }
           // Persist done state to DB
           this.updateSessionStatus(session.id, "done").catch(() => {});
@@ -676,15 +688,15 @@ export class SessionManager {
 
   // ==================== OUTPUT ROUTING ====================
 
-  private async sendToUser(session: SubAgentSession, text: string): Promise<void> {
+  private async sendToUser(session: SubAgentSession, text: string, messageType: string = "text"): Promise<void> {
     // O subagente roda de forma assíncrona — as mensagens intermediárias NÃO são
     // encaminhadas de volta ao conector principal (sessão do usuário). O usuário
     // acompanha o progresso na página pública da sessão (/s/:id).
     // Broadcast apenas para subscribers da sessão na web UI (página /s/:id)
     if (this.onSessionMessage) {
-      this.onSessionMessage(session.id, "agent", text);
+      this.onSessionMessage(session.id, "agent", text, messageType);
     }
-    this.saveSessionMessage(session.id, "agent", text).catch(() => {});
+    this.saveSessionMessage(session.id, "agent", text, messageType).catch(() => {});
   }
 
   // ==================== SESSION PERSISTENCE (RBAC audit) ====================

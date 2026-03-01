@@ -1980,8 +1980,8 @@ Retorne APENAS as linhas de extracao, nada mais.`;
    */
   createWebBridge(webConnector: WebConnector): WebAgentBridge {
     // Wire session message callback so sub-agent messages go to public session pages
-    this.sessionManager.setSessionMessageCallback((sessionId, role, text) => {
-      webConnector.broadcastToSessionSubscribers(sessionId, role, text);
+    this.sessionManager.setSessionMessageCallback((sessionId, role, text, messageType) => {
+      webConnector.broadcastToSessionSubscribers(sessionId, role, text, messageType);
     });
 
     const bridge: WebAgentBridge = {
