@@ -58,6 +58,8 @@ export interface WebAgentBridge {
   getConversationHistory(userPhone: string, limit?: number, numericUserId?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string }>>;
   /** Get message history for a sub-agent session */
   getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
+  /** Get the persisted status of a session from the DB ('active' | 'done' | 'killed' | null) */
+  getSessionStatusFromDB(sessionId: string): Promise<string | null>;
   /** Get message history for the active edit session */
   getEditHistory(): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Send audio transcription update to all web clients */
@@ -398,7 +400,7 @@ export class WebConnector implements Connector {
 
       // Send existing session history + info
       if (this.agentBridge) {
-        this.agentBridge.getSessionHistory(sessionId).then((history) => {
+        this.agentBridge.getSessionHistory(sessionId).then(async (history) => {
           if (ws.readyState !== WebSocket.OPEN) return;
 
           // Check if session exists (live) or has history (was alive before)
@@ -410,14 +412,23 @@ export class WebConnector implements Connector {
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
             ws.send(JSON.stringify({ type: "session_info", session }));
           } else if (history.length > 0) {
-            // Session was killed but has persisted history — show as done
+            // Session is no longer in memory — check DB for the real status
+            const dbStatus = await this.agentBridge!.getSessionStatusFromDB(sessionId);
+            // Map DB status ('active'|'done'|'killed') to viewer state
+            const state = dbStatus === "killed" ? "killed" : "done";
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
-            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state: "done" } }));
+            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state } }));
           } else {
             // Session doesn't exist and has no history — not found
             ws.send(JSON.stringify({ type: "session_not_found", sessionId }));
           }
-        }).catch(() => {});
+        }).catch((err) => {
+          logger.warn({ err, sessionId }, "Failed to load session history for viewer");
+          // Send a fallback so the viewer doesn't stay stuck on "Trabalhando..."
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state: "done" } }));
+          }
+        });
       }
 
       // Handle messages from session viewer (user can send messages to the session)

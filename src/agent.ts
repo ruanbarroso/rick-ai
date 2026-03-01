@@ -2030,6 +2030,10 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.sessionManager.getSessionHistory(sessionId);
       },
 
+      getSessionStatusFromDB: async (sessionId: string) => {
+        return this.sessionManager.getSessionStatusFromDB(sessionId);
+      },
+
       getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>> => {
         if (!this.editSession) return [];
         try {

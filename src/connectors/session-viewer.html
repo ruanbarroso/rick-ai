@@ -136,7 +136,7 @@ body {
 
 /* Compose bar */
 .compose-bar {
-  display: flex;
+  display: none;
   align-items: flex-end;
   gap: 8px;
   padding: 10px 16px;
@@ -595,7 +595,11 @@ function connect() {
   ws.onopen = function() {
     reconnectAttempts = 0;
     document.getElementById('connection-bar').classList.remove('visible');
-    updateSessionState(sessionState === 'unknown' ? 'running' : sessionState);
+    // Preserve existing state on reconnect; on first connect keep 'unknown'
+    // (wait for session_info from server to set the real state)
+    if (sessionState !== 'unknown') {
+      updateSessionState(sessionState);
+    }
   };
 
   ws.onmessage = function(event) {
@@ -621,8 +625,6 @@ function connect() {
         if (msg.session) {
           updateHeaderIcon();
           updateSessionState(msg.session.state);
-          var stateLabel = (msg.session.state === 'running' || msg.session.state === 'starting') ? 'Trabalhando...' : msg.session.state === 'done' ? 'Concluido' : msg.session.state;
-          document.getElementById('status-text').textContent = 'Sub-agente - ' + stateLabel;
         }
         break;
     }

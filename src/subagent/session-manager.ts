@@ -160,6 +160,26 @@ export class SessionManager {
     return this.sessions.has(id);
   }
 
+  /**
+   * Look up the persisted status of a session from the DB.
+   * Returns 'active' | 'done' | 'killed' | null (not found).
+   */
+  async getSessionStatusFromDB(sessionId: string): Promise<string | null> {
+    try {
+      const result = await query(
+        `SELECT status FROM sub_agent_sessions WHERE id = $1`,
+        [sessionId]
+      );
+      if (result.rows.length > 0) {
+        return result.rows[0].status;
+      }
+      return null;
+    } catch (err) {
+      logger.warn({ err, sessionId }, "Failed to query session status from DB");
+      return null;
+    }
+  }
+
   getLiveSessions(): SubAgentSession[] {
     return Array.from(this.sessions.values()).filter(
       (s) => s.state === "starting" || s.state === "running" || s.state === "waiting_user" || s.state === "done"
