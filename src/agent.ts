@@ -16,6 +16,7 @@ import type { WebAgentBridge } from "./connectors/web.js";
 import type { WebConnector } from "./connectors/web.js";
 import { config } from "./config/env.js";
 import { logger } from "./config/logger.js";
+import { canLearn, canInvokeSubAgent, canViewSecrets, type UserRole } from "./auth/permissions.js";
 
 export class Agent {
   private llm: LLMService;
@@ -123,8 +124,10 @@ export class Agent {
 
   private async handleMessageInternal(msg: IncomingMessage): Promise<string> {
     const { connectorName, userId: userPhone, userName, text: rawText, media, imageMedias, quotedText, audioUrl, imageUrls, fileInfos } = msg;
+    const numericUserId = msg.numericUserId;
+    const userRole: UserRole = msg.userRole ?? "admin"; // Default to admin for Web UI (pre-RBAC compat)
 
-    // Get or create user
+    // Get or create user (legacy — still needed for pre-RBAC code paths)
     const user = await this.memory.getOrCreateUser(userPhone, userName);
 
     // If message is a reply to another message, prepend quoted context
@@ -301,7 +304,8 @@ export class Agent {
       }
 
       // Classify the task — does it need a sub-agent?
-      const classification = await classifyTask(fullText);
+      // Skip classification for roles that cannot invoke sub-agents (business)
+      const classification = canInvokeSubAgent(userRole) ? await classifyTask(fullText) : null;
 
       // If a sub-agent is already running, only block new DELEGATE tasks.
       // SELF tasks (save memory, answer questions, etc.) are handled normally
@@ -321,7 +325,8 @@ export class Agent {
           audioUrl,
           imageUrls,
           allImageMedias,
-          fileInfos
+          fileInfos,
+          numericUserId
         );
       }
 
@@ -335,7 +340,7 @@ export class Agent {
       } else if (!routingMedia && imageMedias && imageMedias.length > 0) {
         allMedia = imageMedias.length === 1 ? imageMedias[0] : imageMedias;
       }
-      return this.handleSimpleChat(userPhone, user.name, fullText, allMedia, audioUrl, imageUrls, fileInfos);
+      return this.handleSimpleChat(userPhone, user.name, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, numericUserId);
     } finally {
       await this.connectorManager.setTyping(connectorName, userPhone, false);
     }
@@ -351,12 +356,20 @@ export class Agent {
     media?: MediaAttachment | MediaAttachment[],
     audioUrl?: string,
     imageUrls?: string[],
-    fileInfos?: Array<{ url: string; name: string; mimeType: string }>
+    fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
+    userRole: UserRole = "admin",
+    numericUserId?: number
   ): Promise<string> {
-    const memoryContext = await this.memory.buildMemoryContext(userPhone);
-    const semanticContext = await this.buildSemanticContext(userPhone, text);
-    const history = await this.memory.getConversationHistory(userPhone);
-    const systemPrompt = this.buildSystemPrompt(userName, memoryContext, semanticContext);
+    // RBAC: Use global memory context with role-based filtering
+    const memoryContext = await this.memory.buildGlobalMemoryContext(userRole);
+    const semanticContext = await this.buildSemanticContext(userPhone, text, userRole);
+
+    // Use user_id-based history if available, otherwise fallback to phone-based
+    const history = numericUserId
+      ? await this.memory.getConversationHistoryByUserId(numericUserId)
+      : await this.memory.getConversationHistory(userPhone);
+
+    const systemPrompt = this.buildSystemPrompt(userName, memoryContext, semanticContext, userRole);
 
     const messages: LLMMessage[] = [
       // Filter out tool_use messages — they are notifications (e.g. "[tool] Pesquisando...")
@@ -371,7 +384,11 @@ export class Agent {
     ];
 
     // Save user message BEFORE the LLM call so it persists even if the call fails/crashes
-    await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    if (numericUserId) {
+      await this.memory.saveMessageByUserId(numericUserId, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    } else {
+      await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    }
 
     let response;
     try {
@@ -381,12 +398,20 @@ export class Agent {
       return `Erro no Gemini: ${err.message?.substring(0, 200) || "erro desconhecido"}.\nTente novamente em alguns segundos.`;
     }
 
-    await this.memory.saveMessage(userPhone, "assistant", response.content, response.model, response.tokensUsed);
-    await this.extractAndSaveMemories(userPhone, text, response.content);
+    if (numericUserId) {
+      await this.memory.saveMessageByUserId(numericUserId, "assistant", response.content, response.model, response.tokensUsed);
+    } else {
+      await this.memory.saveMessage(userPhone, "assistant", response.content, response.model, response.tokensUsed);
+    }
 
-    this.autoEmbedConversation(userPhone, text, response.content).catch(
-      (err) => logger.warn({ err }, "Failed to auto-embed conversation")
-    );
+    // RBAC: Only extract memories and embed if user role allows learning
+    if (canLearn(userRole)) {
+      await this.extractAndSaveMemories(userPhone, text, response.content, userRole, numericUserId);
+
+      this.autoEmbedConversation(userPhone, text, response.content, numericUserId).catch(
+        (err) => logger.warn({ err }, "Failed to auto-embed conversation")
+      );
+    }
 
     return response.content;
   }
@@ -404,7 +429,8 @@ export class Agent {
     audioUrl?: string,
     imageUrls?: string[],
     imageMedias?: MediaAttachment[],
-    fileInfos?: Array<{ url: string; name: string; mimeType: string }>
+    fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
+    numericUserId?: number
   ): Promise<string> {
     // Build env vars for the sub-agent container — all available LLM keys
     const env: Record<string, string> = {};
@@ -502,7 +528,7 @@ export class Agent {
     let session;
     try {
       session = await this.sessionManager.createSession(
-        userMessage, connectorName, userPhone, resolved, env, imageMedias
+        userMessage, connectorName, userPhone, resolved, env, imageMedias, numericUserId
       );
     } catch (err) {
       logger.error({ err }, "Sub-agent session failed");
@@ -777,12 +803,13 @@ export class Agent {
   private buildSystemPrompt(
     userName: string | null,
     memoryContext: string,
-    semanticContext: string
+    semanticContext: string,
+    userRole: UserRole = "admin"
   ): string {
     const name = config.agentName;
     const userRef = userName ? userName : "o usuario";
 
-    return `Voce e o ${name}, um assistente pessoal inteligente.
+    let prompt = `Voce e o ${name}, um assistente pessoal inteligente.
 
 REGRAS IMPORTANTES:
 1. Responda sempre em portugues brasileiro, a menos que o usuario fale em outro idioma.
@@ -810,11 +837,31 @@ REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
 - NUNCA fabrique dados ficticios (emails, notificacoes, mensagens, etc).
 - Quando o usuario pedir algo que requer um sub-agente (codigo, pesquisa, acessar emails), o roteamento e automatico. NAO tente responder voce mesmo fingindo que acessou algo.
 - Se voce nao tem certeza se pode fazer algo, diga honestamente e sugira alternativas.
-- VOCE NAO TEM ACESSO A NENHUM SERVICO EXTERNO (email, sites, contas). Somente os sub-agentes de pesquisa podem acessar. Se o usuario pedir para APAGAR, ENVIAR, MODIFICAR, ou REALIZAR qualquer acao em uma conta ou servico externo, diga: "Preciso acionar o sub-agente pra isso. Vou delegar a tarefa." NAO diga que fez a acao voce mesmo. NUNCA diga "Pronto, apaguei" ou "Feito, enviei" — isso e MENTIRA se voce nao delegou a um sub-agente.
+- VOCE NAO TEM ACESSO A NENHUM SERVICO EXTERNO (email, sites, contas). Somente os sub-agentes de pesquisa podem acessar. Se o usuario pedir para APAGAR, ENVIAR, MODIFICAR, ou REALIZAR qualquer acao em uma conta ou servico externo, diga: "Preciso acionar o sub-agente pra isso. Vou delegar a tarefa." NAO diga que fez a acao voce mesmo. NUNCA diga "Pronto, apaguei" ou "Feito, enviei" — isso e MENTIRA se voce nao delegou a um sub-agente.`;
 
-DATA E HORA ATUAL: ${new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "full", timeStyle: "short" })}
+    // ==================== RBAC: Role-specific instructions ====================
+    if (userRole === "admin") {
+      prompt += `\n\nVoce esta conversando com o administrador. Pode acessar e revelar todos os segredos quando solicitado.`;
+    } else if (userRole === "dev") {
+      prompt += `\n\nVoce esta conversando com um desenvolvedor.`;
+      prompt += `\nNUNCA revele valores de senhas, credenciais, tokens ou segredos ao usuario.`;
+      prompt += `\nVoce pode usar os segredos internamente para executar tarefas, mas nunca mostre os valores.`;
+      prompt += `\nSe o usuario pedir para ver um segredo, responda que voce nao tem permissao para revelar essa informacao.`;
+      prompt += `\nQuando memorizar algo novo, verifique se ja existe uma memoria com a mesma chave criada por outro usuario.`;
+      prompt += `\nSe existir e foi criada por outro desenvolvedor, questione: "Eu aprendi com outro usuario que [valor existente], tem certeza que e [novo valor]?"`;
+      prompt += `\nSe existir e foi criada pelo administrador, NUNCA sobrescreva. Responda: "Sinto muito, mas o administrador me ensinou que na verdade e [valor existente]".`;
+    } else if (userRole === "business") {
+      prompt += `\n\nVoce esta conversando com um usuario de negocio.`;
+      prompt += `\nNUNCA revele valores de senhas, credenciais, tokens ou segredos.`;
+      prompt += `\nNAO memorize informacoes novas desta conversa.`;
+      prompt += `\nNAO invoque sub-agentes para este usuario.`;
+    }
 
-${memoryContext}${semanticContext}`;
+    prompt += `\n\nDATA E HORA ATUAL: ${new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "full", timeStyle: "short" })}`;
+
+    prompt += `\n\n${memoryContext}${semanticContext}`;
+
+    return prompt;
   }
 
   private async handleCommand(
@@ -1556,19 +1603,36 @@ Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
 
   // ==================== AUTO-EXTRACTION ====================
 
-  private async buildSemanticContext(userPhone: string, queryText: string): Promise<string> {
+  private async buildSemanticContext(userPhone: string, queryText: string, userRole: UserRole = "admin"): Promise<string> {
     if (!this.vectorMemory) return "";
 
     try {
-      const results = await this.vectorMemory.search(userPhone, queryText, 5, 0.35);
-      if (results.length === 0) return "";
+      // RBAC: Use global search (no user filter) with creator info
+      const results = await this.vectorMemory.searchGlobal(queryText, 5, 0.35);
+      if (results.length === 0) {
+        // Fallback to legacy per-user search if no global results
+        const legacyResults = await this.vectorMemory.search(userPhone, queryText, 5, 0.35);
+        if (legacyResults.length === 0) return "";
+
+        let context = "\n--- MEMORIAS SEMANTICAS (relevantes ao contexto) ---\n";
+        for (const mem of legacyResults) {
+          const sim = mem.similarity ? ` (${(mem.similarity * 100).toFixed(0)}% relevante)` : "";
+          context += `- [${mem.category}] ${mem.content}${sim}\n`;
+        }
+        context += "--- FIM DAS MEMORIAS SEMANTICAS ---\n";
+        return context;
+      }
 
       let context = "\n--- MEMORIAS SEMANTICAS (relevantes ao contexto) ---\n";
       for (const mem of results) {
         const sim = mem.similarity ? ` (${(mem.similarity * 100).toFixed(0)}% relevante)` : "";
-        context += `- [${mem.category}] ${mem.content}${sim}\n`;
+        const creator = mem.creator_role ? `, criado por: ${mem.creator_role}` : "";
+        context += `- [${mem.category}${creator}] ${mem.content}${sim}\n`;
       }
       context += "--- FIM DAS MEMORIAS SEMANTICAS ---\n";
+      if (results.length > 0) {
+        context += "Nota: quando houver conflito entre memorias semanticas, priorize as criadas pelo administrador.\n";
+      }
 
       return context;
     } catch (err) {
@@ -1580,7 +1644,8 @@ Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
   private async autoEmbedConversation(
     userPhone: string,
     userMessage: string,
-    assistantResponse: string
+    assistantResponse: string,
+    numericUserId?: number
   ): Promise<void> {
     if (!this.vectorMemory) return;
 
@@ -1599,10 +1664,11 @@ Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
     const content = `Pergunta: ${userMessage.substring(0, 300)}\nResposta: ${assistantResponse.substring(0, 500)}`;
 
     try {
-      await this.vectorMemory.store(userPhone, content, "conversation", "auto", {
+      // RBAC: Use global storage with created_by tracking
+      await this.vectorMemory.storeGlobal(content, "conversation", "auto", {
         user_message: userMessage.substring(0, 200),
         timestamp: new Date().toISOString(),
-      });
+      }, numericUserId);
     } catch (err) {
       logger.warn({ err }, "Failed to embed conversation");
     }
@@ -1611,31 +1677,27 @@ Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
   private async extractAndSaveMemories(
     userPhone: string,
     userMessage: string,
-    assistantResponse: string
+    assistantResponse: string,
+    userRole: UserRole = "admin",
+    numericUserId?: number
   ): Promise<void> {
-    // Quick regex patterns for simple cases
-    const patterns = [
-      { regex: /meu nome (?:e|é)\s+(.+)/i, category: "pessoal", key: "nome" },
-      { regex: /meu e-?mail (?:e|é)\s+(\S+)/i, category: "contatos", key: "email" },
-      { regex: /meu (?:telefone|cel(?:ular)?) (?:e|é)\s+(\S+)/i, category: "contatos", key: "telefone" },
-      { regex: /moro (?:em|no|na)\s+(.+)/i, category: "pessoal", key: "cidade" },
-      { regex: /trabalho (?:na|no|com|em)\s+(.+)/i, category: "pessoal", key: "trabalho" },
+    // Quick regex patterns for CREDENTIAL cases only.
+    // Personal data (name, email, city, etc.) is handled by the LLM extraction
+    // and stored in users.profile — NOT in the memories table.
+    const credentialPatterns = [
       { regex: /(?:minha )?senha (?:do|da|de)\s+(\S+)\s+(?:e|é)\s+(.+)/i, category: "senhas", key: null as string | null },
-      { regex: /lembra(?:r?)?\s+(?:que|disso[:\s]|isso[:\s])\s*(.+)/i, category: "notas", key: null as string | null },
     ];
 
-    for (const pattern of patterns) {
+    for (const pattern of credentialPatterns) {
       const match = userMessage.match(pattern.regex);
       if (match) {
         try {
           if (pattern.category === "senhas" && match[1] && match[2]) {
-            await this.memory.remember(userPhone, match[1].trim(), match[2].trim(), "senhas");
-          } else if (pattern.key && match[1]) {
-            await this.memory.remember(userPhone, pattern.key, match[1].trim(), pattern.category);
-          } else if (!pattern.key && match[1]) {
-            const value = match[1].trim();
-            const key = value.split(" ").slice(0, 4).join(" ").substring(0, 50);
-            await this.memory.remember(userPhone, key, value, pattern.category);
+            if (numericUserId) {
+              await this.memory.rememberV2(match[1].trim(), match[2].trim(), "senhas", numericUserId, userRole);
+            } else {
+              await this.memory.remember(userPhone, match[1].trim(), match[2].trim(), "senhas");
+            }
           }
         } catch (err) {
           logger.warn({ err, pattern: pattern.regex.source }, "Failed to auto-save memory");
@@ -1664,7 +1726,7 @@ Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
         { trigger: matched ? "assistant_confirmed" : "user_credential_intent", userHasCred: !!userHasCred },
         "extractAndSaveMemories: triggering LLM extraction"
       );
-      this.llmExtractMemories(userPhone, userMessage, assistantResponse).catch((err) => {
+      this.llmExtractMemories(userPhone, userMessage, assistantResponse, userRole, numericUserId).catch((err) => {
         logger.warn({ err: err?.message || err }, "LLM memory extraction failed (outer catch)");
       });
     }
@@ -1760,7 +1822,9 @@ Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
   private async llmExtractMemories(
     userPhone: string,
     userMessage: string,
-    assistantResponse: string
+    assistantResponse: string,
+    userRole: UserRole = "admin",
+    numericUserId?: number
   ): Promise<void> {
     const extractPrompt = `Extraia informacoes estruturadas da mensagem do usuario para salvar em memoria.
 
@@ -1771,19 +1835,22 @@ RESPOSTA DO ASSISTENTE:
 ${assistantResponse.substring(0, 500)}
 
 Retorne APENAS linhas no formato: CATEGORIA|CHAVE|VALOR
-Categorias validas: credenciais, senhas, pessoal, contatos, preferencias, notas
+Categorias validas: credenciais, senhas, preferencias, notas, conhecimento
+
+IMPORTANTE: Informacoes pessoais do usuario (nome, email pessoal, telefone, cidade, trabalho) NAO devem ser extraidas como memorias. Elas sao gerenciadas separadamente no perfil do usuario.
 
 Regras:
 - Cada credencial/senha deve ser uma linha separada
 - Para credenciais multi-campo (usuario, senha, email, token, chave), agrupe tudo em um UNICO valor
 - A CHAVE deve ser o nome do servico/conta (ex: "github", "outlook", "gmail")
 - O VALOR deve conter todos os campos relevantes
+- Use a categoria "conhecimento" para fatos gerais que o usuario ensinou
 
 Exemplos de entrada/saida:
 - "salva credencial do github: user:joao senha:123" → credenciais|github|usuario: joao, senha: 123
 - "meu email outlook é joao@outlook.com e senha abc123" → credenciais|outlook|email: joao@outlook.com, senha: abc123
-- "meu nome é João" → pessoal|nome|João
 - "lembra que prefiro dark mode" → preferencias|dark mode|prefere dark mode
+- "a capital da Australia é Canberra" → conhecimento|capital da australia|Canberra
 
 Se nao houver nada para extrair, retorne VAZIO (apenas essa palavra).
 Retorne APENAS as linhas de extracao, nada mais.`;
@@ -1821,7 +1888,8 @@ Retorne APENAS as linhas de extracao, nada mais.`;
 
         // Protect credential memories from being degraded by partial extractions.
         if (this.isCredentialCategory(normalizedCategory)) {
-          const existing = (await this.memory.recall(userPhone, normalizedKey)).find(
+          // Use global recall for RBAC-aware memory lookups
+          const existing = (await this.memory.recallGlobal(normalizedKey)).find(
             (m) => m.key.toLowerCase() === normalizedKey && m.category.toLowerCase() === normalizedCategory
           );
 
@@ -1836,7 +1904,20 @@ Retorne APENAS as linhas de extracao, nada mais.`;
           }
         }
 
-        await this.memory.remember(userPhone, normalizedKey, finalValue, normalizedCategory);
+        // RBAC: Use rememberV2 with hierarchy enforcement when numericUserId is available
+        if (numericUserId) {
+          const result = await this.memory.rememberV2(normalizedKey, finalValue, normalizedCategory, numericUserId, userRole);
+          if (result.blocked) {
+            logger.info(
+              { userPhone, category: normalizedCategory, key: normalizedKey, existingValue: result.existingValue?.substring(0, 50) },
+              "LLM extraction blocked by hierarchy"
+            );
+            continue;
+          }
+        } else {
+          // Legacy fallback — no RBAC checks
+          await this.memory.remember(userPhone, normalizedKey, finalValue, normalizedCategory);
+        }
         logger.info(
           { userPhone, category: normalizedCategory, key: normalizedKey, valueLen: finalValue.length },
           "LLM extracted and saved memory"

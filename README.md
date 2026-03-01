@@ -1,17 +1,18 @@
 # Rick — Personal AI Agent on WhatsApp & Web
 
-Rick is a personal AI assistant that runs on WhatsApp and a Web UI. You message yourself (or open the web interface), and Rick answers — with persistent memory, multi-LLM routing, autonomous sub-agents, browser automation, self-editing, and zero server cost.
+Rick is a multi-user personal AI assistant that runs on WhatsApp and a Web UI. Multiple users can interact with Rick through WhatsApp, each with role-based access control (RBAC). The admin manages users and has full access through the Web UI.
 
 Built on Oracle Cloud Always Free VMs, Rick orchestrates multiple LLM providers and spawns isolated Docker containers with a unified sub-agent that can browse the web, run shell commands, read/write files, and query databases.
 
 ## Architecture
 
 ```
- WhatsApp (self-chat)       Web UI (rick.barroso.tec.br)
+ WhatsApp (multi-user)       Web UI (admin only)
         │                            │
    WhatsApp Connector          Web Connector
-        │                      (WebSocket)
-        └──────────┬─────────────┘
+   + UserService               (WebSocket)
+        │                            │
+        └──────────┬─────────────────┘
             ConnectorManager
                  │
              Agent (orchestrator)
@@ -22,8 +23,8 @@ Built on Oracle Cloud Always Free VMs, Rick orchestrates multiple LLM providers 
  (Gemini)    (multi-LLM)        (PG/SQLite + pgvector)
      │           │                      │
      ▼           ▼                      │
- SessionManager  OAuth                  │
-     │        (Claude/GPT)              │
+ SessionManager  OAuth            UserService
+     │        (Claude/GPT)         (RBAC)
      ▼                                  │
   Unified Sub-Agent Container           │
   (Claude→GPT→Gemini Pro→Flash)         │
@@ -32,17 +33,38 @@ Built on Oracle Cloud Always Free VMs, Rick orchestrates multiple LLM providers 
 
 ### How a message flows
 
-1. **Connector** (WhatsApp or Web) receives a message, wraps it as an `IncomingMessage`, and passes it to the **ConnectorManager**
-2. **Agent.handleMessage()** serializes per user (message queue prevents race conditions) and routes it:
+1. **Connector** (WhatsApp or Web) receives a message, resolves the user via `UserService` (connector identity → user record), and wraps it as an `IncomingMessage` with RBAC fields (`numericUserId`, `userRole`, `userStatus`)
+2. If user is **pending** or **blocked**: message is saved for admin visibility, but no LLM processing occurs. New pending users trigger a badge update in the admin's Web UI.
+3. **Agent.handleMessage()** serializes per user (message queue prevents race conditions) and routes it:
    - `/commands` → slash command handler
    - Edit mode active → Claude Code container
    - Audio → transcribed to text via Gemini, then routed normally
    - Active sub-agent session → relay (continuation, close, or nag)
+   - Classification skipped for **business** users (cannot invoke sub-agents)
    - Otherwise → **Classifier** decides: `SELF` (direct chat) or `DELEGATE` (sub-agent)
-3. For `SELF`: Gemini Flash responds with conversation history + memory context
-4. For `DELEGATE`: a unified Docker container is spawned with all LLM providers, credentials injected, output streamed back via the originating connector
+4. For `SELF`: Gemini Flash responds with user-isolated conversation history + global memory context (secrets filtered for non-admin). Learning (memory extraction + embedding) only occurs if `canLearn(role)`.
+5. For `DELEGATE`: a unified Docker container is spawned with all LLM providers, credentials injected, output streamed back via the originating connector. Session persisted to `sub_agent_sessions` for audit.
 
 ## Features
+
+### Role-Based Access Control (RBAC)
+
+Rick supports multiple users with different roles:
+
+| Role | Chat | Learning | Sub-agents | View Secrets | Web UI |
+|------|:----:|:--------:|:----------:|:------------:|:------:|
+| **Admin** | Yes | Yes | Yes | Yes | Yes |
+| **Dev** | Yes | Yes | Yes | No (sub-agents use them internally) | No |
+| **Business** | Yes | No | No | No | No |
+
+- **Admin**: Single user, fixed at installation, manages all users via Web UI
+- **Dev**: Chat + teach Rick + sub-agents via WhatsApp/connectors
+- **Business**: Chat only via WhatsApp/connectors
+- **Pending**: New users start with no role. Their messages are saved but not processed until the admin assigns a role.
+
+Users are resolved via `connector_identities` — the same physical user can connect through multiple connectors (WhatsApp, future Discord/Telegram).
+
+Memories are **global** (shared across all users), with `created_by` tracking and hierarchy enforcement: admin memories cannot be overwritten by dev users. Dev-dev conflicts are handled by the LLM via system prompt instructions.
 
 ### Multi-Connector Architecture
 
@@ -50,8 +72,8 @@ Rick supports multiple messaging platforms through a connector abstraction:
 
 | Connector | Features |
 |-----------|----------|
-| **WhatsApp** | Self-chat via Baileys v7, polls, audio/image media, typing indicators |
-| **Web UI** | Password-protected WebSocket chat, audio recording, image upload, settings panel, session viewer, OAuth flows, QR code display |
+| **WhatsApp** | Multi-user via Baileys v7, RBAC user resolution, polls, audio/image media, typing indicators |
+| **Web UI** | Admin-only, password-protected WebSocket chat, user management panel, audio recording, image upload, settings panel, session viewer, OAuth flows, QR code display |
 
 Connectors are managed by the `ConnectorManager`, which routes messages bidirectionally between connectors and the Agent core. New connectors (Discord, Telegram, etc.) can be added by implementing the `Connector` interface.
 
@@ -71,15 +93,17 @@ No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect v
 
 Rick has two memory systems working together:
 
-- **Structured memory** (PostgreSQL or SQLite) — key-value pairs organized by category (credentials, personal info, notes, preferences). Supports exact match, Portuguese full-text search, and ILIKE fallback.
-- **Semantic memory** (pgvector) — conversation embeddings via Gemini's embedding model (768 dimensions, HNSW index). Enables "search by meaning" for past conversations.
+- **Structured memory** (PostgreSQL or SQLite) — key-value pairs organized by category (credentials, knowledge, notes, preferences). Global across all users with `created_by` audit tracking. Supports exact match, Portuguese full-text search, and ILIKE fallback.
+- **Semantic memory** (pgvector) — conversation embeddings via Gemini's embedding model (768 dimensions, HNSW index). Global with `created_by` tracking and creator role info. Enables "search by meaning" for past conversations.
 
 Memories are extracted automatically:
-- Regex patterns catch simple cases ("meu nome e Joao", "minha senha do github e...")
+- Regex patterns catch credential cases ("minha senha do github e...")
 - LLM extraction (Gemini Flash) handles complex cases when the assistant confirms saving something
-- Every non-trivial conversation is embedded into vector memory
+- Personal data (name, email, city) goes to `users.profile` JSONB, NOT memories
+- Every non-trivial conversation is embedded into vector memory (global, with `created_by`)
+- RBAC hierarchy: admin memories cannot be overwritten by dev users
 
-Credential memories are protected: partial extractions cannot overwrite richer existing values (smart merge).
+Credential memories are protected: partial extractions cannot overwrite richer existing values (smart merge). Non-admin users cannot view secret values (but sub-agents can use them internally).
 
 Credentials in sensitive categories (`senhas`, `credenciais`, `tokens`, `passwords`, `secrets`) are **encrypted at rest** with AES-256-GCM. The encryption key is derived from `MEMORY_ENCRYPTION_KEY` via scrypt. Encrypted values are stored as `enc:iv:authTag:ciphertext` and decrypted transparently on read. Legacy plaintext values are handled gracefully (backward-compatible).
 
@@ -116,9 +140,10 @@ Rick can edit his own source code:
 
 ### Web UI
 
-The Web UI (`https://rick.barroso.tec.br`) provides a full browser-based interface:
+The Web UI (`https://rick.barroso.tec.br`) provides a full browser-based interface (admin only):
 
 - **Chat**: Send text, record audio (transcribed via Gemini), upload images (single or multi-image)
+- **User management**: View pending/active/blocked users, assign roles (dev/business), block/unblock, view user profiles, conversation history, and sub-agent sessions. Pending user badge with real-time count updates.
 - **Sub-agent sessions**: View active sessions, send follow-up messages, kill sessions, view session history
 - **Public session viewer**: Shareable link (`/s/:sessionId`) for real-time sub-agent output
 - **Settings panel**: View/edit API keys, database URLs, agent config — all persisted via config store
@@ -188,8 +213,26 @@ WebSocket endpoints:
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `ws://host/ws` | Password | Authenticated Web UI real-time chat + settings |
+| `ws://host/ws` | Password | Authenticated Web UI real-time chat + settings + user management |
 | `ws://host/ws/session?id=<id>` | None | Public session viewer real-time messages |
+
+WebSocket message types (admin-only, via `/ws`):
+
+| Type | Direction | Description |
+|------|-----------|-------------|
+| `get_users` | Client→Server | List all users (pending, active, blocked) |
+| `get_pending_count` | Client→Server | Get count of pending users |
+| `get_user_detail` | Client→Server | Get full user profile + identities |
+| `set_user_role` | Client→Server | Assign role (dev/business) to user |
+| `block_user` | Client→Server | Block a user |
+| `unblock_user` | Client→Server | Unblock a user |
+| `update_user_profile` | Client→Server | Update user profile and display name |
+| `get_user_conversations` | Client→Server | Get user's conversation history |
+| `get_user_sessions` | Client→Server | Get user's sub-agent sessions |
+| `pending_count` | Server→Client | Push pending user count (on new user) |
+| `users` | Server→Client | User list response |
+| `user_detail` | Server→Client | User detail response |
+| `user_updated` | Server→Client | User updated confirmation |
 
 ## Project Structure
 
@@ -218,6 +261,8 @@ rick-ai/
 │   │       ├── anthropic.ts           # Anthropic (API key + OAuth)
 │   │       └── openai.ts             # OpenAI (API key + Codex OAuth)
 │   ├── auth/
+│   │   ├── permissions.ts             # RBAC role types, permission matrix, hierarchy checks
+│   │   ├── user-service.ts            # User resolution, CRUD, role management, welcome messages
 │   │   ├── claude-oauth.ts            # Claude OAuth 2.0 + PKCE
 │   │   └── openai-oauth.ts           # OpenAI OAuth 2.0 + PKCE
 │   ├── memory/
@@ -329,17 +374,28 @@ Build-time arguments (injected via Docker):
 ### Structured DB
 
 ```sql
-users (id, phone, name, is_owner, created_at, updated_at)
-memories (id, user_phone, category, key, value, metadata, created_at, updated_at)
-  -- UNIQUE (user_phone, category, key)
+users (id, phone, name, is_owner, role, status, display_name, profile JSONB,
+       last_activity_at, created_at, updated_at)
+  -- role: NULL (pending) | 'admin' | 'dev' | 'business'
+  -- status: 'pending' | 'active' | 'blocked'
+connector_identities (id, user_id, connector, external_id, display_name, created_at)
+  -- Maps connector-specific IDs to users (e.g., WhatsApp phone → user)
+  -- UNIQUE (connector, external_id)
+memories (id, user_phone, category, key, value, metadata, user_id, created_by,
+          created_at, updated_at)
+  -- Global memories with RBAC hierarchy enforcement via created_by
+  -- UNIQUE (category, key) -- global unique constraint
   -- GIN index on to_tsvector('portuguese', key || ' ' || value)
-conversations (id, user_phone, role, content, model_used, tokens_used, created_at)
+conversations (id, user_phone, user_id, role, content, model_used, tokens_used, created_at)
+  -- user_id for RBAC-aware history isolation
 message_log (id, wa_message_id, author, content, created_at)
-oauth_tokens (id, user_phone, provider, access_token, refresh_token, expires_at, ...)
+oauth_tokens (id, user_phone, user_id, provider, access_token, refresh_token, expires_at, ...)
 audio_blobs (id, data BYTEA, mime_type, created_at)
   -- Stores both audio and image binary data
-session_messages (id, session_id, role, content, created_at)
-  -- Sub-agent conversation history for session viewer
+session_messages (id, session_id, user_id, role, content, created_at)
+  -- Sub-agent conversation history (preserved after kill for admin audit)
+sub_agent_sessions (id, user_id, task, status, started_at, ended_at)
+  -- Persisted session audit trail
 config_store (key, value, updated_at)
   -- Runtime config persistence (API keys, settings from Web UI)
 ```
@@ -348,7 +404,8 @@ config_store (key, value, updated_at)
 
 ```sql
 memory_embeddings (id, user_phone, content, category, source, embedding vector(768),
-                   metadata, hit_count, last_hit_at, created_at)
+                   metadata, hit_count, last_hit_at, created_by, created_at)
+  -- Global embeddings with created_by for RBAC context
   -- HNSW index (m=16, ef_construction=64, cosine distance)
 ```
 
@@ -410,8 +467,10 @@ docker compose logs -f agent
 - **Credential separation** — User credentials are stored in a dedicated `credentials` field on sessions, never embedded in task descriptions. They are injected only at the point of execution and never appear in log output.
 - **Encryption at rest** — Sensitive memory categories are encrypted with AES-256-GCM (key derived from `MEMORY_ENCRYPTION_KEY` via scrypt). Backward-compatible with legacy plaintext values.
 - **Sub-agent API isolation** — Sub-agents access Rick's data via a read-only HTTP API authenticated with short-lived JWT tokens (HS256, random key per process). `MEMORY_ENCRYPTION_KEY` and `DATABASE_URL` never leave the main process — sub-agents receive only pre-decrypted values. Tokens expire with the container lifetime.
-- **Web UI authentication** — WebSocket connection requires password verification before any data is exchanged. API endpoints require a token parameter.
+- **RBAC enforcement** — Role-based access control at the agent layer. Business users cannot trigger learning or sub-agents. Dev users cannot view secret values (sub-agents use them internally but never reveal values). Admin memories cannot be overwritten by dev users (hierarchy enforcement).
+- **Web UI authentication** — WebSocket connection requires password verification before any data is exchanged. API endpoints require a token parameter. Web UI is admin-only.
 - **Per-user message serialization** — A promise-chain queue prevents race conditions from concurrent messages mutating shared state.
+- **User isolation** — Each user has isolated conversation history. Pending/blocked user messages are saved for admin visibility but never processed by the LLM.
 - **LLM call timeouts** — All LLM providers (Gemini, Anthropic, OpenAI) have 60-second timeouts to prevent indefinite hangs.
 - **Automatic table pruning** — Conversation history and message logs are capped to prevent unbounded database growth.
 - **Memory deletion protection** — Memories can only be deleted via the explicit `/esquecer` command, never through casual conversation patterns.

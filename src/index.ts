@@ -12,6 +12,7 @@ import { Agent } from "./agent.js";
 import { ConnectorManager } from "./connectors/connector-manager.js";
 import { WhatsAppConnector } from "./connectors/whatsapp.js";
 import { WebConnector } from "./connectors/web.js";
+import { UserService } from "./auth/user-service.js";
 import { closeVectorPool } from "./memory/vector-db.js";
 import { EditSession } from "./subagent/edit-session.js";
 import { startHealthServer, setHealthy, registerAgentApiServices } from "./health.js";
@@ -95,12 +96,19 @@ async function main() {
     logger.info("Vector memory not configured (VECTOR_DATABASE_URL missing)");
   }
 
-  // 8. Create ConnectorManager and Agent
+  // 8. Create services and Agent
+  const userService = new UserService();
   const connectorManager = new ConnectorManager();
   const agent = new Agent(llm, memory, connectorManager, vectorMemory);
 
   // Register services for the sub-agent read-only API (/api/agent/*)
   registerAgentApiServices(memory, vectorMemory);
+
+  // Wire welcome message sender: UserService → ConnectorManager
+  userService.setWelcomeSender(async (connector, externalId, text) => {
+    const conn = connectorManager.get(connector);
+    if (conn) await conn.sendMessage(externalId, text);
+  });
 
   // Wire ConnectorManager → Agent
   connectorManager.onMessage(async (msg) => agent.handleMessage(msg));
@@ -119,13 +127,19 @@ async function main() {
   const stopReaper = EditSession.startReaper();
 
   // 9. Register connectors
-  const whatsapp = new WhatsAppConnector(connectorManager, memory);
+  const whatsapp = new WhatsAppConnector(connectorManager, memory, userService);
   connectorManager.register(whatsapp);
 
   const web = new WebConnector(connectorManager);
   web.setWhatsAppConnector(whatsapp);
   web.setAgentBridge(agent.createWebBridge(web));
+  web.setUserService(userService, memory);
   connectorManager.register(web);
+
+  // Wire pending user notifications: WhatsApp → Web UI badge
+  whatsapp.onPendingUser(() => {
+    web.notifyPendingCount();
+  });
 
   // 10. Start all connectors
   await connectorManager.startAll();

@@ -51,6 +51,18 @@ const VECTOR_MIGRATIONS = [
         ON memory_embeddings(hit_count ASC, created_at ASC);
     `,
   },
+  {
+    name: "003_rbac_created_by",
+    sql: `
+      ALTER TABLE memory_embeddings
+        ADD COLUMN IF NOT EXISTS created_by INTEGER;
+
+      -- Populate created_by for existing embeddings (all belong to admin)
+      UPDATE memory_embeddings SET created_by = (
+        SELECT u.id FROM users u WHERE u.role = 'admin' LIMIT 1
+      ) WHERE created_by IS NULL;
+    `,
+  },
 ];
 
 export async function runVectorMigrations(): Promise<void> {

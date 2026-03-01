@@ -401,6 +401,427 @@
     fill: currentColor;
   }
 
+  /* Users button in sidebar header (and mobile topbar) */
+  .users-btn-header {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+    position: relative;
+  }
+
+  .users-btn-header:hover { background: var(--sidebar-hover); color: var(--text); }
+
+  .users-btn-header svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+  }
+
+  .users-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    background: #e53935;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  .users-badge.hidden { display: none; }
+
+  /* ==================== USERS PANEL ==================== */
+  .users-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 200;
+    display: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+
+  .users-overlay.visible {
+    display: block;
+    opacity: 1;
+  }
+
+  .users-panel {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.95);
+    width: 620px;
+    height: 85vh;
+    max-height: 780px;
+    background: var(--bg);
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    z-index: 201;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
+  }
+
+  .users-panel.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  .users-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    border-radius: 16px 16px 0 0;
+    background: var(--sidebar-bg);
+  }
+
+  .users-header h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .users-close {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+  }
+
+  .users-close:hover { background: var(--sidebar-hover); color: var(--text); }
+
+  .users-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 20px;
+    border-radius: 0 0 16px 16px;
+  }
+
+  /* User list */
+  .user-list-section {
+    margin-bottom: 16px;
+  }
+
+  .user-list-section-title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    padding: 0 4px;
+  }
+
+  .user-list-section-title.clickable {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .user-list-section-title .section-count {
+    font-weight: 400;
+    opacity: 0.7;
+  }
+
+  .user-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .user-item:hover { background: var(--sidebar-hover); }
+
+  .user-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--msg-user);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .user-avatar.pending { background: #ff9800; }
+  .user-avatar.blocked { background: #666; opacity: 0.6; }
+
+  .user-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .user-name {
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .user-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .user-role-badge {
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+
+  .user-role-badge.dev { background: #1565c0; color: #fff; }
+  .user-role-badge.business { background: #2e7d32; color: #fff; }
+  .user-role-badge.pending { background: #ff9800; color: #fff; }
+  .user-role-badge.blocked { background: #555; color: #aaa; }
+
+  /* User detail view (inside users panel) */
+  .user-detail {
+    display: none;
+  }
+
+  .user-detail.visible {
+    display: block;
+  }
+
+  .user-detail-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.82rem;
+    padding: 6px 0;
+    margin-bottom: 12px;
+    transition: color 0.15s;
+  }
+
+  .user-detail-back:hover { color: var(--text); }
+
+  .user-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .user-detail-avatar {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: var(--msg-user);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .user-detail-info {
+    flex: 1;
+  }
+
+  .user-detail-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .user-detail-connectors {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+
+  .user-detail-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .user-detail-actions select {
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--input-bg);
+    color: var(--text);
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+
+  .user-detail-actions button {
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--input-bg);
+    color: var(--text);
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .user-detail-actions button:hover { background: var(--sidebar-hover); }
+
+  .user-detail-actions button.danger {
+    border-color: #c62828;
+    color: #ef5350;
+  }
+
+  .user-detail-actions button.danger:hover {
+    background: #2d0000;
+  }
+
+  .user-detail-actions button.success {
+    border-color: #2e7d32;
+    color: #66bb6a;
+  }
+
+  .user-detail-actions button.success:hover {
+    background: #002d00;
+  }
+
+  .user-detail-section {
+    margin-bottom: 16px;
+  }
+
+  .user-detail-section h4 {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin: 0 0 8px;
+  }
+
+  .user-detail-messages {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    background: var(--sidebar-bg);
+  }
+
+  .user-detail-msg {
+    padding: 6px 10px;
+    margin-bottom: 6px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    line-height: 1.4;
+    word-wrap: break-word;
+  }
+
+  .user-detail-msg.user {
+    background: var(--msg-user);
+    color: #fff;
+    margin-left: 30px;
+  }
+
+  .user-detail-msg.assistant {
+    background: var(--msg-agent);
+    color: var(--text);
+    margin-right: 30px;
+  }
+
+  .user-detail-msg-time {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .user-sessions-list {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .user-session-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .user-session-item:last-child { border-bottom: none; }
+  .user-session-item:hover { background: var(--sidebar-hover); }
+
+  .user-session-task {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+  }
+
+  .user-session-status {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    margin-left: 8px;
+  }
+
+  .user-session-status.active { background: #1565c0; color: #fff; }
+  .user-session-status.done { background: #2e7d32; color: #fff; }
+  .user-session-status.killed { background: #555; color: #aaa; }
+
   /* ==================== MAIN AREA ==================== */
   .main-area {
     flex: 1;
@@ -1851,7 +2272,8 @@
       display: flex;
     }
 
-    .sidebar-header-actions .settings-btn-header {
+    .sidebar-header-actions .settings-btn-header,
+    .sidebar-header-actions .users-btn-header {
       display: none;
     }
 
@@ -1878,6 +2300,24 @@
     .confirm-modal {
       width: calc(100% - 20px);
       max-width: calc(100% - 20px);
+    }
+
+    .users-panel {
+      width: 100%;
+      max-width: 100%;
+      height: 100%;
+      max-height: 100%;
+      border-radius: 0;
+      border: none;
+    }
+
+    .users-header {
+      border-radius: 0;
+    }
+
+    .users-body {
+      border-radius: 0;
+      -webkit-overflow-scrolling: touch;
     }
   }
 </style>
@@ -1912,6 +2352,10 @@
         </div>
         <div class="sidebar-header-actions">
           <button class="edit-mode-btn" id="edit-mode-btn" onclick="startEditMode()">Entrar no Modo Edicao</button>
+          <button class="users-btn-header" id="users-btn-desktop" onclick="openUsers()" title="Usuarios">
+            <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+            <span class="users-badge hidden" id="users-badge-desktop">0</span>
+          </button>
           <button class="settings-btn-header" onclick="openSettings()" title="Configuracoes">
             <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
           </button>
@@ -1960,9 +2404,15 @@
         <button class="hamburger-btn" id="hamburger-btn" onclick="toggleSidebar()">
           <svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
         </button>
-        <button class="settings-btn-header" onclick="openSettings()" title="Configuracoes">
-          <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
-        </button>
+        <div style="display:flex;gap:4px;">
+          <button class="users-btn-header" id="users-btn-mobile" onclick="openUsers()" title="Usuarios">
+            <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+            <span class="users-badge hidden" id="users-badge-mobile">0</span>
+          </button>
+          <button class="settings-btn-header" onclick="openSettings()" title="Configuracoes">
+            <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
+          </button>
+        </div>
       </div>
 
       <!-- Messages container per session (we keep them in a map, show/hide) -->
@@ -2314,6 +2764,32 @@
   </div>
 </div>
 
+<!-- USERS PANEL -->
+<div class="users-overlay" id="users-overlay" onclick="closeUsers()"></div>
+<div class="users-panel" id="users-panel">
+  <div class="users-header">
+    <h2>Usuarios</h2>
+    <button class="users-close" onclick="closeUsers()">&times;</button>
+  </div>
+  <div class="users-body" id="users-body">
+    <!-- User list view (default) -->
+    <div id="users-list-view">
+      <div id="users-list-content">
+        <div style="text-align:center;color:var(--text-muted);padding:40px;">Carregando...</div>
+      </div>
+    </div>
+
+    <!-- User detail view (shown when clicking a user) -->
+    <div class="user-detail" id="user-detail-view">
+      <button class="user-detail-back" onclick="showUsersList()">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+        Voltar
+      </button>
+      <div id="user-detail-content"></div>
+    </div>
+  </div>
+</div>
+
 <!-- OAUTH FLOW MODAL -->
 <div class="confirm-overlay" id="oauth-overlay" onclick="closeOAuthModal()"></div>
 <div class="confirm-modal" id="oauth-modal">
@@ -2458,6 +2934,10 @@ var oauthConnected = false;
 var providerConnectedForEdit = false;
 var whatsappConnected = false;
 var currentSettings = {};
+var pendingUserCount = 0;
+var usersData = [];
+var selectedUserId = null;
+var blockedSectionCollapsed = true;
 var avatarHovering = false;
 var avatarClickCount = 0;
 var avatarClickTimer = null;
@@ -2591,6 +3071,10 @@ function handleServerMessage(msg) {
       ws.send(JSON.stringify({ type: 'get_settings' }));
       // Load conversation history
       ws.send(JSON.stringify({ type: 'get_history' }));
+      // Update pending user badge
+      if (msg.pendingCount !== undefined) {
+        updatePendingBadge(msg.pendingCount);
+      }
       break;
 
     case 'auth_fail':
@@ -2740,6 +3224,48 @@ function handleServerMessage(msg) {
 
     case 'logs':
       renderLogs(msg.entries || []);
+      break;
+
+    // ==================== RBAC: User Management ====================
+    case 'pending_count':
+      updatePendingBadge(msg.count || 0);
+      break;
+
+    case 'users':
+      usersData = msg.users || [];
+      renderUsersList();
+      break;
+
+    case 'user_detail':
+      if (msg.user) renderUserDetail(msg.user);
+      break;
+
+    case 'user_updated':
+      if (msg.user) {
+        // Update in local cache
+        var idx = usersData.findIndex(function(u) { return u.id === msg.user.id; });
+        if (idx >= 0) {
+          Object.assign(usersData[idx], msg.user);
+          renderUsersList();
+        }
+        // If viewing this user's detail, refresh it
+        if (selectedUserId === msg.user.id) {
+          ws.send(JSON.stringify({ type: 'get_user_detail', userId: msg.user.id }));
+        }
+        showToast('Usuario atualizado');
+      }
+      break;
+
+    case 'user_conversations':
+      if (msg.userId && msg.messages) {
+        renderUserConversations(msg.userId, msg.messages);
+      }
+      break;
+
+    case 'user_sessions':
+      if (msg.userId && msg.sessions) {
+        renderUserSessions(msg.userId, msg.sessions);
+      }
       break;
 
     case 'error':
@@ -4157,6 +4683,315 @@ function openSettings() {
 function closeSettings() {
   document.getElementById('settings-overlay').classList.remove('visible');
   document.getElementById('settings-panel').classList.remove('visible');
+}
+
+// ==================== USERS PANEL ====================
+
+function updatePendingBadge(count) {
+  pendingUserCount = count;
+  var badges = [document.getElementById('users-badge-desktop'), document.getElementById('users-badge-mobile')];
+  badges.forEach(function(badge) {
+    if (!badge) return;
+    if (count > 0) {
+      badge.textContent = count > 99 ? '99+' : String(count);
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+  });
+}
+
+function openUsers() {
+  document.getElementById('users-overlay').classList.add('visible');
+  document.getElementById('users-panel').classList.add('visible');
+  // Show list view, hide detail view
+  showUsersList();
+  // Request users list
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'get_users' }));
+  }
+}
+
+function closeUsers() {
+  document.getElementById('users-overlay').classList.remove('visible');
+  document.getElementById('users-panel').classList.remove('visible');
+  selectedUserId = null;
+}
+
+function showUsersList() {
+  document.getElementById('users-list-view').style.display = 'block';
+  document.getElementById('user-detail-view').classList.remove('visible');
+  selectedUserId = null;
+}
+
+function getUserInitials(user) {
+  var name = user.displayName || '';
+  if (!name && user.identities && user.identities.length > 0) {
+    name = user.identities[0].displayName || user.identities[0].externalId || '';
+  }
+  if (!name) return '?';
+  var parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.substring(0, 2).toUpperCase();
+}
+
+function getUserDisplayName(user) {
+  return user.displayName || (user.identities && user.identities[0] && user.identities[0].displayName) || 'Usuario #' + user.id;
+}
+
+function getUserConnectorInfo(user) {
+  if (!user.identities || user.identities.length === 0) return '';
+  return user.identities.map(function(i) {
+    var shortId = i.externalId || '';
+    if (shortId.length > 15) shortId = shortId.substring(0, 6) + '...' + shortId.slice(-4);
+    return i.connector + ': ' + shortId;
+  }).join(' | ');
+}
+
+function timeAgo(isoStr) {
+  if (!isoStr) return '';
+  var d = new Date(isoStr);
+  var now = new Date();
+  var diffMs = now - d;
+  var diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return 'agora';
+  if (diffMin < 60) return diffMin + 'min atras';
+  var diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return diffH + 'h atras';
+  var diffD = Math.floor(diffH / 24);
+  if (diffD < 30) return diffD + 'd atras';
+  return d.toLocaleDateString('pt-BR');
+}
+
+function renderUsersList() {
+  var container = document.getElementById('users-list-content');
+  if (usersData.length === 0) {
+    container.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:40px;">Nenhum usuario encontrado</div>';
+    return;
+  }
+
+  var pending = usersData.filter(function(u) { return u.status === 'pending'; });
+  var active = usersData.filter(function(u) { return u.status === 'active'; });
+  var blocked = usersData.filter(function(u) { return u.status === 'blocked'; });
+
+  var html = '';
+
+  // Pending section
+  if (pending.length > 0) {
+    html += '<div class="user-list-section">';
+    html += '<div class="user-list-section-title">Pendentes <span class="section-count">(' + pending.length + ')</span></div>';
+    pending.forEach(function(u) {
+      html += renderUserItem(u, 'pending');
+    });
+    html += '</div>';
+  }
+
+  // Active section
+  if (active.length > 0) {
+    html += '<div class="user-list-section">';
+    html += '<div class="user-list-section-title">Ativos <span class="section-count">(' + active.length + ')</span></div>';
+    active.forEach(function(u) {
+      var badgeClass = u.role === 'dev' ? 'dev' : 'business';
+      html += renderUserItem(u, badgeClass);
+    });
+    html += '</div>';
+  }
+
+  // Blocked section (collapsible)
+  if (blocked.length > 0) {
+    html += '<div class="user-list-section">';
+    html += '<div class="user-list-section-title clickable" onclick="toggleBlockedSection()">';
+    html += (blockedSectionCollapsed ? '\u25B6' : '\u25BC') + ' Bloqueados <span class="section-count">(' + blocked.length + ')</span>';
+    html += '</div>';
+    if (!blockedSectionCollapsed) {
+      blocked.forEach(function(u) {
+        html += renderUserItem(u, 'blocked');
+      });
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+function renderUserItem(user, badgeClass) {
+  var initials = getUserInitials(user);
+  var name = getUserDisplayName(user);
+  var meta = user.lastActivityAt ? timeAgo(user.lastActivityAt) : timeAgo(user.createdAt);
+  var connInfo = getUserConnectorInfo(user);
+  if (connInfo) meta += ' \u00B7 ' + connInfo;
+  var avatarClass = 'user-avatar' + (badgeClass === 'pending' ? ' pending' : '') + (badgeClass === 'blocked' ? ' blocked' : '');
+  var roleBadge = '';
+  if (user.status === 'pending') {
+    roleBadge = '<span class="user-role-badge pending">pendente</span>';
+  } else if (user.status === 'blocked') {
+    roleBadge = '<span class="user-role-badge blocked">bloqueado</span>';
+  } else if (user.role) {
+    roleBadge = '<span class="user-role-badge ' + user.role + '">' + user.role + '</span>';
+  }
+  return '<div class="user-item" onclick="openUserDetail(' + user.id + ')">' +
+    '<div class="' + avatarClass + '">' + initials + '</div>' +
+    '<div class="user-info">' +
+      '<div class="user-name">' + escapeHtml(name) + '</div>' +
+      '<div class="user-meta">' + escapeHtml(meta) + '</div>' +
+    '</div>' +
+    roleBadge +
+  '</div>';
+}
+
+function toggleBlockedSection() {
+  blockedSectionCollapsed = !blockedSectionCollapsed;
+  renderUsersList();
+}
+
+function openUserDetail(userId) {
+  selectedUserId = userId;
+  document.getElementById('users-list-view').style.display = 'none';
+  document.getElementById('user-detail-view').classList.add('visible');
+  // Request full user detail
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'get_user_detail', userId: userId }));
+    ws.send(JSON.stringify({ type: 'get_user_conversations', userId: userId, limit: 30 }));
+    ws.send(JSON.stringify({ type: 'get_user_sessions', userId: userId }));
+  }
+}
+
+function renderUserDetail(user) {
+  var container = document.getElementById('user-detail-content');
+  var initials = getUserInitials(user);
+  var name = getUserDisplayName(user);
+  var connInfo = getUserConnectorInfo(user);
+
+  var html = '';
+
+  // Header
+  html += '<div class="user-detail-header">';
+  html += '<div class="user-detail-avatar">' + initials + '</div>';
+  html += '<div class="user-detail-info">';
+  html += '<div class="user-detail-name">' + escapeHtml(name) + '</div>';
+  html += '<div class="user-detail-connectors">' + escapeHtml(connInfo) + '</div>';
+  if (user.lastActivityAt) {
+    html += '<div class="user-detail-connectors">Ultima atividade: ' + timeAgo(user.lastActivityAt) + '</div>';
+  }
+  html += '</div>';
+  html += '</div>';
+
+  // Actions
+  html += '<div class="user-detail-actions">';
+  html += '<select id="user-role-select" onchange="setUserRole(' + user.id + ', this.value)">';
+  html += '<option value=""' + (!user.role ? ' selected' : '') + '>Sem role</option>';
+  html += '<option value="dev"' + (user.role === 'dev' ? ' selected' : '') + '>Dev</option>';
+  html += '<option value="business"' + (user.role === 'business' ? ' selected' : '') + '>Business</option>';
+  html += '</select>';
+  if (user.status !== 'blocked') {
+    html += '<button class="danger" onclick="blockUser(' + user.id + ')">Bloquear</button>';
+  } else {
+    html += '<button class="success" onclick="unblockUser(' + user.id + ')">Desbloquear</button>';
+  }
+  html += '</div>';
+
+  // Profile section
+  html += '<div class="user-detail-section">';
+  html += '<h4>Perfil</h4>';
+  var profile = user.profile || {};
+  var profileFields = ['nome', 'email', 'telefone', 'cidade', 'trabalho'];
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
+  profileFields.forEach(function(field) {
+    html += '<div style="font-size:0.82rem;">';
+    html += '<span style="color:var(--text-muted);text-transform:capitalize;">' + field + ':</span> ';
+    html += '<span style="color:var(--text);">' + escapeHtml(profile[field] || '-') + '</span>';
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Conversations section (placeholder — filled by renderUserConversations)
+  html += '<div class="user-detail-section">';
+  html += '<h4>Conversas recentes</h4>';
+  html += '<div class="user-detail-messages" id="user-conv-' + user.id + '">';
+  html += '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Carregando...</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Sessions section (placeholder — filled by renderUserSessions)
+  html += '<div class="user-detail-section">';
+  html += '<h4>Sessoes de sub-agente</h4>';
+  html += '<div id="user-sessions-' + user.id + '">';
+  html += '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Carregando...</div>';
+  html += '</div>';
+  html += '</div>';
+
+  container.innerHTML = html;
+}
+
+function renderUserConversations(userId, messages) {
+  var container = document.getElementById('user-conv-' + userId);
+  if (!container) return;
+  if (messages.length === 0) {
+    container.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Nenhuma conversa</div>';
+    return;
+  }
+  var html = '';
+  messages.forEach(function(m) {
+    var cls = m.role === 'user' ? 'user' : 'assistant';
+    var content = m.content || '';
+    if (content.length > 300) content = content.substring(0, 300) + '...';
+    html += '<div class="user-detail-msg ' + cls + '">';
+    html += escapeHtml(content);
+    if (m.created_at) {
+      html += '<div class="user-detail-msg-time">' + new Date(m.created_at).toLocaleString('pt-BR') + '</div>';
+    }
+    html += '</div>';
+  });
+  container.innerHTML = html;
+  container.scrollTop = container.scrollHeight;
+}
+
+function renderUserSessions(userId, sessions) {
+  var container = document.getElementById('user-sessions-' + userId);
+  if (!container) return;
+  if (sessions.length === 0) {
+    container.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Nenhuma sessao</div>';
+    return;
+  }
+  var html = '<div class="user-sessions-list">';
+  sessions.forEach(function(s) {
+    var task = s.task || '(sem descricao)';
+    if (task.length > 60) task = task.substring(0, 60) + '...';
+    var statusClass = s.status || 'active';
+    var statusLabel = s.status === 'active' ? 'Ativo' : s.status === 'done' ? 'Concluido' : 'Encerrado';
+    html += '<div class="user-session-item" onclick="openSessionFromDetail(\'' + s.id + '\')">';
+    html += '<div class="user-session-task">' + escapeHtml(task) + '</div>';
+    html += '<span class="user-session-status ' + statusClass + '">' + statusLabel + '</span>';
+    html += '</div>';
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+function openSessionFromDetail(sessionId) {
+  closeUsers();
+  // Navigate to session page
+  window.open('/s/' + sessionId, '_blank');
+}
+
+function setUserRole(userId, role) {
+  if (!role) return; // "Sem role" selected — no action
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'set_user_role', userId: userId, role: role }));
+  }
+}
+
+function blockUser(userId) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'block_user', userId: userId }));
+  }
+}
+
+function unblockUser(userId) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'unblock_user', userId: userId }));
+  }
 }
 
 function toggleSection(header) {

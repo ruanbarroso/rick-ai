@@ -3,6 +3,8 @@ import { isPostgres } from "./database.js";
 import { logger } from "../config/logger.js";
 import { config } from "../config/env.js";
 import { encryptValue, decryptValue, isSensitiveCategory } from "./crypto.js";
+import type { UserRole } from "../auth/permissions.js";
+import { hasAuthorityOver } from "../auth/permissions.js";
 
 export interface Memory {
   id: number;
@@ -11,8 +13,20 @@ export interface Memory {
   key: string;
   value: string;
   metadata: Record<string, any>;
+  created_by: number | null;
   created_at: Date;
   updated_at: Date;
+}
+
+/** Result of a memory write attempt (RBAC-aware). */
+export interface RememberResult {
+  saved: boolean;
+  /** Write was blocked due to hierarchy (admin > dev). */
+  blocked?: boolean;
+  /** The existing value that prevented the write. */
+  existingValue?: string;
+  /** The memory that was saved or that blocked the write. */
+  memory?: Memory;
 }
 
 export interface FileInfo {
@@ -34,6 +48,10 @@ export interface ConversationMessage {
 export class MemoryService {
   // ==================== MEMORY CRUD ====================
 
+  /**
+   * Save a memory (legacy — no RBAC checks).
+   * @deprecated Use rememberV2() for RBAC-aware writes.
+   */
   async remember(
     userPhone: string,
     key: string,
@@ -57,6 +75,80 @@ export class MemoryService {
     const row = result.rows[0];
     row.value = decryptValue(row.value);
     return row;
+  }
+
+  /**
+   * Save a memory with RBAC hierarchy enforcement.
+   *
+   * Rules:
+   *   - If a memory with the same (category, key) exists and was created by
+   *     a user with higher authority, the write is BLOCKED.
+   *   - Otherwise, the memory is created/updated with created_by tracking.
+   *
+   * @param key - Memory key
+   * @param value - Memory value
+   * @param category - Memory category (default: "general")
+   * @param requestingUserId - ID of the user making the change
+   * @param requestingUserRole - Role of the user making the change
+   * @param metadata - Optional metadata JSON
+   */
+  async rememberV2(
+    key: string,
+    value: string,
+    category: string = "general",
+    requestingUserId: number,
+    requestingUserRole: UserRole,
+    metadata: Record<string, any> = {}
+  ): Promise<RememberResult> {
+    // Check for existing memory with this key
+    const existing = await query(
+      `SELECT m.*, u.role as creator_role FROM memories m
+       LEFT JOIN users u ON u.id = m.created_by
+       WHERE m.category = $1 AND LOWER(m.key) = LOWER($2)
+       LIMIT 1`,
+      [category, key]
+    );
+
+    if (existing.rows.length > 0) {
+      const existingRow = existing.rows[0];
+      const creatorRole = existingRow.creator_role as UserRole;
+
+      // Hierarchy check: can this user overwrite this memory?
+      if (creatorRole && !hasAuthorityOver(requestingUserRole, creatorRole)) {
+        const decryptedValue = decryptValue(existingRow.value);
+        logger.info(
+          { category, key, requestingUserRole, creatorRole },
+          "Memory write blocked by hierarchy"
+        );
+        return {
+          saved: false,
+          blocked: true,
+          existingValue: decryptedValue,
+        };
+      }
+    }
+
+    // Encrypt if sensitive
+    const storedValue = isSensitiveCategory(category) ? encryptValue(value) : value;
+
+    // Upsert using global unique constraint (category, key)
+    const result = await query(
+      `INSERT INTO memories (category, key, value, metadata, created_by, user_id, user_phone)
+       VALUES ($1, $2, $3, $4, $5, $5, '')
+       ON CONFLICT (category, key)
+       DO UPDATE SET value = $3, metadata = $4, created_by = $5, updated_at = NOW()
+       RETURNING *`,
+      [category, key, storedValue, JSON.stringify(metadata), requestingUserId]
+    );
+
+    logger.info(
+      { category, key, createdBy: requestingUserId },
+      "Memory saved (RBAC)"
+    );
+
+    const row = result.rows[0];
+    row.value = decryptValue(row.value);
+    return { saved: true, memory: row };
   }
 
   /**
@@ -184,6 +276,121 @@ export class MemoryService {
     return this.decryptMemories(result.rows);
   }
 
+  // ==================== RBAC-AWARE MEMORY QUERIES ====================
+
+  /**
+   * Search global memories (no user filter).
+   */
+  async recallGlobal(searchTerm: string): Promise<Memory[]> {
+    // Exact key match
+    let result = await query(
+      `SELECT * FROM memories WHERE LOWER(key) = LOWER($1) ORDER BY updated_at DESC`,
+      [searchTerm]
+    );
+    if (result.rows.length > 0) return this.decryptMemories(result.rows);
+
+    // Full-text search (PostgreSQL only)
+    if (isPostgres()) {
+      result = await query(
+        `SELECT *, ts_rank(
+          to_tsvector('portuguese', key || ' ' || value),
+          plainto_tsquery('portuguese', $1)
+         ) as rank
+         FROM memories
+         WHERE to_tsvector('portuguese', key || ' ' || value) @@ plainto_tsquery('portuguese', $1)
+         ORDER BY rank DESC
+         LIMIT 10`,
+        [searchTerm]
+      );
+      if (result.rows.length > 0) return this.decryptMemories(result.rows);
+    }
+
+    // LIKE fallback
+    result = await query(
+      `SELECT * FROM memories
+       WHERE (key ILIKE $1 OR value ILIKE $1)
+       ORDER BY updated_at DESC
+       LIMIT 10`,
+      [`%${searchTerm}%`]
+    );
+    return this.decryptMemories(result.rows);
+  }
+
+  /**
+   * List all global memories, optionally filtered by category.
+   */
+  async listGlobalMemories(category?: string): Promise<Memory[]> {
+    if (category) {
+      const result = await query(
+        `SELECT * FROM memories WHERE category = $1 ORDER BY category, key`,
+        [category]
+      );
+      return this.decryptMemories(result.rows);
+    }
+    const result = await query(
+      `SELECT * FROM memories ORDER BY category, key`
+    );
+    return this.decryptMemories(result.rows);
+  }
+
+  /**
+   * Delete a global memory by key (optionally filtered by category).
+   */
+  async forgetGlobal(key: string, category?: string): Promise<number> {
+    let result;
+    if (category) {
+      result = await query(
+        `DELETE FROM memories WHERE LOWER(key) = LOWER($1) AND category = $2`,
+        [key, category]
+      );
+    } else {
+      result = await query(
+        `DELETE FROM memories WHERE LOWER(key) = LOWER($1)`,
+        [key]
+      );
+    }
+    logger.info({ key, category, deleted: result.rowCount }, "Global memory forgotten");
+    return result.rowCount || 0;
+  }
+
+  /**
+   * Delete all global memories.
+   */
+  async forgetAllGlobal(): Promise<number> {
+    const result = await query(`DELETE FROM memories`);
+    return result.rowCount || 0;
+  }
+
+  /**
+   * Build memory context for LLM system prompt (global memories).
+   * Filters out sensitive categories for non-admin users.
+   */
+  async buildGlobalMemoryContext(role: UserRole): Promise<string> {
+    const memories = await this.listGlobalMemories();
+    if (memories.length === 0) return "";
+
+    const grouped: Record<string, Memory[]> = {};
+    for (const mem of memories) {
+      // Filter out sensitive categories for non-admin users
+      if (role !== "admin" && isSensitiveCategory(mem.category)) continue;
+      if (!grouped[mem.category]) grouped[mem.category] = [];
+      grouped[mem.category].push(mem);
+    }
+
+    if (Object.keys(grouped).length === 0) return "";
+
+    let context = "\n--- MEMORIAS DO RICK ---\n";
+    for (const [category, mems] of Object.entries(grouped)) {
+      context += `\n[${category.toUpperCase()}]\n`;
+      for (const mem of mems) {
+        context += `- ${mem.key}: ${mem.value}\n`;
+      }
+    }
+    context += "--- FIM DAS MEMORIAS ---\n";
+
+    return context;
+  }
+
   // ==================== CONVERSATION HISTORY ====================
 
   /**
@@ -287,6 +494,97 @@ export class MemoryService {
     await query(`DELETE FROM conversations WHERE user_phone = $1`, [
       userPhone,
     ]);
+  }
+
+  // ==================== RBAC-AWARE CONVERSATION METHODS ====================
+
+  /**
+   * Save a message using user_id instead of user_phone.
+   */
+  async saveMessageByUserId(
+    userId: number,
+    role: "user" | "assistant",
+    content: string,
+    modelUsed?: string,
+    tokensUsed?: number,
+    audioUrl?: string,
+    imageUrls?: string[],
+    messageType?: "text" | "tool_use",
+    fileInfos?: FileInfo[]
+  ): Promise<void> {
+    const imageUrlValue = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
+    const fileInfosValue = fileInfos && fileInfos.length > 0 ? JSON.stringify(fileInfos) : null;
+    await query(
+      `INSERT INTO conversations (user_id, user_phone, role, content, model_used, tokens_used, audio_url, image_url, message_type, file_infos)
+       VALUES ($1, '', $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [userId, role, content, modelUsed || null, tokensUsed || null, audioUrl || null, imageUrlValue, messageType || "text", fileInfosValue]
+    );
+
+    this.saveCounter++;
+    if (this.saveCounter % 20 === 0) {
+      query(
+        `DELETE FROM conversations WHERE user_id = $1 AND id NOT IN (
+           SELECT id FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2
+         )`,
+        [userId, MemoryService.MAX_CONVERSATION_MESSAGES]
+      ).catch((err) => logger.warn({ err }, "Conversation pruning failed"));
+    }
+
+    if (this.saveCounter % 100 === 0) {
+      query(
+        `DELETE FROM message_log WHERE id NOT IN (
+           SELECT id FROM message_log ORDER BY created_at DESC LIMIT $1
+         )`,
+        [MemoryService.MAX_MESSAGE_LOG_ENTRIES]
+      ).catch((err) => logger.warn({ err }, "Message log pruning failed"));
+    }
+  }
+
+  /**
+   * Get conversation history by user_id.
+   */
+  async getConversationHistoryByUserId(
+    userId: number,
+    limit?: number
+  ): Promise<ConversationMessage[]> {
+    const maxMessages = limit || config.conversationHistoryLimit;
+    const result = await query(
+      `SELECT role, content, created_at, audio_url, image_url, message_type, file_infos FROM conversations
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [userId, maxMessages]
+    );
+    return result.rows.reverse().map((row: any) => {
+      const msg: ConversationMessage = { role: row.role, content: row.content };
+      if (row.created_at) msg.created_at = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
+      if (row.message_type) msg.message_type = row.message_type;
+      if (row.audio_url) msg.audio_url = row.audio_url;
+      if (row.image_url) {
+        try {
+          const parsed = JSON.parse(row.image_url);
+          msg.image_urls = Array.isArray(parsed) ? parsed : [row.image_url];
+        } catch {
+          msg.image_urls = [row.image_url];
+        }
+      }
+      if (row.file_infos) {
+        try {
+          const parsed = JSON.parse(row.file_infos);
+          msg.file_infos = Array.isArray(parsed) ? parsed : undefined;
+        } catch {
+          // Ignore malformed JSON
+        }
+      }
+      return msg;
+    });
+  }
+
+  /**
+   * Clear conversation history by user_id.
+   */
+  async clearConversationByUserId(userId: number): Promise<void> {
+    await query(`DELETE FROM conversations WHERE user_id = $1`, [userId]);
   }
 
   // ==================== USER MANAGEMENT ====================

@@ -19,6 +19,8 @@ import { promises as fs } from "node:fs";
 import type { Connector, ConnectorCapabilities, IncomingMessage, SendMessageOptions } from "./types.js";
 import type { ConnectorManager } from "./connector-manager.js";
 import { MemoryService } from "../memory/memory-service.js";
+import { UserService } from "../auth/user-service.js";
+import { canChat } from "../auth/permissions.js";
 import { MediaAttachment } from "../llm/types.js";
 import { logger } from "../config/logger.js";
 import { config } from "../config/env.js";
@@ -31,7 +33,8 @@ const AUTH_DIR = path.join(process.cwd(), "auth_info");
  * Implements the Connector interface so the Agent can communicate
  * through WhatsApp without knowing anything about Baileys internals.
  *
- * Self-chat only: messages from other chats are silently ignored.
+ * RBAC: processes messages from any 1:1 chat (not just self-chat).
+ * Users are resolved via connector_identities and filtered by role/status.
  */
 export class WhatsAppConnector implements Connector {
   readonly name = "whatsapp";
@@ -45,6 +48,7 @@ export class WhatsAppConnector implements Connector {
   private sock: WASocket | null = null;
   private manager: ConnectorManager;
   private memory: MemoryService;
+  private userService: UserService;
   private myJid: string | null = null;
   private myLid: string | null = null;
   private reconnectAttempts = 0;
@@ -72,9 +76,16 @@ export class WhatsAppConnector implements Connector {
   private qrListeners: Array<(qr: string) => void> = [];
   private statusListeners: Array<(connected: boolean) => void> = [];
 
-  constructor(manager: ConnectorManager, memory: MemoryService) {
+  /**
+   * Callback notified when a new pending user is created.
+   * Used to push badge updates to the Web UI.
+   */
+  private pendingUserListeners: Array<() => void> = [];
+
+  constructor(manager: ConnectorManager, memory: MemoryService, userService: UserService) {
     this.manager = manager;
     this.memory = memory;
+    this.userService = userService;
   }
 
   // ==================== Connector interface ====================
@@ -246,23 +257,24 @@ export class WhatsAppConnector implements Connector {
       logger.debug({ userId }, "WhatsApp: skipping tool_use message");
       return;
     }
-    const jid = this.getSelfChatJid();
-    if (!jid || !this.sock) {
+    if (!this.sock) {
       logger.warn("WhatsApp: cannot send message — not connected");
       return;
     }
+    // userId here is the external_id (phone number) from connector_identities
+    const jid = `${userId}@s.whatsapp.net`;
     await this.sendTextMessage(jid, text);
   }
 
   async sendPoll(userId: string, question: string, options: string[]): Promise<void> {
-    const jid = this.getSelfChatJid();
-    if (!jid || !this.sock) return;
+    if (!this.sock) return;
+    const jid = `${userId}@s.whatsapp.net`;
     await this.sendPollMessage(jid, question, options);
   }
 
   async setTyping(userId: string, composing: boolean): Promise<void> {
-    const jid = this.getSelfChatJid();
-    if (!jid || !this.sock) return;
+    if (!this.sock) return;
+    const jid = `${userId}@s.whatsapp.net`;
 
     try {
       await this.sock.presenceSubscribe(jid);
@@ -295,6 +307,13 @@ export class WhatsAppConnector implements Connector {
   }
 
   /**
+   * Register a listener notified when a new pending user is created.
+   */
+  onPendingUser(listener: () => void): void {
+    this.pendingUserListeners.push(listener);
+  }
+
+  /**
    * Check if WhatsApp is currently connected.
    */
   isConnected(): boolean {
@@ -312,6 +331,9 @@ export class WhatsAppConnector implements Connector {
       if (chatJid === "status@broadcast") return;
       if (!msg.message) return;
       if (msg.message.protocolMessage) return;
+
+      // Skip group messages — only process 1:1 chats
+      if (chatJid.endsWith("@g.us")) return;
 
       // Check for poll update (vote) messages
       const inner = msg.message.ephemeralMessage?.message || msg.message;
@@ -337,16 +359,46 @@ export class WhatsAppConnector implements Connector {
       const isFromAgent = await this.memory.isAgentMessage(msgId);
       if (isFromAgent) return;
 
-      // Only process messages from self-chat (you messaging yourself)
-      const isSelf = this.isSelfChat(chatJid, fromMe);
-      if (!isSelf) return;
+      // Skip messages from self (fromMe) — admin uses Web UI only
+      if (fromMe) return;
 
-      // Track message
+      // Extract sender phone from JID
+      const senderPhone = chatJid.split("@")[0].split(":")[0];
+      const pushName = msg.pushName || undefined;
+
+      // Track message in message_log for dedup
       const trackText = text || (audioInfo ? "[audio]" : "[imagem]");
       await this.memory.trackMessage(msgId, "USER", trackText);
 
-      const userPhone = this.getMyPhone();
-      const pushName = msg.pushName || undefined;
+      // ==================== RBAC: Resolve user ====================
+      const user = await this.userService.resolveUser("whatsapp", senderPhone, pushName);
+      const isNewPending = user.status === "pending" && user.role === null;
+
+      // Update activity timestamp
+      await this.userService.updateLastActivity(user.id);
+
+      // Save message to conversation history regardless of status (for admin visibility)
+      const messageText = text || (audioInfo ? "[audio]" : "[imagem]");
+      await this.memory.saveMessageByUserId(user.id, "user", messageText);
+
+      // Notify pending user listeners (for badge updates)
+      if (isNewPending) {
+        for (const listener of this.pendingUserListeners) {
+          try { listener(); } catch {}
+        }
+      }
+
+      // If user is blocked or pending, don't process further (no LLM, no response)
+      if (user.status === "blocked") {
+        logger.debug({ userId: user.id, senderPhone }, "Blocked user message saved, no response");
+        return;
+      }
+      if (user.status === "pending" || !user.role || !canChat(user.role)) {
+        logger.debug({ userId: user.id, senderPhone }, "Pending user message saved, no response");
+        return;
+      }
+
+      // ==================== Process message for active users ====================
 
       // Extract quoted message text (if user replied to a message)
       const quotedText = this.extractQuotedText(msg);
@@ -361,13 +413,12 @@ export class WhatsAppConnector implements Connector {
             mimeType: audioInfo.mimeType,
           };
           logger.info(
-            { from: "USER", type: "audio", seconds: audioInfo.seconds, ptt: audioInfo.ptt },
+            { from: senderPhone, type: "audio", seconds: audioInfo.seconds, ptt: audioInfo.ptt },
             "Audio message received"
           );
         } catch (err) {
           logger.error({ err }, "Failed to download audio");
-          const jid = this.getSelfChatJid();
-          if (jid) await this.sendTextMessage(jid, "Nao consegui baixar o audio. Tenta enviar de novo?");
+          await this.sendTextMessage(chatJid, "Nao consegui baixar o audio. Tenta enviar de novo?");
           return;
         }
       } else if (imageInfo) {
@@ -378,19 +429,18 @@ export class WhatsAppConnector implements Connector {
             mimeType: imageInfo.mimeType,
           };
           logger.info(
-            { from: "USER", type: "image", mimeType: imageInfo.mimeType, hasCaption: !!text },
+            { from: senderPhone, type: "image", mimeType: imageInfo.mimeType, hasCaption: !!text },
             "Image message received"
           );
         } catch (err) {
           logger.error({ err }, "Failed to download image");
-          const jid = this.getSelfChatJid();
-          if (jid) await this.sendTextMessage(jid, "Nao consegui baixar a imagem. Tenta enviar de novo?");
+          await this.sendTextMessage(chatJid, "Nao consegui baixar a imagem. Tenta enviar de novo?");
           return;
         }
       } else {
         logger.info(
           {
-            from: "USER",
+            from: senderPhone,
             text: (text || "").substring(0, 100),
             ...(quotedText ? { quotedText: quotedText.substring(0, 80) } : {}),
           },
@@ -415,8 +465,11 @@ export class WhatsAppConnector implements Connector {
       // Build IncomingMessage and route through ConnectorManager
       const incoming: IncomingMessage = {
         connectorName: this.name,
-        userId: userPhone,
-        userName: pushName,
+        userId: senderPhone,
+        numericUserId: user.id,
+        userRole: user.role,
+        userStatus: user.status,
+        userName: user.displayName || pushName,
         text: promptText,
         media,
         quotedText: quotedText || undefined,
@@ -433,14 +486,15 @@ export class WhatsAppConnector implements Connector {
       }
 
       logger.info(
-        { to: "USER", responseLength: response.length },
+        { to: senderPhone, responseLength: response.length },
         "Response sent"
       );
     } catch (err) {
       logger.error({ err, msgId: msg.key.id }, "Error handling message");
 
+      // Try to send error message back to the user
       const errChatJid = msg.key.remoteJid;
-      if (errChatJid && this.isSelfChat(errChatJid, true)) {
+      if (errChatJid && !errChatJid.endsWith("@g.us")) {
         try {
           await this.sendTextMessage(
             errChatJid,
@@ -462,7 +516,6 @@ export class WhatsAppConnector implements Connector {
       if (!pollUpdate) return;
 
       const chatJid = msg.key.remoteJid || "";
-      if (!this.isSelfChat(chatJid, msg.key.fromMe)) return;
 
       // Get the original poll creation message
       const pollCreationKey = pollUpdate.pollCreationMessageKey;
@@ -524,8 +577,9 @@ export class WhatsAppConnector implements Connector {
 
       logger.info({ selectedNames, pollQuestion: pollContent.name }, "Poll vote received");
 
-      const userPhone = this.getMyPhone();
-      await this.manager.handlePollVote(userPhone, selectedNames);
+      // Resolve voter from JID
+      const voterPhone = chatJid.split("@")[0].split(":")[0];
+      await this.manager.handlePollVote(voterPhone, selectedNames);
     } catch (err) {
       logger.error({ err }, "Error handling poll update");
     }

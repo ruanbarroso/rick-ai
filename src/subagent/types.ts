@@ -51,8 +51,10 @@ export interface SubAgentSession {
   credentials: Record<string, string>;
   /** Which connector originated this session (for routing output back) */
   connectorName: string;
-  /** Canonical user ID for routing output back */
+  /** Canonical user ID for routing output back (phone or "owner") */
   userId: string;
+  /** Numeric user ID from the users table (RBAC) — null for legacy sessions */
+  numericUserId: number | null;
   /** Accumulated output from the sub-agent */
   output: string;
   /** Pending question from sub-agent to user */

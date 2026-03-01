@@ -1,4 +1,5 @@
 import type { MediaAttachment } from "../llm/types.js";
+import type { UserRole, UserStatus } from "../auth/permissions.js";
 
 /**
  * A message coming from any connector into the Agent.
@@ -6,8 +7,18 @@ import type { MediaAttachment } from "../llm/types.js";
 export interface IncomingMessage {
   /** Which connector sent this message */
   connectorName: string;
-  /** Canonical user ID (phone number for the owner) */
+  /**
+   * User identifier.
+   * - Legacy: phone number string (pre-RBAC)
+   * - RBAC: numeric user ID as string (post-RBAC)
+   */
   userId: string;
+  /** Numeric user ID from the users table (RBAC). */
+  numericUserId?: number;
+  /** User's role in the RBAC system. null = pending (no access). */
+  userRole?: UserRole;
+  /** User's status in the RBAC system. */
+  userStatus?: UserStatus;
   /** Display name of the user, if known */
   userName?: string;
   /** Text content of the message */

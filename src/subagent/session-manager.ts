@@ -126,6 +126,7 @@ export class SessionManager {
           credentials: {},
           connectorName: "web",
           userId: "owner",
+          numericUserId: null,
           output: "",
           pendingQuestion: null,
           createdAt: createdTime,
@@ -215,7 +216,8 @@ export class SessionManager {
     userId: string,
     credentials: Record<string, string>,
     env: Record<string, string>,
-    images?: MediaAttachment[]
+    images?: MediaAttachment[],
+    numericUserId?: number
   ): Promise<SubAgentSession> {
     const id = randomBytes(8).toString("hex");
     const containerName = `subagent-${id}`;
@@ -229,6 +231,7 @@ export class SessionManager {
       credentials,
       connectorName,
       userId,
+      numericUserId: numericUserId ?? null,
       output: "",
       pendingQuestion: null,
       createdAt: Date.now(),
@@ -237,12 +240,21 @@ export class SessionManager {
 
     this.sessions.set(id, session);
 
+    // Persist session to DB for audit trail
+    if (numericUserId) {
+      this.persistSessionToDB(session).catch((err) =>
+        logger.warn({ err, sessionId: id }, "Failed to persist session to DB")
+      );
+    }
+
     try {
       await this.startContainer(session, env, images);
     } catch (err) {
       logger.error({ err, sessionId: id }, "Failed to start sub-agent container");
       session.state = "killed";
       this.sessions.delete(id);
+      // Update DB status
+      this.updateSessionStatus(id, "killed").catch(() => {});
       throw err;
     }
 
@@ -306,7 +318,8 @@ export class SessionManager {
       this.onSessionMessage(sessionId, "system", JSON.stringify({ state: "killed" }));
     }
 
-    this.deleteSessionMessages(sessionId).catch(() => {});
+    // Persist final state to DB (session_messages are NOT deleted — kept for audit)
+    this.updateSessionStatus(sessionId, "killed").catch(() => {});
     this.sessions.delete(sessionId);
   }
 
@@ -421,12 +434,13 @@ export class SessionManager {
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
 
-    // Resolve upfront credentials from sensitive memory categories
+    // Resolve upfront credentials from sensitive memory categories (global)
     if (this.memoryService) {
       try {
         const sensitiveCategories = ["credenciais", "tokens", "senhas", "secrets", "passwords", "credentials"];
         for (const category of sensitiveCategories) {
-          const mems = await this.memoryService.listMemories(session.userId, category);
+          // Use global memories — credentials are shared across all users
+          const mems = await this.memoryService.listGlobalMemories(category);
           for (const mem of mems) {
             const envKey = `RICK_SECRET_${mem.key
               .toUpperCase()
@@ -527,6 +541,8 @@ export class SessionManager {
           if (this.onSessionMessage) {
             this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }));
           }
+          // Persist done state to DB
+          this.updateSessionStatus(session.id, "done").catch(() => {});
           logger.info({ sessionId: session.id }, "Sub-agent task done");
           break;
 
@@ -578,6 +594,40 @@ export class SessionManager {
     this.saveSessionMessage(session.id, "agent", text).catch(() => {});
   }
 
+  // ==================== SESSION PERSISTENCE (RBAC audit) ====================
+
+  /**
+   * Insert a new row into sub_agent_sessions for audit trail.
+   */
+  private async persistSessionToDB(session: SubAgentSession): Promise<void> {
+    if (!session.numericUserId) return;
+    try {
+      await query(
+        `INSERT INTO sub_agent_sessions (id, user_id, task, status, started_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (id) DO NOTHING`,
+        [session.id, session.numericUserId, session.taskDescription || null, "active"]
+      );
+    } catch (err) {
+      logger.warn({ err, sessionId: session.id }, "Failed to persist session to DB");
+    }
+  }
+
+  /**
+   * Update the status (and ended_at) of a sub_agent_sessions row.
+   */
+  private async updateSessionStatus(sessionId: string, status: string): Promise<void> {
+    try {
+      const endedAt = status === "active" ? null : new Date().toISOString();
+      await query(
+        `UPDATE sub_agent_sessions SET status = $1, ended_at = $2 WHERE id = $3`,
+        [status, endedAt, sessionId]
+      );
+    } catch (err) {
+      logger.warn({ err, sessionId, status }, "Failed to update session status in DB");
+    }
+  }
+
   // ==================== MESSAGE PERSISTENCE ====================
 
   private async saveSessionMessage(
@@ -601,13 +651,8 @@ export class SessionManager {
     }
   }
 
-  private async deleteSessionMessages(sessionId: string): Promise<void> {
-    try {
-      await query(`DELETE FROM session_messages WHERE session_id = $1`, [sessionId]);
-    } catch (err) {
-      logger.warn({ err, sessionId }, "Failed to delete session messages");
-    }
-  }
+  // deleteSessionMessages removed — session messages are now preserved for admin audit.
+  // Only edit session messages are deleted on /exit (handled in agent.ts onCloseCb).
 
   // ==================== IMAGE INJECTION ====================
 

@@ -169,6 +169,104 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS file_infos TEXT`,
     ],
   },
+
+  // ==================== RBAC Migrations ====================
+
+  {
+    name: "009_rbac_schema",
+    statements: [
+      // -- 1. New columns on users table --
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT NULL`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending'`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS profile JSONB DEFAULT '{}'`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ`,
+
+      // -- 2. connector_identities table --
+      `CREATE TABLE IF NOT EXISTS connector_identities (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        connector VARCHAR(50) NOT NULL,
+        external_id VARCHAR(255) NOT NULL,
+        display_name VARCHAR(255),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(connector, external_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_ci_user ON connector_identities(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_ci_lookup ON connector_identities(connector, external_id)`,
+
+      // -- 3. sub_agent_sessions table --
+      `CREATE TABLE IF NOT EXISTS sub_agent_sessions (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        task TEXT,
+        status VARCHAR(20) DEFAULT 'active',
+        started_at TIMESTAMPTZ DEFAULT NOW(),
+        ended_at TIMESTAMPTZ
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_sas_user ON sub_agent_sessions(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_sas_status ON sub_agent_sessions(user_id, status)`,
+
+      // -- 4. Add user_id and created_by to existing tables --
+      `ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id INTEGER`,
+      `ALTER TABLE memories ADD COLUMN IF NOT EXISTS created_by INTEGER`,
+      `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS user_id INTEGER`,
+      `ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS user_id INTEGER`,
+      `ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS user_id INTEGER`,
+
+      // -- 5. New indexes --
+      `CREATE INDEX IF NOT EXISTS idx_conversations_uid ON conversations(user_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_memories_uid ON memories(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_memories_created_by ON memories(created_by)`,
+    ],
+  },
+
+  {
+    name: "010_rbac_data_migration",
+    statements: [
+      // Migrate existing data: everything belongs to the admin (owner).
+      // Step 1: Set the existing owner user to role='admin', status='active'
+      // Use is_owner = 1 which works on both PostgreSQL (boolean) and SQLite (integer)
+      `UPDATE users SET role = 'admin', status = 'active', display_name = name WHERE is_owner = 1`,
+
+      // Step 2: Create connector_identity for the admin's WhatsApp
+      // Uses INSERT ... SELECT to avoid failing if no owner exists (fresh installs)
+      `INSERT INTO connector_identities (user_id, connector, external_id, display_name)
+       SELECT id, 'whatsapp', phone, name FROM users WHERE role = 'admin'
+       ON CONFLICT (connector, external_id) DO NOTHING`,
+
+      // Step 3: Populate user_id in existing tables based on user_phone -> users.phone
+      `UPDATE memories SET user_id = (SELECT id FROM users WHERE users.phone = memories.user_phone), created_by = (SELECT id FROM users WHERE users.phone = memories.user_phone) WHERE user_id IS NULL AND user_phone IS NOT NULL`,
+      `UPDATE conversations SET user_id = (SELECT id FROM users WHERE users.phone = conversations.user_phone) WHERE user_id IS NULL AND user_phone IS NOT NULL`,
+      `UPDATE oauth_tokens SET user_id = (SELECT id FROM users WHERE users.phone = oauth_tokens.user_phone) WHERE user_id IS NULL AND user_phone IS NOT NULL`,
+    ],
+  },
+
+  {
+    name: "011_rbac_memory_global",
+    statements: [
+      // Change memories unique constraint from per-user to global.
+      // Memories are now global knowledge, not per-user.
+      //
+      // PostgreSQL: the UNIQUE(user_phone, category, key) constraint creates
+      // an index named "memories_user_phone_category_key_key". We drop it and
+      // add a new UNIQUE on (category, key) only.
+      //
+      // SQLite: inline UNIQUE constraints create auto-indexes that can't be
+      // dropped. Since all existing data belongs to one user (admin), there
+      // are no (category, key) collisions. The old constraint remains but is
+      // harmless — it's a superset of the new one. The new unique index
+      // enforces the global uniqueness going forward. The old constraint will
+      // be removed in the cleanup phase when user_phone is dropped and the
+      // table is recreated.
+
+      // Drop old constraint index (PostgreSQL only — silently ignored on SQLite)
+      `DROP INDEX IF EXISTS memories_user_phone_category_key_key`,
+
+      // Add new global unique constraint
+      `CREATE UNIQUE INDEX IF NOT EXISTS memories_category_key_unique ON memories(category, key)`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {

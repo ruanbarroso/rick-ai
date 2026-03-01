@@ -5,6 +5,8 @@ import type { Connector, ConnectorCapabilities, IncomingMessage as AgentIncoming
 import type { ConnectorManager } from "./connector-manager.js";
 import type { WhatsAppConnector } from "./whatsapp.js";
 import type { MediaAttachment } from "../llm/types.js";
+import type { UserService, User, UserWithIdentities } from "../auth/user-service.js";
+import type { MemoryService } from "../memory/memory-service.js";
 import { httpServer } from "../health.js";
 import { config } from "../config/env.js";
 import { configSet, SETTINGS_KEY_MAP } from "../memory/config-store.js";
@@ -84,6 +86,12 @@ export class WebConnector implements Connector {
   private clients = new Map<WebSocket, AuthenticatedClient>();
   private whatsappConnector: WhatsAppConnector | null = null;
   private agentBridge: WebAgentBridge | null = null;
+  /** RBAC: user service for admin management */
+  private userService: UserService | null = null;
+  /** RBAC: memory service for accessing user conversations/sessions */
+  private memoryService: MemoryService | null = null;
+  /** Numeric user ID of the admin (resolved on first auth) */
+  private adminUserId: number | null = null;
   /** Tracks whether the agent is currently typing, so reconnecting clients restore the indicator */
   private currentlyTyping = false;
   /** Cached QR code data URL so late-connecting clients can still see the current QR */
@@ -121,6 +129,28 @@ export class WebConnector implements Connector {
    */
   setAgentBridge(bridge: WebAgentBridge): void {
     this.agentBridge = bridge;
+  }
+
+  /**
+   * Wire up RBAC services for user management.
+   */
+  setUserService(userService: UserService, memoryService: MemoryService): void {
+    this.userService = userService;
+    this.memoryService = memoryService;
+  }
+
+  /**
+   * Notify all authenticated web clients about a pending user count change.
+   * Called by the WhatsApp connector when a new pending user is created.
+   */
+  async notifyPendingCount(): Promise<void> {
+    if (!this.userService) return;
+    try {
+      const count = await this.userService.getPendingCount();
+      this.broadcastToAuthenticated({ type: "pending_count", count });
+    } catch (err) {
+      logger.warn({ err }, "Failed to broadcast pending count");
+    }
   }
 
   /**
@@ -194,7 +224,22 @@ export class WebConnector implements Connector {
             if (msg.type === "auth" && msg.password === config.webAuthPassword) {
               client.authenticated = true;
               clearTimeout(authTimeout);
-              this.send(ws, { type: "auth_ok" });
+
+              // Resolve admin user ID for RBAC (once, cached)
+              if (this.adminUserId === null && this.userService) {
+                try {
+                  const admin = await this.userService.getAdminUser();
+                  if (admin) this.adminUserId = admin.id;
+                } catch (_) { /* best-effort */ }
+              }
+
+              // Send pending user count with auth_ok
+              let pendingCount = 0;
+              if (this.userService) {
+                try { pendingCount = await this.userService.getPendingCount(); } catch (_) {}
+              }
+
+              this.send(ws, { type: "auth_ok", pendingCount });
               logger.info("Web client authenticated");
 
               if (this.whatsappConnector) {
@@ -281,6 +326,34 @@ export class WebConnector implements Connector {
               break;
             case "get_logs":
               this.handleGetLogs(ws);
+              break;
+            // ==================== RBAC: User Management ====================
+            case "get_users":
+              await this.handleGetUsers(ws);
+              break;
+            case "get_pending_count":
+              await this.handleGetPendingCount(ws);
+              break;
+            case "get_user_detail":
+              await this.handleGetUserDetail(ws, msg.userId);
+              break;
+            case "set_user_role":
+              await this.handleSetUserRole(ws, msg.userId, msg.role);
+              break;
+            case "block_user":
+              await this.handleBlockUser(ws, msg.userId);
+              break;
+            case "unblock_user":
+              await this.handleUnblockUser(ws, msg.userId);
+              break;
+            case "update_user_profile":
+              await this.handleUpdateUserProfile(ws, msg.userId, msg.profile, msg.displayName);
+              break;
+            case "get_user_conversations":
+              await this.handleGetUserConversations(ws, msg.userId, msg.limit);
+              break;
+            case "get_user_sessions":
+              await this.handleGetUserSessions(ws, msg.userId);
               break;
             default:
               logger.warn({ type: msg.type }, "Unknown WebSocket message type");
@@ -598,6 +671,10 @@ export class WebConnector implements Connector {
       audioUrl,
       imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
       fileInfos: fileInfos.length > 0 ? fileInfos : undefined,
+      // RBAC: Web UI is always the admin
+      numericUserId: this.adminUserId ?? undefined,
+      userRole: "admin",
+      userStatus: "active",
     };
 
     const response = await this.manager.handleIncomingMessage(incoming);
@@ -978,6 +1055,256 @@ export class WebConnector implements Connector {
     } catch (err) {
       logger.warn({ err, sessionId }, "Failed to send message to session from viewer");
       this.broadcastToSessionSubscribers(sessionId, "agent", `Erro: ${(err as Error).message}`);
+    }
+  }
+
+  // ==================== RBAC: User Management ====================
+
+  private async handleGetUsers(ws: WebSocket): Promise<void> {
+    if (!this.userService) {
+      this.send(ws, { type: "users", users: [] });
+      return;
+    }
+
+    try {
+      const users = await this.userService.listUsers();
+      // Attach identities for each user (lightweight — just connector + externalId)
+      const usersWithIds = await Promise.all(
+        users.map(async (u) => {
+          const identities = await this.userService!.getIdentities(u.id);
+          return {
+            id: u.id,
+            role: u.role,
+            status: u.status,
+            displayName: u.displayName,
+            profile: u.profile,
+            lastActivityAt: u.lastActivityAt?.toISOString() || null,
+            createdAt: u.createdAt.toISOString(),
+            identities: identities.map((i) => ({
+              connector: i.connector,
+              externalId: i.externalId,
+              displayName: i.displayName,
+            })),
+          };
+        })
+      );
+      this.send(ws, { type: "users", users: usersWithIds });
+    } catch (err) {
+      logger.error({ err }, "Failed to list users");
+      this.send(ws, { type: "error", text: "Erro ao listar usuarios." });
+    }
+  }
+
+  private async handleGetPendingCount(ws: WebSocket): Promise<void> {
+    if (!this.userService) {
+      this.send(ws, { type: "pending_count", count: 0 });
+      return;
+    }
+
+    try {
+      const count = await this.userService.getPendingCount();
+      this.send(ws, { type: "pending_count", count });
+    } catch (err) {
+      logger.error({ err }, "Failed to get pending count");
+      this.send(ws, { type: "pending_count", count: 0 });
+    }
+  }
+
+  private async handleGetUserDetail(ws: WebSocket, userId: number): Promise<void> {
+    if (!this.userService || !userId) {
+      this.send(ws, { type: "error", text: "Usuario nao encontrado." });
+      return;
+    }
+
+    try {
+      const userWithIds = await this.userService.getUserWithIdentities(userId);
+      if (!userWithIds) {
+        this.send(ws, { type: "error", text: "Usuario nao encontrado." });
+        return;
+      }
+
+      this.send(ws, {
+        type: "user_detail",
+        user: {
+          id: userWithIds.id,
+          role: userWithIds.role,
+          status: userWithIds.status,
+          displayName: userWithIds.displayName,
+          profile: userWithIds.profile,
+          lastActivityAt: userWithIds.lastActivityAt?.toISOString() || null,
+          createdAt: userWithIds.createdAt.toISOString(),
+          identities: userWithIds.identities.map((i) => ({
+            connector: i.connector,
+            externalId: i.externalId,
+            displayName: i.displayName,
+          })),
+        },
+      });
+    } catch (err) {
+      logger.error({ err, userId }, "Failed to get user detail");
+      this.send(ws, { type: "error", text: "Erro ao carregar usuario." });
+    }
+  }
+
+  private async handleSetUserRole(ws: WebSocket, userId: number, role: string): Promise<void> {
+    if (!this.userService || !userId) {
+      this.send(ws, { type: "error", text: "Dados invalidos." });
+      return;
+    }
+
+    if (role !== "dev" && role !== "business") {
+      this.send(ws, { type: "error", text: "Role invalida. Use 'dev' ou 'business'." });
+      return;
+    }
+
+    try {
+      const updated = await this.userService.setUserRole(userId, role);
+      this.send(ws, {
+        type: "user_updated",
+        user: {
+          id: updated.id,
+          role: updated.role,
+          status: updated.status,
+          displayName: updated.displayName,
+        },
+      });
+      // Broadcast updated pending count to all clients
+      this.notifyPendingCount();
+    } catch (err) {
+      logger.error({ err, userId, role }, "Failed to set user role");
+      this.send(ws, { type: "error", text: (err as Error).message || "Erro ao definir role." });
+    }
+  }
+
+  private async handleBlockUser(ws: WebSocket, userId: number): Promise<void> {
+    if (!this.userService || !userId) {
+      this.send(ws, { type: "error", text: "Dados invalidos." });
+      return;
+    }
+
+    try {
+      const updated = await this.userService.blockUser(userId);
+      this.send(ws, {
+        type: "user_updated",
+        user: {
+          id: updated.id,
+          role: updated.role,
+          status: updated.status,
+          displayName: updated.displayName,
+        },
+      });
+    } catch (err) {
+      logger.error({ err, userId }, "Failed to block user");
+      this.send(ws, { type: "error", text: (err as Error).message || "Erro ao bloquear usuario." });
+    }
+  }
+
+  private async handleUnblockUser(ws: WebSocket, userId: number): Promise<void> {
+    if (!this.userService || !userId) {
+      this.send(ws, { type: "error", text: "Dados invalidos." });
+      return;
+    }
+
+    try {
+      const updated = await this.userService.unblockUser(userId);
+      this.send(ws, {
+        type: "user_updated",
+        user: {
+          id: updated.id,
+          role: updated.role,
+          status: updated.status,
+          displayName: updated.displayName,
+        },
+      });
+      // Broadcast updated pending count to all clients
+      this.notifyPendingCount();
+    } catch (err) {
+      logger.error({ err, userId }, "Failed to unblock user");
+      this.send(ws, { type: "error", text: (err as Error).message || "Erro ao desbloquear usuario." });
+    }
+  }
+
+  private async handleUpdateUserProfile(
+    ws: WebSocket,
+    userId: number,
+    profile?: Record<string, any>,
+    displayName?: string
+  ): Promise<void> {
+    if (!this.userService || !userId) {
+      this.send(ws, { type: "error", text: "Dados invalidos." });
+      return;
+    }
+
+    try {
+      if (displayName !== undefined) {
+        await this.userService.updateDisplayName(userId, displayName);
+      }
+      if (profile) {
+        await this.userService.updateProfile(userId, profile);
+      }
+
+      const updated = await this.userService.getUserById(userId);
+      if (updated) {
+        this.send(ws, {
+          type: "user_updated",
+          user: {
+            id: updated.id,
+            role: updated.role,
+            status: updated.status,
+            displayName: updated.displayName,
+            profile: updated.profile,
+          },
+        });
+      }
+    } catch (err) {
+      logger.error({ err, userId }, "Failed to update user profile");
+      this.send(ws, { type: "error", text: "Erro ao atualizar perfil." });
+    }
+  }
+
+  private async handleGetUserConversations(ws: WebSocket, userId: number, limit?: number): Promise<void> {
+    if (!this.memoryService || !userId) {
+      this.send(ws, { type: "user_conversations", userId, messages: [] });
+      return;
+    }
+
+    try {
+      const messages = await this.memoryService.getConversationHistoryByUserId(userId, limit || 50);
+      this.send(ws, { type: "user_conversations", userId, messages });
+    } catch (err) {
+      logger.error({ err, userId }, "Failed to load user conversations");
+      this.send(ws, { type: "user_conversations", userId, messages: [] });
+    }
+  }
+
+  private async handleGetUserSessions(ws: WebSocket, userId: number): Promise<void> {
+    if (!userId) {
+      this.send(ws, { type: "user_sessions", userId, sessions: [] });
+      return;
+    }
+
+    try {
+      const result = await query(
+        `SELECT id, task, status, started_at, ended_at
+         FROM sub_agent_sessions
+         WHERE user_id = $1
+         ORDER BY started_at DESC
+         LIMIT 50`,
+        [userId]
+      );
+
+      const sessions = result.rows.map((r: any) => ({
+        id: r.id,
+        task: r.task,
+        status: r.status,
+        startedAt: r.started_at,
+        endedAt: r.ended_at,
+      }));
+
+      this.send(ws, { type: "user_sessions", userId, sessions });
+    } catch (err) {
+      logger.error({ err, userId }, "Failed to load user sessions");
+      this.send(ws, { type: "user_sessions", userId, sessions: [] });
     }
   }
 
