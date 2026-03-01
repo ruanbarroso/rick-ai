@@ -276,6 +276,8 @@ export class EditSession {
   private lastFailedPrompt: { text: string; medias?: MediaAttachment[]; isContinue: boolean; hadOutput: boolean } | null = null;
   /** Active LLM provider for this session (determines welcome message and credential injection). */
   private activeProvider: EditProvider = "claude";
+  /** Stored env from start() so we can recreate the container if it dies. */
+  private startEnv: Record<string, string> | null = null;
 
   constructor(
     connectorManager: ConnectorManager,
@@ -391,6 +393,96 @@ export class EditSession {
   }
 
   /**
+   * Check if the underlying Docker container is still running.
+   */
+  private async isContainerRunning(): Promise<boolean> {
+    if (!this.containerId) return false;
+    try {
+      const { stdout } = await execFileAsync("docker", [
+        "inspect", "--format", "{{.State.Running}}", this.containerName,
+      ], { timeout: 5_000 });
+      return stdout.trim() === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Ensure the container is running before executing a command.
+   * If the container died (e.g. OOM, Docker restart, etc.), recreate it
+   * transparently so the user can keep working.
+   *
+   * Returns true if the container is ready, false if recreation failed.
+   */
+  private async ensureContainerRunning(): Promise<boolean> {
+    if (await this.isContainerRunning()) return true;
+
+    logger.warn({ sessionId: this.id, containerId: this.containerId }, "Edit container is not running — recreating");
+
+    // Remove the dead container
+    try {
+      await execFileAsync("docker", ["rm", "-f", this.containerName]);
+    } catch {
+      // may already be gone
+    }
+
+    // Recreate the container with the same configuration
+    try {
+      // Rebuild agent API env (fresh JWT token)
+      const agentApiEnv = await this.buildAgentApiEnv();
+
+      const mergedEnv = { ...this.startEnv, ...agentApiEnv };
+      const envArgs: string[] = [];
+      for (const [key, value] of Object.entries(mergedEnv)) {
+        envArgs.push("-e", `${key}=${value}`);
+      }
+
+      const { stdout: containerId } = await execFileAsync("docker", [
+        "run", "-d",
+        "--init",
+        "--ipc=host",
+        "--add-host=host.docker.internal:host-gateway",
+        "--name", this.containerName,
+        ...envArgs,
+        "-e", "DISABLE_AUTOUPDATE=1",
+        "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+        "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
+        "-v", `${this.stagingDir}:/workspace`,
+        "subagent-edit",
+        "sleep", "infinity",
+      ]);
+
+      this.containerId = containerId.trim();
+
+      // Re-inject OAuth credentials if available
+      if (this.startEnv?.CLAUDE_CODE_OAUTH_TOKEN) {
+        const credsJson = JSON.stringify({
+          claudeAiOauth: {
+            accessToken: this.startEnv.CLAUDE_CODE_OAUTH_TOKEN,
+            refreshToken: this.startEnv.CLAUDE_REFRESH_TOKEN || "",
+            expiresAt: Date.now() + 3600 * 1000,
+            scopes: ["user:inference"],
+          },
+        });
+        await execFileAsync("docker", [
+          "exec", this.containerName,
+          "sh", "-c",
+          `echo '${credsJson.replace(/'/g, "'\\''")}' > /home/claude/.claude/.credentials.json`,
+        ]);
+      }
+
+      logger.info(
+        { sessionId: this.id, containerId: this.containerId, container: this.containerName },
+        "Edit container recreated successfully",
+      );
+      return true;
+    } catch (err) {
+      logger.error({ err, sessionId: this.id }, "Failed to recreate edit container");
+      return false;
+    }
+  }
+
+  /**
    * Build the subagent-edit image if it is not present on this host.
    * Runs `docker build` from the project directory using docker/subagent-edit.Dockerfile.
    * Takes a few minutes on first run; subsequent starts are instant.
@@ -435,6 +527,7 @@ export class EditSession {
    * 3. Spin up subagent-edit container with staging dir mounted
    */
   async start(env: Record<string, string>): Promise<void> {
+    this.startEnv = { ...env };
     await this.ensureImageExists();
 
     const projectDir = await getHostProjectDir();
@@ -490,7 +583,7 @@ export class EditSession {
       "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
       "-v", `${this.stagingDir}:/workspace`,
       "subagent-edit",
-      "sleep", "7200", // 2 hours for edit sessions
+      "sleep", "infinity", // kept alive indefinitely; reaper handles cleanup
     ]);
 
     this.containerId = containerId.trim();
@@ -829,6 +922,15 @@ export class EditSession {
       return;
     }
 
+    // Ensure the container is alive before running (may have died due to inactivity/OOM)
+    if (!(await this.ensureContainerRunning())) {
+      await this.sendMessage(
+        "_O container da sessao de edicao morreu e nao foi possivel recria-lo. " +
+        "Use */exit* e inicie uma nova sessao._"
+      );
+      return;
+    }
+
     this.state = "running";
     if (this.activeProvider === "claude") await this.ensureFreshToken();
     this.lastFailedPrompt = { text: prompt, medias, isContinue: false, hadOutput: false };
@@ -859,6 +961,15 @@ export class EditSession {
     }
     if (this.state !== "ready") {
       await this.sendMessage("Aguarde, ainda estou processando...");
+      return;
+    }
+
+    // Ensure the container is alive before running (may have died due to inactivity/OOM)
+    if (!(await this.ensureContainerRunning())) {
+      await this.sendMessage(
+        "_O container da sessao de edicao morreu e nao foi possivel recria-lo. " +
+        "Use */exit* e inicie uma nova sessao._"
+      );
       return;
     }
 
@@ -1326,7 +1437,7 @@ echo "[publish] Codigo publicado com sucesso em github.com/${targetRepo}"
     const agentEnv: Record<string, string> = {};
 
     // JWT token for authenticating against Rick's /api/agent/* endpoints
-    const token = createAgentToken(this.id, this.userId, 7200); // 2h TTL
+    const token = createAgentToken(this.id, this.userId, 86400); // 24h TTL (container lives until reaper kills it)
     const apiUrl = `http://host.docker.internal:${config.webPort}`;
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
