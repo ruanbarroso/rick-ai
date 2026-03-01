@@ -2997,6 +2997,7 @@ var usersData = [];
 var selectedUserId = null;
 var pendingUserConversations = null;
 var pendingUserSessions = null;
+var userDetailTimeout = null;
 var blockedSectionCollapsed = true;
 var avatarHovering = false;
 var avatarClickCount = 0;
@@ -4825,12 +4826,14 @@ function closeUsers() {
   document.getElementById('users-overlay').classList.remove('visible');
   document.getElementById('users-panel').classList.remove('visible');
   selectedUserId = null;
+  if (userDetailTimeout) { clearTimeout(userDetailTimeout); userDetailTimeout = null; }
 }
 
 function showUsersList() {
   document.getElementById('users-list-view').style.display = 'block';
   document.getElementById('user-detail-view').classList.remove('visible');
   selectedUserId = null;
+  if (userDetailTimeout) { clearTimeout(userDetailTimeout); userDetailTimeout = null; }
 }
 
 function getUserInitials(user) {
@@ -4955,6 +4958,9 @@ function toggleBlockedSection() {
 
 function openUserDetail(userId) {
   selectedUserId = userId;
+  pendingUserConversations = null;
+  pendingUserSessions = null;
+  if (userDetailTimeout) clearTimeout(userDetailTimeout);
   document.getElementById('users-list-view').style.display = 'none';
   document.getElementById('user-detail-view').classList.add('visible');
   // Request full user detail
@@ -4963,6 +4969,18 @@ function openUserDetail(userId) {
     ws.send(JSON.stringify({ type: 'get_user_conversations', userId: userId, limit: 30 }));
     ws.send(JSON.stringify({ type: 'get_user_sessions', userId: userId }));
   }
+  // Timeout: if "Carregando..." is still showing after 8s, replace with fallback
+  userDetailTimeout = setTimeout(function() {
+    if (selectedUserId !== userId) return;
+    var convEl = document.getElementById('user-conv-' + userId);
+    if (convEl && convEl.textContent.indexOf('Carregando') !== -1) {
+      convEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Nao foi possivel carregar conversas</div>';
+    }
+    var sessEl = document.getElementById('user-sessions-' + userId);
+    if (sessEl && sessEl.textContent.indexOf('Carregando') !== -1) {
+      sessEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Nao foi possivel carregar sessoes</div>';
+    }
+  }, 8000);
 }
 
 function renderUserDetail(user) {
