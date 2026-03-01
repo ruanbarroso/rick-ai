@@ -452,10 +452,8 @@ body {
 
 <script>
 // ==================== RICK NAMES (must match server + main UI) ====================
-var RICK_NAMES = [
-  'Rick Prime', 'Doofus Rick', 'Simple Rick', 'Wasp Rick', 'Cop Rick',
-  'Toxic Rick', 'Pickle Rick', 'Council Rick', 'Aqua Rick', 'Evil Rick'
-];
+/** Variant name suffixes — must match server VARIANT_SUFFIXES and web-ui AGENT_NAMES_SUFFIXES */
+var VARIANT_SUFFIXES = ['Prime', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Neo', 'Zero', 'Nova', 'Flux'];
 
 function hashString(str) {
   var h = 0;
@@ -466,8 +464,9 @@ function hashString(str) {
   return Math.abs(h);
 }
 
-function sessionRickName(sessionId) {
-  return RICK_NAMES[hashString(sessionId) % RICK_NAMES.length];
+function sessionVariantName(sessionId, agentName) {
+  var suffix = VARIANT_SUFFIXES[hashString(sessionId) % VARIANT_SUFFIXES.length];
+  return (agentName || 'Sub-agente') + ' ' + suffix;
 }
 
 // ==================== STATE ====================
@@ -476,9 +475,9 @@ var ws = null;
 var reconnectAttempts = 0;
 var reconnectTimer = null;
 var sessionState = 'unknown'; // unknown, running, done, killed
-var sessionName = sessionRickName(sessionId);
+var sessionName = sessionVariantName(sessionId, null);
 
-document.title = sessionName + ' - Rick AI';
+document.title = sessionName;
 document.getElementById('header-name').textContent = sessionName;
 
 // ==================== RENDERING ====================
@@ -623,6 +622,12 @@ function connect() {
 
       case 'session_info':
         if (msg.session) {
+          // Update variant name if server provided the agent name
+          if (msg.session.agentName) {
+            sessionName = sessionVariantName(sessionId, msg.session.agentName);
+            document.getElementById('header-name').textContent = sessionName;
+            document.title = sessionName;
+          }
           updateHeaderIcon();
           updateSessionState(msg.session.state);
         }

@@ -407,17 +407,18 @@ export class WebConnector implements Connector {
           const sessions = this.agentBridge!.getSessionsForUI();
           const session = sessions.find((s) => s.id === sessionId);
 
+          const agentName = config.agentName;
           if (session) {
             // Session is live — send history + info
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
-            ws.send(JSON.stringify({ type: "session_info", session }));
+            ws.send(JSON.stringify({ type: "session_info", session: { ...session, agentName } }));
           } else if (history.length > 0) {
             // Session is no longer in memory — check DB for the real status
             const dbStatus = await this.agentBridge!.getSessionStatusFromDB(sessionId);
             // Map DB status ('active'|'done'|'killed') to viewer state
             const state = dbStatus === "killed" ? "killed" : "done";
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
-            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state } }));
+            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state, agentName } }));
           } else {
             // Session doesn't exist and has no history — not found
             ws.send(JSON.stringify({ type: "session_not_found", sessionId }));
@@ -426,7 +427,7 @@ export class WebConnector implements Connector {
           logger.warn({ err, sessionId }, "Failed to load session history for viewer");
           // Send a fallback so the viewer doesn't stay stuck on "Trabalhando..."
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state: "done" } }));
+            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state: "done", agentName: config.agentName } }));
           }
         });
       }
