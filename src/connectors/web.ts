@@ -8,7 +8,7 @@ import type { MediaAttachment } from "../llm/types.js";
 import type { UserService, User, UserWithIdentities } from "../auth/user-service.js";
 import type { MemoryService } from "../memory/memory-service.js";
 import { httpServer } from "../health.js";
-import { config } from "../config/env.js";
+import { config, reloadConfig } from "../config/env.js";
 import { configSet, SETTINGS_KEY_MAP } from "../memory/config-store.js";
 import { isPostgres, query } from "../memory/database.js";
 import { logger, getLogBuffer } from "../config/logger.js";
@@ -738,6 +738,8 @@ export class WebConnector implements Connector {
           devRepoUrl: devRepo,
           githubToken: mask(githubToken),
           githubTokenSet: !!githubToken,
+          agentName: config.agentName,
+          agentLogo: process.env.AGENT_LOGO || "",
           whatsappConnected: this.whatsappConnector?.isConnected() || false,
           editModeActive: this.agentBridge?.isEditModeActive() || false,
           dbBackend: isPostgres() ? "postgresql" : "sqlite",
@@ -785,6 +787,8 @@ export class WebConnector implements Connector {
         return;
       }
 
+      // Reload config object so runtime picks up new values (e.g. AGENT_NAME)
+      reloadConfig();
       logger.info({ keys: Object.keys(settings) }, "Settings saved to config store");
       this.send(ws, {
         type: "settings_saved",

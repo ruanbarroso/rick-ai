@@ -184,7 +184,7 @@ class StreamQueue {
  * connectorName and userId provided at construction time.
  */
 const EDIT_SYSTEM_PROMPT = [
-  "Voce e um agente de edicao do Rick AI, um agente pessoal de IA.",
+  `Voce e um agente de edicao do ${config.agentName} AI, um agente pessoal de IA.`,
   "O workspace /workspace contem o codigo do projeto (src/, Dockerfile, docker-compose.yml, package.json, tsconfig.json, README.md).",
   "O projeto usa Node.js 22, TypeScript, e roda em Docker.",
   "Sempre responda em portugues brasileiro (pt-BR).",

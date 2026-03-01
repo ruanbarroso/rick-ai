@@ -15,19 +15,8 @@ import type { MemoryService } from "../memory/memory-service.js";
 
 const execFileAsync = promisify(execFile);
 
-/** Rick variant names — must match frontend RICK_NAMES array */
-const RICK_NAMES = [
-  "Rick Prime",
-  "Doofus Rick",
-  "Simple Rick",
-  "Wasp Rick",
-  "Cop Rick",
-  "Toxic Rick",
-  "Pickle Rick",
-  "Council Rick",
-  "Aqua Rick",
-  "Evil Rick",
-];
+/** Variant name suffixes — must match frontend AGENT_NAMES_SUFFIXES array */
+const VARIANT_SUFFIXES = ["Prime", "Alpha", "Beta", "Gamma", "Delta", "Omega", "Neo", "Zero", "Nova", "Flux"];
 
 function hashString(str: string): number {
   let h = 0;
@@ -38,9 +27,10 @@ function hashString(str: string): number {
   return Math.abs(h);
 }
 
-/** Get the Rick variant name for a session ID (deterministic, matches frontend). */
+/** Get a variant name for a session ID (deterministic, matches frontend). */
 export function getSessionRickName(sessionId: string): string {
-  return RICK_NAMES[hashString(sessionId) % RICK_NAMES.length];
+  const suffix = VARIANT_SUFFIXES[hashString(sessionId) % VARIANT_SUFFIXES.length];
+  return `${config.agentName} ${suffix}`;
 }
 
 /** Callback for broadcasting messages to public session subscribers (WebSocket viewers). */

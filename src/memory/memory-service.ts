@@ -379,7 +379,7 @@ export class MemoryService {
 
     if (Object.keys(grouped).length === 0) return "";
 
-    let context = "\n--- MEMORIAS DO RICK ---\n";
+    let context = `\n--- MEMORIAS DO ${config.agentName.toUpperCase()} ---\n`;
     for (const [category, mems] of Object.entries(grouped)) {
       context += `\n[${category.toUpperCase()}]\n`;
       for (const mem of mems) {

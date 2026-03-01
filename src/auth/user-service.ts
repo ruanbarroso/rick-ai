@@ -11,6 +11,7 @@
  */
 
 import { query, isPostgres } from "../memory/database.js";
+import { config } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { UserRole, UserStatus } from "./permissions.js";
 
@@ -47,10 +48,13 @@ export interface UserListFilter {
 
 // ==================== Welcome Templates ====================
 
-const WELCOME_TEMPLATES: Record<string, string> = {
-  dev: "Ola! Agora voce tem acesso ao Rick. Pode me perguntar sobre a stack, me ensinar coisas novas, ou pedir para eu executar tarefas.",
-  business: "Ola! Agora voce tem acesso ao Rick. Pode me fazer perguntas e estou aqui para ajudar.",
-};
+function getWelcomeTemplates(): Record<string, string> {
+  const name = config.agentName;
+  return {
+    dev: `Ola! Agora voce tem acesso ao ${name}. Pode me perguntar sobre a stack, me ensinar coisas novas, ou pedir para eu executar tarefas.`,
+    business: `Ola! Agora voce tem acesso ao ${name}. Pode me fazer perguntas e estou aqui para ajudar.`,
+  };
+}
 
 // ==================== Service ====================
 
@@ -298,7 +302,7 @@ export class UserService {
     // Send welcome message on first activation
     if (wasPending && this.welcomeSender) {
       const identities = await this.getIdentities(userId);
-      const template = WELCOME_TEMPLATES[role];
+      const template = getWelcomeTemplates()[role];
       if (template) {
         for (const identity of identities) {
           try {

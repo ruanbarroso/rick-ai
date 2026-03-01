@@ -99,6 +99,8 @@ export const SETTINGS_KEY_MAP: Record<string, string> = {
   devRepoUrl: "DEV_REPO_URL",
   webAuthPassword: "WEB_AUTH_PASSWORD",
   githubToken: "GITHUB_TOKEN",
+  agentName: "AGENT_NAME",
+  agentLogo: "AGENT_LOGO",
 };
 
 /**

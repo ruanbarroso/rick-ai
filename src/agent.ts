@@ -847,7 +847,9 @@ export class Agent {
     const name = config.agentName;
     const userRef = userName ? userName : "o usuario";
 
-    let prompt = `Voce e o ${name}, um assistente pessoal inteligente.
+    const hasSemanticMemory = !!this.vectorMemory;
+
+    let prompt = `Voce e ${name}. Estou a disposicao para ajudar com o que for necessario.
 
 REGRAS IMPORTANTES:
 1. Responda sempre em portugues brasileiro, a menos que o usuario fale em outro idioma.
@@ -857,12 +859,12 @@ REGRAS IMPORTANTES:
 5. Quando o usuario pedir para esquecer algo, confirme que esqueceu.
 6. Voce conhece ${userRef} e deve usar o que sabe sobre ele(a) para personalizar respostas.
 7. Se o usuario compartilhar informacoes pessoais (nome, preferencias, links, senhas, etc.), lembre-se delas automaticamente.
-8. Para senhas e dados sensiveis, avise que esta armazenando mas recomende um gerenciador de senhas.
-9. Voce tem memoria semantica — consegue lembrar de conversas passadas e buscar por significado, nao apenas por palavras exatas.
+8. Para senhas e dados sensiveis, avise que esta armazenando mas recomende um gerenciador de senhas.${hasSemanticMemory ? `
+9. Voce tem memoria semantica — consegue lembrar de conversas passadas e buscar por significado, nao apenas por palavras exatas.` : ""}
 
 CAPACIDADES:
 - Voce roda no Gemini Flash para conversa direta.
-- Voce tem acesso a memorias estruturadas (chave-valor) e semanticas (busca por significado)
+- Voce tem acesso a memorias estruturadas (chave-valor)${hasSemanticMemory ? " e semanticas (busca por significado)" : ""}
 - Voce pode listar, buscar, ou apagar memorias
 - O usuario pode conectar contas com /conectar claude ou /conectar gpt (amplia os modelos disponiveis para o sub-agente)
 - Voce tem um sub-agente autonomo que pode delegar tarefas complexas. Ele e capaz de programar, pesquisar na web, acessar contas do usuario via browser, e executar acoes em servicos externos. O roteamento e automatico — voce nao precisa escolher tipo de sub-agente.
@@ -1168,7 +1170,7 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
     const claudeStatus = await this.claudeOAuth.isConnected(userPhone);
     const gptStatus = await this.openaiOAuth.isConnected(userPhone);
 
-    return `*Modelos do Rick:*
+    return `*Modelos do ${config.agentName}:*
 
 *Chat:* Gemini Flash (conversa direta)
 *Sub-agente:* Claude Opus (primario) → GPT Codex → Gemini Pro (fallbacks)
@@ -1578,7 +1580,7 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
 /desconectar claude | gpt
 
 *Auto-edicao:*
-/edit - entra no modo de edicao (editar codigo do Rick)
+/edit - entra no modo de edicao (editar codigo do ${config.agentName})
 /exit - sai do modo de edicao (descarta mudancas)
 /deploy - aplica mudancas com pipeline seguro
 /publish [usuario/repo] - deploy + push para GitHub

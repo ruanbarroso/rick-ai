@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Rick AI</title>
+<title id="page-title">Rick AI</title>
 <style>
   :root {
     --bg: #0b0f19;
@@ -2326,8 +2326,8 @@
 
 <!-- LOGIN SCREEN -->
 <div id="login-screen">
-  <img class="login-avatar" id="login-avatar" alt="Rick AI">
-  <h1>Rick AI</h1>
+  <img class="login-avatar" id="login-avatar" alt="AI Assistant">
+  <h1 id="login-title">Rick AI</h1>
   <p>Assistente multi-canal</p>
   <div class="login-form">
     <input type="password" id="password-input" placeholder="Senha" autocomplete="current-password" autofocus>
@@ -2345,7 +2345,7 @@
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <img id="sidebar-avatar" alt="Rick AI">
+        <img id="sidebar-avatar" alt="AI Assistant">
         <div class="sidebar-header-text">
           <div class="sidebar-title" id="sidebar-title">Rick AI</div>
           <div class="sidebar-subtitle" id="header-status">Conectando...</div>
@@ -2369,7 +2369,7 @@
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
           </div>
           <div class="session-info">
-            <div class="session-name">Rick C-137</div>
+            <div class="session-name" id="main-session-name">Rick C-137</div>
             <div class="session-desc">Sessao principal</div>
           </div>
           <button class="session-clear" onclick="event.stopPropagation(); confirmClearHistory()" title="Limpar historico">
@@ -2551,6 +2551,34 @@
       </div>
     </div>
 
+    <!-- Assistant Identity -->
+    <div class="settings-section">
+      <div class="settings-section-header collapsed" onclick="toggleSection(this)">
+        <h3>Assistente</h3>
+        <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+      </div>
+      <div class="settings-section-body collapsed">
+        <p class="settings-hint">Nome e logo do assistente. Afeta a interface e o system prompt.</p>
+        <div style="display:flex;gap:16px;align-items:flex-start;">
+          <div style="flex:1;">
+            <span class="settings-label">Nome</span>
+            <input type="text" class="settings-input" id="setting-agent-name" placeholder="Rick" onblur="autoSaveAgentName()">
+          </div>
+          <div style="flex-shrink:0;text-align:center;">
+            <span class="settings-label">Logo</span>
+            <div style="position:relative;width:64px;height:64px;cursor:pointer;" onclick="document.getElementById('logo-upload-input').click()">
+              <img id="setting-agent-logo-preview" style="width:64px;height:64px;border-radius:50%;object-fit:cover;border:2px solid var(--border);background:var(--bg-surface);">
+              <div style="position:absolute;bottom:-2px;right:-2px;background:var(--accent);border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="white"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+              </div>
+            </div>
+            <input type="file" id="logo-upload-input" accept="image/*" style="display:none;" onchange="handleLogoUpload(this)">
+            <button class="settings-action-btn" style="margin-top:6px;font-size:0.7rem;padding:2px 8px;" onclick="clearAgentLogo()" id="btn-clear-logo" title="Remover logo personalizada">Limpar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- AI Providers -->
     <div class="settings-section">
       <div class="settings-section-header collapsed" onclick="toggleSection(this)">
@@ -2708,7 +2736,7 @@
         <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
       </div>
       <div class="settings-section-body collapsed">
-        <p class="settings-hint">Opcional — sem banco, Rick usa armazenamento local</p>
+        <p class="settings-hint">Opcional — sem banco, usa armazenamento local (SQLite)</p>
         <span class="settings-label">Connection string</span>
         <input type="text" class="settings-input" id="setting-database-url" placeholder="postgresql://user:pass@host:5432/db">
 
@@ -2854,26 +2882,18 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// ==================== RICK AVATAR SVG (base64) ====================
-var RICK_AVATAR = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><clipPath id="c"><circle cx="50" cy="50" r="50"/></clipPath></defs><g clip-path="url(#c)"><rect width="100" height="100" fill="#1a1a2e"/><ellipse cx="50" cy="62" rx="32" ry="36" fill="#F5D6B8"/><ellipse cx="50" cy="95" rx="28" ry="18" fill="#C8C8C8"/><path d="M18 42 Q20 15 32 18 Q34 5 44 12 Q48 2 55 10 Q60 0 66 8 Q72 2 74 14 Q82 10 80 22 Q90 20 84 35 Q78 38 70 38 Q60 32 50 34 Q40 32 30 38 Q22 38 18 42Z" fill="#8EC8D8"/><path d="M22 44 Q24 28 34 26 Q36 16 44 20 Q48 12 54 18 Q58 8 64 14 Q70 8 72 20 Q78 16 78 28 Q86 26 82 38 Q76 42 68 40 Q58 36 50 38 Q42 36 32 40 Q24 42 22 44Z" fill="#A8D8EA"/><ellipse cx="38" cy="52" rx="12" ry="13" fill="white"/><ellipse cx="62" cy="52" rx="12" ry="13" fill="white"/><circle cx="40" cy="52" r="5" fill="#2a1a0a"/><circle cx="64" cy="52" r="5" fill="#2a1a0a"/><circle cx="42" cy="50" r="2" fill="white"/><circle cx="66" cy="50" r="2" fill="white"/><path d="M26 43 Q34 38 42 42 Q50 40 58 42 Q66 38 74 43" stroke="#444" stroke-width="2.5" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="60" rx="2.5" ry="1.5" fill="#D4A88C"/><path d="M38 70 Q44 76 50 74 Q56 76 62 70" stroke="#C4756A" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M42 74 Q44 76 50 74 Q56 76 58 74" fill="#8B3A3A"/><path d="M54 74 Q55 80 56 88" stroke="#A8D8EA" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.7"/><circle cx="56" cy="90" rx="2.5" ry="3" fill="#A8D8EA" opacity="0.5"/></g></svg>');
+// ==================== DEFAULT AVATAR SVG (base64) ====================
+var DEFAULT_AVATAR = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><clipPath id="c"><circle cx="50" cy="50" r="50"/></clipPath></defs><g clip-path="url(#c)"><rect width="100" height="100" fill="#1a1a2e"/><ellipse cx="50" cy="62" rx="32" ry="36" fill="#F5D6B8"/><ellipse cx="50" cy="95" rx="28" ry="18" fill="#C8C8C8"/><path d="M18 42 Q20 15 32 18 Q34 5 44 12 Q48 2 55 10 Q60 0 66 8 Q72 2 74 14 Q82 10 80 22 Q90 20 84 35 Q78 38 70 38 Q60 32 50 34 Q40 32 30 38 Q22 38 18 42Z" fill="#8EC8D8"/><path d="M22 44 Q24 28 34 26 Q36 16 44 20 Q48 12 54 18 Q58 8 64 14 Q70 8 72 20 Q78 16 78 28 Q86 26 82 38 Q76 42 68 40 Q58 36 50 38 Q42 36 32 40 Q24 42 22 44Z" fill="#A8D8EA"/><ellipse cx="38" cy="52" rx="12" ry="13" fill="white"/><ellipse cx="62" cy="52" rx="12" ry="13" fill="white"/><circle cx="40" cy="52" r="5" fill="#2a1a0a"/><circle cx="64" cy="52" r="5" fill="#2a1a0a"/><circle cx="42" cy="50" r="2" fill="white"/><circle cx="66" cy="50" r="2" fill="white"/><path d="M26 43 Q34 38 42 42 Q50 40 58 42 Q66 38 74 43" stroke="#444" stroke-width="2.5" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="60" rx="2.5" ry="1.5" fill="#D4A88C"/><path d="M38 70 Q44 76 50 74 Q56 76 62 70" stroke="#C4756A" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M42 74 Q44 76 50 74 Q56 76 58 74" fill="#8B3A3A"/><path d="M54 74 Q55 80 56 88" stroke="#A8D8EA" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.7"/><circle cx="56" cy="90" rx="2.5" ry="3" fill="#A8D8EA" opacity="0.5"/></g></svg>');
 var EVIL_MORTY_AVATAR = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><clipPath id="c"><circle cx="50" cy="50" r="50"/></clipPath></defs><g clip-path="url(#c)"><rect width="100" height="100" fill="#15192a"/><ellipse cx="50" cy="63" rx="31" ry="35" fill="#f0c7a8"/><ellipse cx="50" cy="96" rx="30" ry="18" fill="#f6d24a"/><path d="M22 36 Q24 18 36 18 Q48 15 50 22 Q52 15 64 18 Q76 18 78 36 Q68 34 58 38 Q50 41 42 38 Q32 34 22 36Z" fill="#6b4f2e"/><path d="M32 43 Q40 38 50 41 Q60 38 68 43" stroke="#3a2a1a" stroke-width="2.6" fill="none" stroke-linecap="round"/><ellipse cx="38" cy="53" rx="10" ry="11" fill="#fff"/><ellipse cx="62" cy="53" rx="10" ry="11" fill="#fff"/><circle cx="39" cy="53" r="4.5" fill="#1a1a1a"/><circle cx="63" cy="53" r="4.5" fill="#1a1a1a"/><path d="M44 60 Q50 64 56 60" stroke="#b67666" stroke-width="2" fill="none"/><rect x="55" y="44" width="18" height="16" rx="2" fill="#111" opacity="0.95"/><path d="M38 71 Q50 77 62 71" stroke="#7a3f35" stroke-width="2.2" fill="none"/><rect x="18" y="84" width="64" height="20" fill="#f6d24a"/></g></svg>');
 
-var RICK_NAMES = [
-  'Rick Prime',
-  'Doofus Rick',
-  'Simple Rick',
-  'Wasp Rick',
-  'Cop Rick',
-  'Toxic Rick',
-  'Pickle Rick',
-  'Council Rick',
-  'Aqua Rick',
-  'Evil Rick'
-];
+// ==================== AGENT IDENTITY (dynamic) ====================
+var agentName = 'Rick';
+var agentAvatar = DEFAULT_AVATAR;
+var AGENT_NAMES_SUFFIXES = ['Prime', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Neo', 'Zero', 'Nova', 'Flux'];
 
 // Set avatars
-document.getElementById('login-avatar').src = RICK_AVATAR;
-document.getElementById('sidebar-avatar').src = RICK_AVATAR;
+document.getElementById('login-avatar').src = DEFAULT_AVATAR;
+document.getElementById('sidebar-avatar').src = DEFAULT_AVATAR;
 
 var sidebarAvatarEl = document.getElementById('sidebar-avatar');
 sidebarAvatarEl.addEventListener('mouseenter', function() {
@@ -3329,9 +3349,11 @@ function hashString(str) {
   return Math.abs(h);
 }
 
-function sessionRickName(sessionId, fallbackIndex) {
-  if (!sessionId) return RICK_NAMES[fallbackIndex % RICK_NAMES.length];
-  return RICK_NAMES[hashString(sessionId) % RICK_NAMES.length];
+function sessionVariantName(sessionId, fallbackIndex) {
+  var suffix = !sessionId
+    ? AGENT_NAMES_SUFFIXES[fallbackIndex % AGENT_NAMES_SUFFIXES.length]
+    : AGENT_NAMES_SUFFIXES[hashString(sessionId) % AGENT_NAMES_SUFFIXES.length];
+  return agentName + ' ' + suffix;
 }
 
 function sessionRoleLabel() {
@@ -3360,7 +3382,7 @@ function updateEphemeralSessions(sessions) {
     var iconSvg = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z"/></svg>';
 
     var isActive = s.id === currentSessionId;
-    var name = sessionRickName(s.id, i);
+    var name = sessionVariantName(s.id, i);
     var desc = sessionRoleLabel();
 
     html += '<div class="session-item" onclick="openSessionPage(\'' + escapeAttr(s.id) + '\')">';
@@ -5035,6 +5057,11 @@ function populateSettings(settings) {
   // Load version info (async, won't block settings rendering)
   loadVersionInfo();
 
+  // Agent identity
+  applyAgentIdentity(settings.agentName, settings.agentLogo);
+  var nameInput = document.getElementById('setting-agent-name');
+  if (nameInput) nameInput.value = settings.agentName || 'Rick';
+
   if (settings.geminiApiKey) {
     document.getElementById('setting-gemini-key').value = settings.geminiApiKey;
   }
@@ -5211,6 +5238,75 @@ function autoSaveGithubToken() {
       ws.send(JSON.stringify({ type: 'get_settings' }));
     }
   }, 500);
+}
+
+// ==================== AGENT IDENTITY ====================
+
+function applyAgentIdentity(name, logo) {
+  agentName = name || 'Rick';
+  agentAvatar = (logo && logo.length > 10) ? logo : DEFAULT_AVATAR;
+
+  // Update all UI elements
+  document.title = agentName + ' AI';
+  var loginTitle = document.getElementById('login-title');
+  if (loginTitle) loginTitle.textContent = agentName + ' AI';
+  var sidebarTitle = document.getElementById('sidebar-title');
+  if (sidebarTitle) sidebarTitle.textContent = agentName + ' AI';
+  var loginAvatar = document.getElementById('login-avatar');
+  if (loginAvatar) loginAvatar.src = agentAvatar;
+  var sidebarAvatar = document.getElementById('sidebar-avatar');
+  if (sidebarAvatar) sidebarAvatar.src = agentAvatar;
+  var mainSession = document.getElementById('main-session-name');
+  if (mainSession) mainSession.textContent = agentName + ' C-137';
+  var logoPreview = document.getElementById('setting-agent-logo-preview');
+  if (logoPreview) logoPreview.src = agentAvatar;
+  var clearBtn = document.getElementById('btn-clear-logo');
+  if (clearBtn) clearBtn.style.display = (logo && logo.length > 10) ? '' : 'none';
+
+  // Re-render ephemeral sessions with new name
+  if (typeof updateEphemeralSessions === 'function' && ephemeralSessions) {
+    updateEphemeralSessions(ephemeralSessions);
+  }
+}
+
+function autoSaveAgentName() {
+  var input = document.getElementById('setting-agent-name');
+  if (!input) return;
+  var val = input.value.trim();
+  if (!val) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'save_settings', settings: { agentName: val } }));
+  applyAgentIdentity(val, agentAvatar === DEFAULT_AVATAR ? '' : agentAvatar);
+  showToast('Nome salvo: ' + val);
+  setTimeout(function() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'get_settings' }));
+    }
+  }, 500);
+}
+
+function handleLogoUpload(input) {
+  if (!input.files || !input.files[0]) return;
+  var file = input.files[0];
+  if (file.size > 512 * 1024) {
+    showToast('Logo muito grande (max 512KB)');
+    return;
+  }
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var dataUrl = e.target.result;
+    ws.send(JSON.stringify({ type: 'save_settings', settings: { agentLogo: dataUrl } }));
+    applyAgentIdentity(agentName, dataUrl);
+    showToast('Logo salva');
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function clearAgentLogo() {
+  ws.send(JSON.stringify({ type: 'save_settings', settings: { agentLogo: '__CLEAR__' } }));
+  applyAgentIdentity(agentName, '');
+  showToast('Logo removida');
 }
 
 function setProviderMode(provider, mode, silent) {
@@ -5792,7 +5888,7 @@ function waitForRestart(expectedVersion) {
 
     attempts++;
     var pct = Math.min(85 + Math.floor(attempts * 0.25), 99);
-    codeOpStatus('Aguardando Rick reiniciar... isso costuma levar menos de 30 segundos', { spinning: true, progress: pct });
+    codeOpStatus('Aguardando reiniciar... isso costuma levar menos de 30 segundos', { spinning: true, progress: pct });
 
     fetch('/health', { signal: AbortSignal.timeout(3000) })
       .then(function(r) { return r.json(); })
@@ -5860,7 +5956,7 @@ function startInstallUpdate() {
         var resp = JSON.parse(xhr.responseText);
         if (resp.deploying) {
           // Server responded before starting the rebuild — it will restart soon
-          codeOpStatus('Build iniciando... Rick vai reiniciar.', { spinning: true, progress: 80, log: resp.log || '' });
+          codeOpStatus('Build iniciando... o servidor vai reiniciar.', { spinning: true, progress: 80, log: resp.log || '' });
           waitForRestart(resp.version);
           return;
         }
@@ -6161,7 +6257,7 @@ function applyEditModeVisuals(active) {
     sidebar.classList.add('edit-mode');
     editBtn.classList.remove('visible');
     sidebarAvatar.src = EVIL_MORTY_AVATAR;
-    sidebarTitle.textContent = 'Evil Morty';
+    sidebarTitle.textContent = 'Edit Mode';
     mainItem.className = 'session-item edit-mode-active';
 
     // Switch to edit session (fresh messages container)
@@ -6171,8 +6267,8 @@ function applyEditModeVisuals(active) {
   } else {
     sidebar.classList.remove('edit-mode');
     checkEditModeButtonVisibility();
-    sidebarAvatar.src = RICK_AVATAR;
-    sidebarTitle.textContent = 'Rick AI';
+    sidebarAvatar.src = agentAvatar;
+    sidebarTitle.textContent = agentName + ' AI';
     mainItem.className = 'session-item active';
 
     // Switch back to main session
