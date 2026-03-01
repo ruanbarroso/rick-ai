@@ -3115,11 +3115,18 @@ function handleServerMessage(msg) {
       authenticated = true;
       reconnectAttempts = 0;
       try { localStorage.setItem('rick_pwd', password); } catch(e) {}
-      // After a deploy the server restarts — reload the page to pick up the new frontend
+      // After a deploy the server restarts — soft-refresh instead of full reload
+      // so the settings modal stays open and shows "Atualizado"
       if (deployInProgress) {
         deployInProgress = false;
-        location.reload();
-        break;
+        // Refresh version info now that the server is back with new code
+        setTimeout(function() {
+          loadVersionInfo();
+          checkForUpdates();
+          codeOpStatus('');
+        }, 500);
+        // Don't break — fall through to normal auth_ok handling
+        // (settings + history will be re-fetched below)
       }
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('app-screen').style.display = 'block';
@@ -5971,8 +5978,14 @@ function waitForRestart(expectedVersion) {
           // Disable the WS path so auth_ok doesn't trigger a second reload.
           deployInProgress = false;
           clearInterval(interval);
-          codeOpStatus('Atualizacao instalada com sucesso!', { success: true, progress: 100 });
-          setTimeout(function() { location.reload(); }, 2000);
+          codeOpStatus('');
+          // Soft-refresh: reload version info + settings without closing the modal
+          loadVersionInfo();
+          checkForUpdates();
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'get_settings' }));
+            ws.send(JSON.stringify({ type: 'get_history' }));
+          }
         }
       })
       .catch(function() { /* server still down, keep polling */ });
