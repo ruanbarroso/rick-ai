@@ -5104,9 +5104,14 @@ function populateSettings(settings) {
   var nameInput = document.getElementById('setting-agent-name');
   if (nameInput) nameInput.value = settings.agentName || 'Rick';
 
-  // Web base URL
+  // Web base URL — auto-detect from browser if not configured
   var urlInput = document.getElementById('setting-web-base-url');
-  if (urlInput && settings.webBaseUrl) urlInput.value = settings.webBaseUrl;
+  if (!settings.webBaseUrl && ws && ws.readyState === WebSocket.OPEN) {
+    var detected = location.origin;
+    ws.send(JSON.stringify({ type: 'save_settings', settings: { webBaseUrl: detected } }));
+    settings.webBaseUrl = detected;
+  }
+  if (urlInput) urlInput.value = settings.webBaseUrl || '';
 
   if (settings.geminiApiKey) {
     document.getElementById('setting-gemini-key').value = settings.geminiApiKey;
