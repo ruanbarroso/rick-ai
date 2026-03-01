@@ -124,12 +124,23 @@ export async function loadConfigFromStore(): Promise<Record<string, string>> {
     const merged: Record<string, string> = {};
 
     for (const [_uiKey, envKey] of Object.entries(SETTINGS_KEY_MAP)) {
-      // Priority: process.env > config store > empty
+      // Priority: process.env (.env file) > config store (DB) > empty
+      // NOTE: If you change a setting via the Web UI, the config store value is
+      // saved to DB. But if the SAME key also exists in the .env file, the .env
+      // value will take precedence after a container restart. To fix: remove the
+      // key from .env so the DB value is used.
       const envVal = process.env[envKey];
       const storeVal = stored[envKey];
 
       if (envVal) {
         merged[envKey] = envVal;
+        // Warn if the .env value is overriding a different DB value
+        if (storeVal && storeVal !== envVal && !ENV_SKIP_KEYS.has(envKey)) {
+          logger.warn(
+            { key: envKey, envValue: envVal.substring(0, 30), storeValue: storeVal.substring(0, 30) },
+            "Config: .env overrides DB value — remove key from .env to use the DB-saved value"
+          );
+        }
       } else if (storeVal) {
         merged[envKey] = storeVal;
         // Inject into process.env so config reads pick it up (skip large values)
