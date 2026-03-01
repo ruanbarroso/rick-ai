@@ -300,12 +300,31 @@ export async function runMigrations(): Promise<void> {
         // PostgreSQL: drop the UNIQUE constraint (ALTER TABLE, not DROP INDEX,
         // because the index backs a constraint and can't be dropped directly).
         `ALTER TABLE memories DROP CONSTRAINT IF EXISTS memories_user_phone_category_key_key`,
+
+        // Deduplicate (category, key) pairs before creating the global unique index.
+        // The old constraint was UNIQUE(user_phone, category, key), so different
+        // user_phone values could produce duplicates on (category, key) alone.
+        // Keep the most recently updated row for each (category, key) pair.
+        `DELETE FROM memories WHERE id IN (
+           SELECT id FROM (
+             SELECT id, ROW_NUMBER() OVER (
+               PARTITION BY category, key
+               ORDER BY updated_at DESC NULLS LAST, id DESC
+             ) AS rn
+             FROM memories
+           ) ranked WHERE rn > 1
+         )`,
+
         `CREATE UNIQUE INDEX IF NOT EXISTS memories_category_key_unique ON memories(category, key)`,
       ];
     } else {
       // SQLite: can't drop inline UNIQUE constraints. The old constraint is a
       // superset of the new one — harmless. Just add the new unique index.
+      // Deduplicate first, same logic but SQLite-compatible syntax.
       m011.statements = [
+        `DELETE FROM memories WHERE id NOT IN (
+           SELECT MIN(id) FROM memories GROUP BY category, key
+         )`,
         `CREATE UNIQUE INDEX IF NOT EXISTS memories_category_key_unique ON memories(category, key)`,
       ];
     }
