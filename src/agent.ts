@@ -300,29 +300,47 @@ export class Agent {
         }
       }
 
-      // If there are sessions with pending "done" polls, handle the 3 cases:
+      // Auto-expire stale done sessions (> 30 min) to prevent them from
+      // intercepting all WhatsApp messages indefinitely.
+      await this.sessionManager.expireStaleDoneSessions();
+
+      // If there are sessions with pending "done" polls FOR THIS USER, handle the 3 cases:
       // 1. Encerrar (explicit close words)
       // 2. Continuidade (adjust/fix on the same session)
       // 3. Novo pedido (different topic → nag to close first)
       // Skip this interception when the message comes from Web UI's main session
       // (sub-agents have their own dedicated panels there).
-      if (this.sessionManager.hasDoneSessions() && !msg.skipSubAgentRelay) {
-        return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos, numericUserId);
+      const userHasDoneSessions = this.sessionManager.hasDoneSessionsForUser(userPhone);
+      if (userHasDoneSessions && !msg.skipSubAgentRelay) {
+        logger.info({ userPhone, userRole, doneSessions: this.sessionManager.getDoneSessionsForUser(userPhone).length }, "Routing to sub-agent relay (user has done sessions)");
+        const relayResult = await this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos, numericUserId);
+        // null means the message is a SELF task that doesn't relate to the session — fall through to normal chat
+        if (relayResult !== null) return relayResult;
+        logger.info({ userPhone }, "Sub-agent relay returned null — falling through to normal classification");
       }
 
       // Classify the task — does it need a sub-agent?
       // Skip classification for roles that cannot invoke sub-agents (business)
-      const classification = canInvokeSubAgent(userRole) ? await classifyTask(fullText) : null;
+      const canDelegate = canInvokeSubAgent(userRole);
+      const classification = canDelegate ? await classifyTask(fullText) : null;
+      logger.info(
+        { userPhone, userRole, canDelegate, classified: classification ? "DELEGATE" : "SELF", text: fullText.substring(0, 80) },
+        "Task classification result"
+      );
 
-      // If a sub-agent is already running, only block new DELEGATE tasks.
+      // If a sub-agent is already running FOR THIS USER, only block new DELEGATE tasks.
       // SELF tasks (save memory, answer questions, etc.) are handled normally
       // by the main session, independently of any running sub-agent.
-      if (this.sessionManager.getRunningSessions().length > 0) {
+      const userRunningSessions = this.sessionManager.getRunningSessionsForUser(userPhone);
+      if (userRunningSessions.length > 0) {
         if (classification) {
+          logger.info({ userPhone, runningSessions: userRunningSessions.length }, "Blocking DELEGATE — sub-agent already running for user");
           return "O sub-agente ainda esta trabalhando... Aguarde um momento.";
         }
         // SELF task — fall through to handleSimpleChat below
+        logger.info({ userPhone }, "SELF task while sub-agent running — handling via simple chat");
       } else if (classification) {
+        logger.info({ userPhone, credentialHints: classification.credentialHints }, "Delegating to sub-agent");
         return this.delegateToSubAgent(
           userPhone,
           connectorName,
@@ -337,7 +355,8 @@ export class Agent {
         );
       }
 
-      // Simple chat — Gemini Flash handles directly
+      // Simple chat — Gemini Flash handles directly (classifier said SELF or user can't delegate)
+      logger.info({ userPhone, userRole }, "Handling via simple chat (no delegation)");
       // Combine all image media: routingMedia (first image or single image) + imageMedias (remaining)
       let allMedia: MediaAttachment | MediaAttachment[] | undefined = routingMedia;
       if (routingMedia && imageMedias && imageMedias.length > 0) {
@@ -376,7 +395,7 @@ export class Agent {
       ? await this.memory.getConversationHistoryByUserId(numericUserId)
       : await this.memory.getConversationHistory(userPhone);
 
-    const systemPrompt = this.buildSystemPrompt(userName, memoryContext, semanticContext, userRole);
+    const systemPrompt = this.buildSystemPrompt(userName, memoryContext, semanticContext, userRole, true);
 
     const messages: LLMMessage[] = [
       // Filter out tool_use messages — they are notifications (e.g. "[tool] Pesquisando...")
@@ -731,12 +750,12 @@ export class Agent {
     imageMedias?: MediaAttachment[],
     fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
     numericUserId?: number
-  ): Promise<string> {
-    const doneSessions = this.sessionManager.getDoneSessions();
+  ): Promise<string | null> {
+    const doneSessions = this.sessionManager.getDoneSessionsForUser(userPhone);
     if (doneSessions.length === 0) return "Nenhuma sessao pendente.";
 
     const lower = text.trim().toLowerCase();
-    const mostRecent = this.sessionManager.getMostRecentDoneSession()!;
+    const mostRecent = this.sessionManager.getMostRecentDoneSessionForUser(userPhone)!;
 
     // CASE 1: Explicit close — kill session(s)
     const closeIntent =
@@ -756,7 +775,7 @@ export class Agent {
       }
 
       await this.sessionManager.killSession(mostRecent.id);
-      const remaining = this.sessionManager.getDoneSessions();
+      const remaining = this.sessionManager.getDoneSessionsForUser(userPhone);
       if (remaining.length > 0) {
         return `Sessao encerrada! Ainda tem ${remaining.length} sessao(oes) pendente(s). Marca *Sim* na enquete ou me diz o que precisa.`;
       }
@@ -784,13 +803,17 @@ export class Agent {
     if (!isContinuation) {
       // Use classifier as tiebreaker
       const classification = await classifyTask(text);
-      // If classifier says it's a new task (CODE/RESEARCH) AND it doesn't share the topic, nag
       if (classification) {
+        // CASE 3: New DELEGATE task — nag to close pending sessions first
         const sessionList = doneSessions
           .map((s) => `- "${s.taskDescription.substring(0, 60)}..."`)
           .join("\n");
         return `Antes de abrir outra sessao, preciso que voce resolva as pendentes:\n\n${sessionList}\n\nMarca *Sim* na enquete pra encerrar, ou me pede um ajuste nessa mesma sessao.`;
       }
+      // CASE 4: SELF task that doesn't share topic — NOT a continuation.
+      // Return null to signal the caller should handle this as normal chat.
+      logger.info({ text: text.substring(0, 60), userPhone }, "SELF task while done sessions exist — passing to normal chat");
+      return null;
     } else {
       logger.info({ text: text.substring(0, 60), sessionId: mostRecent.id }, "Treating as session continuation (topic match)");
     }
@@ -844,12 +867,14 @@ export class Agent {
     userName: string | null,
     memoryContext: string,
     semanticContext: string,
-    userRole: UserRole = "admin"
+    userRole: UserRole = "admin",
+    isDirectChat: boolean = false
   ): string {
     const name = config.agentName;
     const userRef = userName ? userName : "o usuario";
 
     const hasSemanticMemory = !!this.vectorMemory;
+    const userCanDelegate = canInvokeSubAgent(userRole);
 
     let prompt = `Voce e ${name}. Estou a disposicao para ajudar com o que for necessario.
 
@@ -867,19 +892,28 @@ REGRAS IMPORTANTES:
 CAPACIDADES:
 - Voce roda no Gemini Flash para conversa direta.
 - Voce tem acesso a memorias estruturadas (chave-valor)${hasSemanticMemory ? " e semanticas (busca por significado)" : ""}
-- Voce pode listar, buscar, ou apagar memorias
+- Voce pode listar, buscar, ou apagar memorias${userCanDelegate ? `
 - O usuario pode conectar contas com /conectar claude ou /conectar gpt (amplia os modelos disponiveis para o sub-agente)
-- Voce tem um sub-agente autonomo que pode delegar tarefas complexas. Ele e capaz de programar, pesquisar na web, acessar contas do usuario via browser, e executar acoes em servicos externos. O roteamento e automatico — voce nao precisa escolher tipo de sub-agente.
-- Quando o sub-agente precisa de credenciais (senhas, tokens, etc.), voce primeiro busca na sua memoria. Se nao tem, pergunta ao usuario, salva, e entao executa.
-- Credenciais salvas ficam na categoria "credenciais" ou "senhas" da sua memoria
+- Existe um sub-agente autonomo que pode ser acionado para tarefas complexas (programar, pesquisar na web, acessar contas via browser). O roteamento e automatico e acontece ANTES desta conversa.
+- Credenciais do sub-agente ficam na categoria "credenciais" ou "senhas" da sua memoria` : ""}
 
 REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
 - NUNCA invente informacoes que voce nao tem. Se nao sabe, diga que nao sabe.
-- NUNCA finja ter executado acoes que nao executou. Se o sub-agente nao retornou resultado, NAO invente um resultado.
+- NUNCA finja ter executado acoes que nao executou.
 - NUNCA fabrique dados ficticios (emails, notificacoes, mensagens, etc).
-- Quando o usuario pedir algo que requer o sub-agente (codigo, pesquisa, acessar emails), o roteamento e automatico. NAO tente responder voce mesmo fingindo que acessou algo.
 - Se voce nao tem certeza se pode fazer algo, diga honestamente e sugira alternativas.
-- VOCE NAO TEM ACESSO A NENHUM SERVICO EXTERNO (email, sites, contas). Somente o sub-agente pode acessar. Se o usuario pedir para APAGAR, ENVIAR, MODIFICAR, ou REALIZAR qualquer acao em uma conta ou servico externo, diga: "Preciso acionar o sub-agente pra isso. Vou delegar a tarefa." NAO diga que fez a acao voce mesmo. NUNCA diga "Pronto, apaguei" ou "Feito, enviei" — isso e MENTIRA se voce nao delegou ao sub-agente.`;
+- VOCE NAO TEM ACESSO A NENHUM SERVICO EXTERNO (email, sites, contas).${isDirectChat && userCanDelegate ? `
+
+IMPORTANTE SOBRE SUB-AGENTE:
+- Esta mensagem esta sendo tratada por voce diretamente (chat simples). O sistema de roteamento automatico JA decidiu que esta mensagem NAO precisa de sub-agente.
+- NUNCA diga "vou delegar ao sub-agente" ou "vou acionar o sub-agente" nesta resposta — isso NAO vai acontecer.
+- Se o usuario pedir algo que voce nao pode fazer diretamente (acessar email, programar, pesquisar na web), diga honestamente: "Isso seria uma tarefa pro sub-agente. Tenta me pedir de forma mais direta, por exemplo: 'Cria um app React' ou 'Checa meus emails'."
+- NUNCA finja que fez algo que so o sub-agente poderia fazer. NUNCA diga "Pronto, apaguei" ou "Feito, enviei".` : isDirectChat && !userCanDelegate ? `
+- NUNCA mencione sub-agentes. Este usuario nao tem acesso a essa funcionalidade.
+- NUNCA diga "vou delegar" ou "vou acionar o sub-agente". Responda diretamente com o que voce sabe.` : `
+- Quando o usuario pedir algo que requer o sub-agente (codigo, pesquisa, acessar emails), o roteamento e automatico.
+- Se o sub-agente nao retornou resultado, NAO invente um resultado.
+- Se o usuario pedir para APAGAR, ENVIAR, MODIFICAR, ou REALIZAR qualquer acao em uma conta ou servico externo, diga: "Preciso acionar o sub-agente pra isso. Vou delegar a tarefa." NAO diga que fez a acao voce mesmo. NUNCA diga "Pronto, apaguei" ou "Feito, enviei" — isso e MENTIRA se voce nao delegou ao sub-agente.`}`;
 
     // ==================== RBAC: Role-specific instructions ====================
     if (userRole === "admin") {

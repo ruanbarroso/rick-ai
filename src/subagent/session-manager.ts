@@ -170,10 +170,20 @@ export class SessionManager {
     return Array.from(this.sessions.values()).filter((s) => s.state === "done");
   }
 
+  /** Get done sessions belonging to a specific user (by phone/userId). */
+  getDoneSessionsForUser(userId: string): SubAgentSession[] {
+    return this.getDoneSessions().filter((s) => s.userId === userId);
+  }
+
   getRunningSessions(): SubAgentSession[] {
     return Array.from(this.sessions.values()).filter(
       (s) => s.state === "starting" || s.state === "running"
     );
+  }
+
+  /** Get running sessions belonging to a specific user. */
+  getRunningSessionsForUser(userId: string): SubAgentSession[] {
+    return this.getRunningSessions().filter((s) => s.userId === userId);
   }
 
   hasLiveSessions(): boolean {
@@ -184,10 +194,43 @@ export class SessionManager {
     return this.getDoneSessions().length > 0;
   }
 
+  /** Check if a specific user has done sessions. */
+  hasDoneSessionsForUser(userId: string): boolean {
+    return this.getDoneSessionsForUser(userId).length > 0;
+  }
+
   getMostRecentDoneSession(): SubAgentSession | null {
     const done = this.getDoneSessions();
     if (done.length === 0) return null;
     return done.sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  }
+
+  /** Get the most recent done session for a specific user. */
+  getMostRecentDoneSessionForUser(userId: string): SubAgentSession | null {
+    const done = this.getDoneSessionsForUser(userId);
+    if (done.length === 0) return null;
+    return done.sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  }
+
+  /**
+   * Auto-expire stale "done" sessions.
+   * Sessions in "done" state for longer than maxAgeMs are auto-killed.
+   * This prevents stale sessions from intercepting all WhatsApp messages.
+   */
+  async expireStaleDoneSessions(maxAgeMs: number = 30 * 60 * 1000): Promise<number> {
+    const now = Date.now();
+    const stale = this.getDoneSessions().filter((s) => now - s.updatedAt > maxAgeMs);
+    let expired = 0;
+    for (const session of stale) {
+      logger.info({ sessionId: session.id, userId: session.userId, ageMinutes: Math.round((now - session.updatedAt) / 60000) }, "Auto-expiring stale done session");
+      try {
+        await this.killSession(session.id);
+        expired++;
+      } catch (err) {
+        logger.warn({ err, sessionId: session.id }, "Failed to auto-expire session");
+      }
+    }
+    return expired;
   }
 
   // ==================== SESSION LIFECYCLE ====================
