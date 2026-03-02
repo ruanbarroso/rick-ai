@@ -2801,8 +2801,6 @@ document.getElementById('login-title').textContent = agentName + ' AI';
 document.title = agentName + ' AI';
 document.getElementById('sidebar-avatar').src = agentAvatar;
 document.getElementById('sidebar-title').textContent = agentName + ' AI';
-<<<<<<< Updated upstream
-=======
 
 // Fetch identity from server to guarantee correct branding on first visit
 // (before localStorage is populated). applyAgentIdentity is defined later in
@@ -2815,7 +2813,6 @@ fetch('/api/identity')
     }
   })
   .catch(function() {});
->>>>>>> Stashed changes
 
 var sidebarAvatarEl = document.getElementById('sidebar-avatar');
 sidebarAvatarEl.addEventListener('mouseenter', function() {
@@ -3110,14 +3107,9 @@ function handleServerMessage(msg) {
       )) {
         deployInProgress = true;
       }
-<<<<<<< Updated upstream
       // Keep typing indicator visible until the backend explicitly sends typing:false.
       // This prevents "Digitando..." from disappearing while the agent is still
       // running tools and streaming partial updates.
-=======
-      // Hide typing indicator when agent responds (don't wait for the typing:false event)
-      if (from === 'agent') showTyping(false);
->>>>>>> Stashed changes
       storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);
       if (sid === currentSessionId) {
         appendMessageToDOM(msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);
