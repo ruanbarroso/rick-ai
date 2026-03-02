@@ -4844,7 +4844,9 @@ function renderUserDetail(user) {
   // Actions
   html += '<div class="user-detail-actions">';
   html += '<select id="user-role-select" onchange="setUserRole(' + user.id + ', this.value)">';
-  html += '<option value=""' + (!user.role ? ' selected' : '') + '>Sem role</option>';
+  if (!user.role) {
+    html += '<option value="" disabled selected>Selecionar role...</option>';
+  }
   html += '<option value="dev"' + (user.role === 'dev' ? ' selected' : '') + '>Dev</option>';
   html += '<option value="business"' + (user.role === 'business' ? ' selected' : '') + '>Business</option>';
   html += '</select>';
@@ -4941,7 +4943,7 @@ function openSessionFromDetail(sessionId) {
 }
 
 function setUserRole(userId, role) {
-  if (!role) return; // "Sem role" selected — no action
+  if (!role) return; // placeholder selected — no action
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'set_user_role', userId: userId, role: role }));
   }
