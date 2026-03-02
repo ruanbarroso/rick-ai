@@ -283,7 +283,7 @@ export class UserService {
    * Cannot change the admin's role.
    * Sends a welcome message on first activation (pending -> active).
    */
-  async setUserRole(userId: number, role: "dev" | "business"): Promise<User> {
+  async setUserRole(userId: number, role: "dev" | "business"): Promise<{ user: User; welcomeSent: boolean; welcomeError?: string }> {
     // Safety: prevent changing admin role
     const existing = await this.getUserById(userId);
     if (!existing) throw new Error(`User ${userId} not found`);
@@ -300,10 +300,17 @@ export class UserService {
     const updated = (await this.getUserById(userId))!;
 
     // Send welcome message on first activation
+    let welcomeSent = false;
+    let welcomeError: string | undefined;
+
     if (wasPending && this.welcomeSender) {
       const identities = await this.getIdentities(userId);
       const template = getWelcomeTemplates()[role];
-      if (template) {
+      logger.info(
+        { userId, role, identityCount: identities.length, hasTemplate: !!template },
+        "Sending welcome message to newly activated user"
+      );
+      if (template && identities.length > 0) {
         for (const identity of identities) {
           try {
             await this.welcomeSender(
@@ -311,22 +318,33 @@ export class UserService {
               identity.externalId,
               template
             );
+            welcomeSent = true;
           } catch (err) {
+            welcomeError = (err as Error).message || "Erro desconhecido";
             logger.warn(
               { userId, connector: identity.connector, err },
               "Failed to send welcome message"
             );
           }
         }
+      } else if (!template) {
+        welcomeError = `Template não encontrado para role "${role}"`;
+      } else {
+        welcomeError = "Usuário sem identities de connector";
       }
+    } else if (!wasPending) {
+      logger.debug({ userId, role, status: existing.status }, "Skipping welcome — user was not pending");
+    } else if (!this.welcomeSender) {
+      welcomeError = "Welcome sender não configurado";
+      logger.warn({ userId }, "Welcome sender not registered");
     }
 
     logger.info(
-      { userId, role, wasPending },
+      { userId, role, wasPending, welcomeSent },
       "User role updated"
     );
 
-    return updated;
+    return { user: updated, welcomeSent, welcomeError };
   }
 
   /**

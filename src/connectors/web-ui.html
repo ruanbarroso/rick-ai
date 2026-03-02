@@ -2123,6 +2123,11 @@
     transform: translateX(-50%) translateY(0);
     opacity: 1;
   }
+  .toast.toast-error {
+    background: #5c1a1a;
+    border-color: #e74c3c;
+    color: #fbb;
+  }
 
   /* ==================== MOBILE OVERLAY ==================== */
   .sidebar-backdrop {
@@ -3255,7 +3260,13 @@ function handleServerMessage(msg) {
           ws.send(JSON.stringify({ type: 'get_user_conversations', userId: msg.user.id, limit: 30 }));
           ws.send(JSON.stringify({ type: 'get_user_sessions', userId: msg.user.id }));
         }
-        showToast('Usuario atualizado');
+        if (msg.welcomeSent) {
+          showToast('Usuario ativado! Mensagem de boas-vindas enviada.');
+        } else if (msg.welcomeError) {
+          showToast('Usuario ativado, mas boas-vindas falhou: ' + msg.welcomeError, 'error');
+        } else {
+          showToast('Usuario atualizado');
+        }
       }
       break;
 
@@ -6280,13 +6291,16 @@ function updateConnectionBar(state) {
   }
 }
 
-function showToast(message) {
+function showToast(message, type) {
   var toast = document.getElementById('toast');
   toast.textContent = message;
+  toast.classList.remove('toast-error');
+  if (type === 'error') toast.classList.add('toast-error');
   toast.classList.add('visible');
   setTimeout(function() {
     toast.classList.remove('visible');
-  }, 3000);
+    toast.classList.remove('toast-error');
+  }, type === 'error' ? 5000 : 3000);
 }
 
 // ==================== UTILS ====================

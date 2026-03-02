@@ -267,7 +267,7 @@ export class WhatsAppConnector implements Connector {
       return;
     }
     if (!this.sock) {
-      logger.warn("WhatsApp: cannot send message — not connected");
+      logger.warn({ userId }, "WhatsApp: cannot send message — not connected");
       return;
     }
     // userId here is the external_id (phone number) from connector_identities

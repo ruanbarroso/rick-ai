@@ -120,7 +120,10 @@ async function main() {
   // Wire welcome message sender: UserService → ConnectorManager
   userService.setWelcomeSender(async (connector, externalId, text) => {
     const conn = connectorManager.get(connector);
-    if (conn) await conn.sendMessage(externalId, text);
+    if (!conn) {
+      throw new Error(`Connector "${connector}" não registrado`);
+    }
+    await conn.sendMessage(externalId, text);
   });
 
   // Wire ConnectorManager → Agent

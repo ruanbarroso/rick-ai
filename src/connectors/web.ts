@@ -1224,7 +1224,7 @@ export class WebConnector implements Connector {
     }
 
     try {
-      const updated = await this.userService.setUserRole(userId, role);
+      const { user: updated, welcomeSent, welcomeError } = await this.userService.setUserRole(userId, role);
       this.send(ws, {
         type: "user_updated",
         user: {
@@ -1233,6 +1233,8 @@ export class WebConnector implements Connector {
           status: updated.status,
           displayName: updated.displayName,
         },
+        welcomeSent,
+        welcomeError,
       });
       // Broadcast updated pending count to all clients
       this.notifyPendingCount();
