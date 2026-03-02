@@ -264,6 +264,16 @@ const MIGRATIONS: Migration[] = [
     // Backend-specific — populated dynamically in runMigrations().
     statements: [], // populated dynamically
   },
+
+  {
+    name: "013_subagent_session_routing",
+    statements: [
+      // Store the originating connector and external user ID so sessions recovered
+      // after a restart route messages back to the correct user/connector.
+      `ALTER TABLE sub_agent_sessions ADD COLUMN IF NOT EXISTS connector_name VARCHAR(50)`,
+      `ALTER TABLE sub_agent_sessions ADD COLUMN IF NOT EXISTS user_external_id VARCHAR(255)`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {

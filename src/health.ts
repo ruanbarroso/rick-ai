@@ -8,8 +8,10 @@ import { query } from "./memory/database.js";
 import { config } from "./config/env.js";
 import { configGet } from "./memory/config-store.js";
 import { verifyAgentToken, type AgentTokenPayload } from "./subagent/agent-token.js";
+import { isSensitiveCategory } from "./memory/crypto.js";
 import type { MemoryService } from "./memory/memory-service.js";
 import type { VectorMemoryService } from "./memory/vector-memory-service.js";
+import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
 
 /**
  * HTTP server that serves:
@@ -106,7 +108,7 @@ let registeredMemoryService: MemoryService | null = null;
 let registeredVectorMemory: VectorMemoryService | null = null;
 
 /**
- * Register services for the sub-agent read-only API.
+ * Register services for the sub-agent Agent API (read + write).
  * Called from index.ts after MemoryService and VectorMemoryService are initialized.
  */
 export function registerAgentApiServices(
@@ -271,15 +273,22 @@ export function startHealthServer(port: number): void {
       return;
     }
 
-    // ==================== AGENT READ-ONLY API (JWT-authenticated) ====================
-    // Endpoints for sub-agents (edit sessions, ephemeral sub-agents) to query
-    // memories, credentials, config, conversations, and semantic search.
+    // ==================== AGENT API (JWT-authenticated) ====================
+    // Endpoints for sub-agents (edit sessions, ephemeral sub-agents) to query/write
+    // memories, credentials, config, conversations, semantic search, and LLM tokens.
     // Authentication uses Bearer JWT tokens, NOT the web UI password.
 
     if (req.url?.startsWith("/api/agent/") && req.method === "GET") {
       const agentSession = authenticateAgentRequest(req, res);
       if (!agentSession) return;
-      await handleAgentApi(req, res, agentSession);
+      await handleAgentApiGet(req, res, agentSession);
+      return;
+    }
+
+    if (req.url?.startsWith("/api/agent/") && req.method === "POST") {
+      const agentSession = authenticateAgentRequest(req, res);
+      if (!agentSession) return;
+      await handleAgentApiPost(req, res, agentSession);
       return;
     }
 
@@ -355,10 +364,10 @@ function authenticateAgentRequest(
 // ==================== AGENT API HANDLERS ====================
 
 /**
- * Route handler for all /api/agent/* endpoints.
- * All endpoints are read-only and scoped to the token's userPhone.
+ * Route handler for GET /api/agent/* endpoints.
+ * Scoped to the JWT's userPhone; read-only except for /api/agent/memory (POST).
  */
-async function handleAgentApi(
+async function handleAgentApiGet(
   req: IncomingMessage,
   res: ServerResponse,
   session: AgentTokenPayload,
@@ -464,8 +473,12 @@ async function handleAgentApi(
         return;
       }
       const limit = Math.min(parseInt(url.searchParams.get("limit") || "20"), 100);
-      const user = await registeredMemoryService.getOrCreateUser(session.userPhone);
-      const messages = await registeredMemoryService.getConversationHistoryByUserId(user.id, limit);
+      const convUserId = await resolveUserId(session, registeredMemoryService);
+      if (!convUserId) {
+        jsonResponse(res, 503, { error: "MemoryService nao disponivel" });
+        return;
+      }
+      const messages = await registeredMemoryService.getConversationHistoryByUserId(convUserId, limit);
       logger.info(
         { sessionId: session.sessionId, limit, count: messages.length },
         "Agent API: conversations requested",
@@ -474,10 +487,123 @@ async function handleAgentApi(
       return;
     }
 
+    // GET /api/agent/llm-token?provider=claude|openai — Fresh LLM OAuth access token.
+    // Allows sub-agents to refresh their LLM credentials when an OAuth token expires
+    // mid-task (401 from provider) without restarting the container.
+    if (path === "/api/agent/llm-token") {
+      const provider = url.searchParams.get("provider") || "claude";
+      if (provider !== "claude" && provider !== "openai") {
+        jsonResponse(res, 400, { error: "Provider invalido. Use 'claude' ou 'openai'" });
+        return;
+      }
+
+      // Use numericUserId from JWT when available to skip the DB lookup
+      const userId = await resolveUserId(session, registeredMemoryService);
+      if (!userId) {
+        jsonResponse(res, 503, { error: "MemoryService nao disponivel para resolver usuario" });
+        return;
+      }
+
+      let accessToken: string | null = null;
+      if (provider === "claude") {
+        accessToken = await claudeOAuthService.getValidToken(userId);
+      } else {
+        const oauthToken = await openaiOAuthService.getValidToken(userId);
+        accessToken = oauthToken?.accessToken ?? null;
+      }
+
+      if (!accessToken) {
+        jsonResponse(res, 404, { error: `Token OAuth nao disponivel para provider '${provider}'` });
+        return;
+      }
+
+      logger.info({ sessionId: session.sessionId, provider }, "Agent API: LLM token refreshed");
+      jsonResponse(res, 200, { accessToken, provider });
+      return;
+    }
+
     // Unknown /api/agent/* path
     jsonResponse(res, 404, { error: "Endpoint nao encontrado" });
   } catch (err) {
-    logger.error({ err, path, sessionId: session.sessionId }, "Agent API request failed");
+    logger.error({ err, path, sessionId: session.sessionId }, "Agent API GET request failed");
+    jsonResponse(res, 500, { error: "Erro interno" });
+  }
+}
+
+/**
+ * Route handler for POST /api/agent/* endpoints.
+ * Allows sub-agents to write non-sensitive memories discovered during task execution.
+ */
+async function handleAgentApiPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  session: AgentTokenPayload,
+): Promise<void> {
+  const url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+  const path = url.pathname;
+
+  try {
+    // POST /api/agent/memory — Save a new memory (non-sensitive categories only).
+    // Body: { key: string, value: string, category?: string }
+    if (path === "/api/agent/memory") {
+      if (!registeredMemoryService) {
+        jsonResponse(res, 503, { error: "MemoryService nao disponivel" });
+        return;
+      }
+
+      const rawBody = await readRequestBody(req);
+      let body: Record<string, unknown>;
+      try {
+        body = JSON.parse(rawBody.toString("utf-8") || "{}");
+      } catch {
+        jsonResponse(res, 400, { error: "JSON invalido no corpo da requisicao" });
+        return;
+      }
+
+      const key: string = (String(body.key ?? "")).trim();
+      const value: string = (String(body.value ?? "")).trim();
+      const category: string = (String(body.category ?? "geral")).trim().toLowerCase();
+
+      if (!key || !value) {
+        jsonResponse(res, 400, { error: "Campos 'key' e 'value' sao obrigatorios" });
+        return;
+      }
+
+      // Subagentes só podem escrever em categorias não-sensíveis.
+      // Credenciais e tokens devem ser gerenciados pelo Rick principal.
+      if (isSensitiveCategory(category)) {
+        jsonResponse(res, 403, {
+          error: `Categoria '${category}' e protegida. Subagentes so podem escrever em categorias nao-sensiveis (ex: geral, notas, preferencias)`,
+        });
+        return;
+      }
+
+      const userId = await resolveUserId(session, registeredMemoryService);
+      if (!userId) {
+        jsonResponse(res, 503, { error: "MemoryService nao disponivel para resolver usuario" });
+        return;
+      }
+      const result = await registeredMemoryService.rememberV2(
+        key, value, category,
+        userId,
+        "dev",  // subagentes escrevem como 'dev' — não sobrescrevem memórias de admin
+        { source: "subagent", sessionId: session.sessionId },
+      );
+
+      if (result.blocked) {
+        jsonResponse(res, 409, { error: "Memoria protegida por usuario com maior autoridade" });
+        return;
+      }
+
+      logger.info({ sessionId: session.sessionId, category, key }, "Agent API: memory saved");
+      jsonResponse(res, 200, { saved: true, key, category });
+      return;
+    }
+
+    // Unknown /api/agent/* POST path
+    jsonResponse(res, 404, { error: "Endpoint nao encontrado" });
+  } catch (err) {
+    logger.error({ err, path, sessionId: session.sessionId }, "Agent API POST request failed");
     jsonResponse(res, 500, { error: "Erro interno" });
   }
 }
@@ -486,6 +612,29 @@ async function handleAgentApi(
 function jsonResponse(res: ServerResponse, status: number, data: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(data));
+}
+
+/** Read the full request body into a Buffer. */
+async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Resolve the numeric user ID for an Agent API request.
+ * Uses the JWT's embedded numericUserId when present (no DB call);
+ * falls back to getOrCreateUser for older tokens that don't carry it.
+ * Returns null if the MemoryService is unavailable and the JWT has no ID.
+ */
+async function resolveUserId(
+  session: AgentTokenPayload,
+  memoryService: MemoryService | null,
+): Promise<number | null> {
+  if (session.numericUserId != null) return session.numericUserId;
+  if (!memoryService) return null;
+  const user = await memoryService.getOrCreateUser(session.userPhone);
+  return user.id;
 }
 
 // ==================== VERSION ====================
@@ -888,11 +1037,7 @@ async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Prom
 
   try {
     // Read the entire request body
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) {
-      chunks.push(chunk as Buffer);
-    }
-    const body = Buffer.concat(chunks);
+    const body = await readRequestBody(req);
 
     if (body.length === 0) {
       res.writeHead(400, { "Content-Type": "application/json" });

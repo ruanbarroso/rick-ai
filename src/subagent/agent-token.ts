@@ -35,6 +35,8 @@ function sign(payload: string): string {
 export interface AgentTokenPayload {
   sessionId: string;
   userPhone: string;
+  /** Numeric user ID — avoids a DB round-trip on every Agent API request. Optional for backward compat. */
+  numericUserId?: number;
   /** Unix timestamp (seconds) when the token expires */
   exp: number;
 }
@@ -45,17 +47,20 @@ export interface AgentTokenPayload {
  * @param sessionId - Unique session identifier
  * @param userPhone - Owner's phone (scopes data access)
  * @param ttlSeconds - Time-to-live in seconds (default 2 hours)
+ * @param numericUserId - Numeric user ID from the DB (avoids a DB lookup per API request)
  * @returns Signed JWT string
  */
 export function createAgentToken(
   sessionId: string,
   userPhone: string,
   ttlSeconds: number = 7200,
+  numericUserId?: number,
 ): string {
   const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const payload: AgentTokenPayload = {
     sessionId,
     userPhone,
+    ...(numericUserId != null && { numericUserId }),
     exp: Math.floor(Date.now() / 1000) + ttlSeconds,
   };
   const payloadB64 = base64url(JSON.stringify(payload));

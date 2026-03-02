@@ -15,6 +15,15 @@ import type { MemoryService } from "../memory/memory-service.js";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Normalize an arbitrary string into a valid env-var name segment (uppercase, underscores only).
+ * Returns null if the input contains no valid characters (all special chars).
+ */
+function sanitizeEnvKey(raw: string): string | null {
+  const sanitized = raw.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "");
+  return sanitized || null;
+}
+
 /** Variant name suffixes — must match frontend AGENT_NAMES_SUFFIXES array */
 const VARIANT_SUFFIXES = ["Prime", "Alpha", "Beta", "Gamma", "Delta", "Omega", "Neo", "Zero", "Nova", "Flux"];
 
@@ -107,6 +116,24 @@ export class SessionManager {
           if (!isNaN(parsed.getTime())) createdTime = parsed.getTime();
         }
 
+        // Restore routing metadata from DB so messages reach the original user/connector
+        let connectorName = "web";
+        let userId = "owner";
+        let numericUserId: number | null = null;
+        try {
+          const dbRow = await query(
+            `SELECT connector_name, user_external_id, user_id FROM sub_agent_sessions WHERE id = $1`,
+            [id]
+          );
+          if (dbRow.rows.length > 0) {
+            connectorName = dbRow.rows[0].connector_name || "web";
+            userId = dbRow.rows[0].user_external_id || "owner";
+            numericUserId = dbRow.rows[0].user_id ?? null;
+          }
+        } catch (err) {
+          logger.warn({ err, sessionId: id }, "Session recovery: failed to restore routing metadata from DB, using defaults");
+        }
+
         const session: SubAgentSession = {
           id,
           containerId: containerId.trim(),
@@ -114,9 +141,9 @@ export class SessionManager {
           state: "waiting_user",
           taskDescription: "(sessao recuperada apos reinicio)",
           credentials: {},
-          connectorName: "web",
-          userId: "owner",
-          numericUserId: null,
+          connectorName,
+          userId,
+          numericUserId,
           output: "",
           pendingQuestion: null,
           recovered: true,
@@ -516,7 +543,19 @@ export class SessionManager {
     // === Agent API: generate JWT and resolve upfront credentials ===
     const agentApiEnv = await this.buildAgentApiEnv(session);
 
-    const mergedEnv = { ...env, ...agentApiEnv };
+    // Pass resolved service credentials as RICK_CRED_* env vars.
+    // Never embed them in prompt text to avoid leaking to LLM provider logs.
+    const credentialEnv: Record<string, string> = {};
+    for (const [service, cred] of Object.entries(session.credentials)) {
+      const sanitized = sanitizeEnvKey(service);
+      if (!sanitized) {
+        logger.warn({ service, sessionId: session.id }, "Credential service name sanitizes to empty — skipping");
+        continue;
+      }
+      credentialEnv[`RICK_CRED_${sanitized}`] = cred;
+    }
+
+    const mergedEnv = { ...env, ...agentApiEnv, ...credentialEnv };
     const envArgs: string[] = [];
     for (const [k, v] of Object.entries(mergedEnv)) {
       if (v) envArgs.push("-e", `${k}=${v}`);
@@ -540,7 +579,6 @@ export class SessionManager {
 
     // If there's a task description, send it as the first message
     if (session.taskDescription && session.taskDescription.trim()) {
-      const enrichedPrompt = this.buildEnrichedPrompt(session.taskDescription, session.credentials);
       session.state = "running";
       session.updatedAt = Date.now();
 
@@ -551,8 +589,9 @@ export class SessionManager {
       }
 
       // Copy images into container and send to agent
+      // Credentials are available as RICK_CRED_* / RICK_SECRET_* env vars — not in the prompt
       const imagePaths = await this.injectImages(session, images);
-      const payload: any = { type: "message", text: enrichedPrompt };
+      const payload: any = { type: "message", text: session.taskDescription };
       if (imagePaths.length > 0) payload.images = imagePaths;
       this.sendToAgentProcess(session.id, payload);
     } else {
@@ -574,7 +613,8 @@ export class SessionManager {
     const agentEnv: Record<string, string> = {};
 
     // JWT token for authenticating against Rick's /api/agent/* endpoints
-    const token = createAgentToken(session.id, session.userId, 86400); // 24h TTL matches container lifetime
+    // numericUserId is embedded so API endpoints can skip the getOrCreateUser DB call
+    const token = createAgentToken(session.id, session.userId, 86400, session.numericUserId ?? undefined); // 24h TTL matches container lifetime
     const apiUrl = `http://host.docker.internal:${config.webPort}`;
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
@@ -587,11 +627,9 @@ export class SessionManager {
           // Use global memories — credentials are shared across all users
           const mems = await this.memoryService.listGlobalMemories(category);
           for (const mem of mems) {
-            const envKey = `RICK_SECRET_${mem.key
-              .toUpperCase()
-              .replace(/[^A-Z0-9]+/g, "_")
-              .replace(/^_|_$/g, "")}`;
-            agentEnv[envKey] = mem.value;
+            const sanitized = sanitizeEnvKey(mem.key);
+            if (!sanitized) continue;
+            agentEnv[`RICK_SECRET_${sanitized}`] = mem.value;
           }
         }
         logger.info(
@@ -809,15 +847,17 @@ export class SessionManager {
 
   /**
    * Insert a new row into sub_agent_sessions for audit trail.
+   * Stores connector_name and user_external_id so sessions can be re-routed correctly after restart.
    */
   private async persistSessionToDB(session: SubAgentSession): Promise<void> {
     if (!session.numericUserId) return;
     try {
       await query(
-        `INSERT INTO sub_agent_sessions (id, user_id, task, status, started_at)
-         VALUES ($1, $2, $3, $4, NOW())
+        `INSERT INTO sub_agent_sessions (id, user_id, task, status, connector_name, user_external_id, started_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
          ON CONFLICT (id) DO NOTHING`,
-        [session.id, session.numericUserId, session.taskDescription || null, "active"]
+        [session.id, session.numericUserId, session.taskDescription || null, "active",
+          session.connectorName, session.userId]
       );
     } catch (err) {
       logger.warn({ err, sessionId: session.id }, "Failed to persist session to DB");
@@ -897,15 +937,5 @@ export class SessionManager {
     return paths;
   }
 
-  // ==================== HELPERS ====================
-
-  private buildEnrichedPrompt(taskDescription: string, credentials: Record<string, string>): string {
-    if (Object.keys(credentials).length === 0) return taskDescription;
-
-    const credBlock = Object.entries(credentials)
-      .map(([service, cred]) => `[Credencial ${service}]: ${cred}`)
-      .join("\n");
-
-    return `${taskDescription}\n\n--- CREDENCIAIS DISPONIVEIS ---\n${credBlock}\n--- FIM CREDENCIAIS ---`;
-  }
 }
+

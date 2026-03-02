@@ -435,6 +435,41 @@ export class Agent {
   }
 
   /**
+   * Build the env vars for a sub-agent container (LLM credentials only).
+   * DATABASE_URL, PGVECTOR_URL and GITHUB_TOKEN are intentionally omitted —
+   * subagents access data via the read-only Agent API (/api/agent/*) with JWT auth.
+   */
+  private async buildSubAgentEnv(userId: number): Promise<Record<string, string>> {
+    const env: Record<string, string> = {};
+
+    // Fetch Claude and OpenAI tokens in parallel — both are independent I/O operations
+    const [claudeToken, openaiToken] = await Promise.all([
+      this.claudeOAuth.getValidToken(userId),
+      this.openaiOAuth.getValidToken(userId),
+    ]);
+
+    // Anthropic (Claude) — OAuth token first, then API key fallback
+    if (claudeToken) {
+      env.ANTHROPIC_ACCESS_TOKEN = claudeToken;
+    } else if (config.anthropic?.apiKey) {
+      env.ANTHROPIC_API_KEY = config.anthropic.apiKey;
+    }
+
+    // OpenAI (GPT) — OAuth token first, then API key fallback
+    if (openaiToken) {
+      env.OPENAI_ACCESS_TOKEN = openaiToken.accessToken;
+      if (openaiToken.accountId) env.OPENAI_ACCOUNT_ID = openaiToken.accountId;
+    } else if (config.openai?.apiKey) {
+      env.OPENAI_API_KEY = config.openai.apiKey;
+    }
+
+    // Gemini — always from config
+    if (config.gemini?.apiKey) env.GEMINI_API_KEY = config.gemini.apiKey;
+
+    return env;
+  }
+
+  /**
    * Delegate a task to a unified sub-agent.
    * Resolves credentials from memory and asks user for any missing ones.
    */
@@ -450,45 +485,13 @@ export class Agent {
     fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
     userId?: number
   ): Promise<string> {
-    // Build env vars for the sub-agent container — all available LLM keys
-    const env: Record<string, string> = {};
-
-    // Anthropic (Claude) — try OAuth token first, then API key
-    const claudeToken = await this.claudeOAuth.getValidToken(userId!);
-    if (claudeToken) {
-      env.ANTHROPIC_ACCESS_TOKEN = claudeToken;
-    } else if (config.anthropic?.apiKey) {
-      env.ANTHROPIC_API_KEY = config.anthropic.apiKey;
+    if (!userId) {
+      logger.error("delegateToSubAgent called without userId — aborting delegation");
+      return "Erro interno: ID de usuário não resolvido para delegação.";
     }
 
-    // OpenAI (GPT) — try OAuth token first, then API key
-    const openaiToken = await this.openaiOAuth.getValidToken(userId!);
-    if (openaiToken) {
-      env.OPENAI_ACCESS_TOKEN = openaiToken.accessToken;
-      if (openaiToken.accountId) {
-        env.OPENAI_ACCOUNT_ID = openaiToken.accountId;
-      }
-    } else if (config.openai?.apiKey) {
-      env.OPENAI_API_KEY = config.openai.apiKey;
-    }
-
-    // Gemini — always from config
-    if (config.gemini?.apiKey) {
-      env.GEMINI_API_KEY = config.gemini.apiKey;
-    }
-
-    // Database read-only access
-    if (config.databaseUrl) {
-      env.DATABASE_URL = config.databaseUrl;
-    }
-    if (config.vectorDatabaseUrl) {
-      env.PGVECTOR_URL = config.vectorDatabaseUrl;
-    }
-
-    // GitHub token (from config store / Web UI settings)
-    if (process.env.GITHUB_TOKEN) {
-      env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-    }
+    // Build env vars for the sub-agent container — LLM credentials only
+    const env = await this.buildSubAgentEnv(userId);
 
     // Expand generic "email" hint into actual email providers found in memory
     const emailProviders = ["outlook", "gmail", "hotmail", "yahoo", "protonmail"];
@@ -2090,33 +2093,14 @@ Retorne APENAS as linhas de extracao, nada mais.`;
       },
 
       createBlankSubAgentSession: async (connectorName: string, userId: string): Promise<string> => {
-        // Build env vars for the sub-agent container (same as delegateToSubAgent)
         const numUserId = Number(userId);
-        const env: Record<string, string> = {};
-
-        const claudeToken = await this.claudeOAuth.getValidToken(numUserId);
-        if (claudeToken) {
-          env.ANTHROPIC_ACCESS_TOKEN = claudeToken;
-        } else if (config.anthropic?.apiKey) {
-          env.ANTHROPIC_API_KEY = config.anthropic.apiKey;
-        }
-
-        const openaiToken = await this.openaiOAuth.getValidToken(numUserId);
-        if (openaiToken) {
-          env.OPENAI_ACCESS_TOKEN = openaiToken.accessToken;
-          if (openaiToken.accountId) env.OPENAI_ACCOUNT_ID = openaiToken.accountId;
-        } else if (config.openai?.apiKey) {
-          env.OPENAI_API_KEY = config.openai.apiKey;
-        }
-
-        if (config.gemini?.apiKey) env.GEMINI_API_KEY = config.gemini.apiKey;
-        if (config.databaseUrl) env.DATABASE_URL = config.databaseUrl;
-        if (config.vectorDatabaseUrl) env.PGVECTOR_URL = config.vectorDatabaseUrl;
+        const env = await this.buildSubAgentEnv(numUserId);
 
         let session;
         try {
           // Empty taskDescription → session starts in "waiting_user" state
-          session = await this.sessionManager.createSession("", connectorName, userId, {}, env);
+          // numUserId passado para garantir audit trail no DB (persistSessionToDB exige numericUserId)
+          session = await this.sessionManager.createSession("", connectorName, userId, {}, env, undefined, numUserId || undefined);
         } catch (err) {
           logger.error({ err }, "Failed to create blank sub-agent session");
           throw err;

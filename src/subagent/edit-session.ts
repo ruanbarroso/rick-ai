@@ -192,7 +192,7 @@ const EDIT_SYSTEM_PROMPT = [
   "Nao modifique AGENTS.md, CLAUDE.md ou GEMINI.md a menos que seja explicitamente pedido.",
   "",
   "CREDENCIAIS E DADOS DO RICK:",
-  "Voce tem acesso a uma API read-only do Rick principal para consultar memorias, credenciais, conversas e busca semantica.",
+  "Voce tem acesso a API do Rick principal para consultar e gravar memorias, credenciais, conversas e busca semantica.",
   "Use as variaveis de ambiente $RICK_API_URL e $RICK_SESSION_TOKEN para autenticar.",
   "Endpoints disponiveis:",
   "- GET $RICK_API_URL/api/agent/config (config operacional)",
@@ -200,8 +200,12 @@ const EDIT_SYSTEM_PROMPT = [
   "- GET $RICK_API_URL/api/agent/memory?category=<cat>&key=<key> (buscar memoria especifica)",
   "- GET $RICK_API_URL/api/agent/search?q=<texto>&limit=5 (busca semantica)",
   "- GET $RICK_API_URL/api/agent/conversations?limit=20 (historico de conversas)",
+  "- POST $RICK_API_URL/api/agent/memory (gravar memoria; body JSON: {key, value, category})",
+  "  Categorias permitidas para escrita: geral, notas, preferencias (senhas/credenciais/tokens sao bloqueadas pelo servidor).",
+  "  Use para registrar aprendizados, descobertas tecnicas ou informacoes uteis encontradas durante a tarefa.",
   "Todas as requisicoes exigem header: Authorization: Bearer $RICK_SESSION_TOKEN",
-  "Exemplo: curl -sf -H \"Authorization: Bearer $RICK_SESSION_TOKEN\" \"$RICK_API_URL/api/agent/memories?category=credenciais\"",
+  "Exemplo leitura: curl -sf -H \"Authorization: Bearer $RICK_SESSION_TOKEN\" \"$RICK_API_URL/api/agent/memories?category=geral\"",
+  "Exemplo escrita: curl -sf -X POST -H \"Authorization: Bearer $RICK_SESSION_TOKEN\" -H \"Content-Type: application/json\" -d '{\"key\":\"exemplo\",\"value\":\"valor\",\"category\":\"notas\"}' \"$RICK_API_URL/api/agent/memory\"",
 ].join("\n");
 
 /**
@@ -1562,8 +1566,10 @@ echo "[publish] Codigo publicado com sucesso em github.com/${targetRepo}"
   private async buildAgentApiEnv(): Promise<Record<string, string>> {
     const agentEnv: Record<string, string> = {};
 
-    // JWT token for authenticating against Rick's /api/agent/* endpoints
-    const token = createAgentToken(this.id, this.userId, 86400); // 24h TTL (container lives until reaper kills it)
+    // JWT token for authenticating against Rick's /api/agent/* endpoints.
+    // numericUserId embutido para que resolveUserId() evite DB roundtrip por request.
+    const numericUserId = Number(this.userId) || undefined;
+    const token = createAgentToken(this.id, this.userId, 86400, numericUserId); // 24h TTL (container lives until reaper kills it)
     const apiUrl = `http://host.docker.internal:${config.webPort}`;
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
