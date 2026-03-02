@@ -76,15 +76,22 @@ const RICK_API_URL = process.env.RICK_API_URL || "";
 const RICK_SESSION_TOKEN = process.env.RICK_SESSION_TOKEN || "";
 
 async function rickApiGet(path) {
-  if (!RICK_API_URL || !RICK_SESSION_TOKEN) return null;
+  if (!RICK_API_URL || !RICK_SESSION_TOKEN) {
+    emitStatus("rick_memory/rick_search indisponivel: RICK_API_URL ou RICK_SESSION_TOKEN nao configurado");
+    return null;
+  }
   try {
     const res = await fetch(`${RICK_API_URL}${path}`, {
       headers: { Authorization: `Bearer ${RICK_SESSION_TOKEN}` },
       signal: AbortSignal.timeout(5000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      emitStatus(`rick API erro: ${res.status} ${res.statusText}`);
+      return null;
+    }
     return await res.json();
-  } catch {
+  } catch (err) {
+    emitStatus(`rick API falhou: ${err.message || "timeout/rede"}`);
     return null;
   }
 }
@@ -290,11 +297,12 @@ REGRAS:
 4. Se precisar de informacoes adicionais, PERGUNTE DIRETAMENTE ao usuario (ex: "Qual a URL do repositorio?") — voce recebera a resposta na proxima mensagem. Fale sempre em segunda pessoa, direto com o usuario.
 5. Se precisar de informacoes que o usuario ja ensinou ao ${agentName} (credenciais, links de repositorios, preferencias), use rick_memory (sem categoria para ver TUDO) ou rick_search (busca por significado).
 6. SEMPRE consulte rick_memory antes de pedir informacoes ao usuario — a resposta pode ja estar la.
-7. Credenciais tambem estao disponiveis como variaveis de ambiente RICK_SECRET_* no container.
-8. Para tarefas de codigo: clone o repositorio, faca as alteracoes, rode testes se possivel.
-9. Para pesquisa web: use web_fetch para acessar URLs e extrair informacoes.
-10. Seja conciso nas mensagens intermediarias, detalhado no resultado final.
-11. Quando o usuario mencionar um projeto ou repositorio por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
+7. Credenciais estao disponiveis como variaveis de ambiente RICK_SECRET_* e GITHUB_TOKEN no container. Use \`run_command env\` para listar TODAS as variaveis disponiveis.
+8. Para clonar repositorios Git PRIVADOS, use o GITHUB_TOKEN: \`git clone https://\${GITHUB_TOKEN}@github.com/org/repo.git\`. SEMPRE tente com o token antes de dizer que nao tem acesso.
+9. Para tarefas de codigo: clone o repositorio, faca as alteracoes, rode testes se possivel.
+10. Para pesquisa web: use web_fetch para acessar URLs e extrair informacoes.
+11. Seja conciso nas mensagens intermediarias, detalhado no resultado final.
+12. Quando o usuario mencionar um projeto ou repositorio por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
 
 FERRAMENTAS DISPONIVEIS: ${toolNames.join(", ")}`;
 
