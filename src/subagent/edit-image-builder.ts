@@ -76,7 +76,6 @@ class EditImageBuilder {
       "docker",
       [
         "build",
-        "--no-cache",
         "-t",
         "subagent-edit",
         "--label",

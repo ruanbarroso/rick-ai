@@ -100,7 +100,6 @@ class SubagentImageBuilder {
       "docker",
       [
         "build",
-        "--no-cache",
         "-t",
         NEXT_IMAGE,
         "--label",
