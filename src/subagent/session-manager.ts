@@ -431,20 +431,46 @@ export class SessionManager {
    * If not, build it from docker/subagent.Dockerfile (auto-build on first use).
    */
   private async ensureSubagentImage(): Promise<void> {
+    const localAppDir = process.cwd(); // /app inside the container
+    const agentMjsPath = `${localAppDir}/docker/agent.mjs`;
+
+    let imageExists = false;
     try {
       await execFileAsync("docker", ["image", "inspect", "subagent"], { timeout: 10_000 });
-      return; // Image already exists
+      imageExists = true;
     } catch {
-      // Image not found — build it
+      // Image not found — will build
     }
 
-    logger.info({}, "subagent image not found — building from docker/subagent.Dockerfile");
+    // If image exists, check if agent.mjs has changed since it was built.
+    // Compare hash of local agent.mjs with the copy inside the image.
+    if (imageExists) {
+      try {
+        const { createHash } = await import("node:crypto");
+        const { readFileSync } = await import("node:fs");
+        const localHash = createHash("sha256").update(readFileSync(agentMjsPath)).digest("hex").substring(0, 16);
+        const { stdout: imageHash } = await execFileAsync("docker", [
+          "run", "--rm", "subagent",
+          "sh", "-c", `sha256sum /app/agent.mjs | cut -c1-16`,
+        ], { timeout: 15_000 });
+        if (localHash === imageHash.trim()) {
+          return; // Image is up to date
+        }
+        logger.info({ localHash, imageHash: imageHash.trim() }, "agent.mjs changed — rebuilding subagent image");
+        // Remove old image (ignore errors if containers still use it)
+        try { await execFileAsync("docker", ["rmi", "subagent"], { timeout: 10_000 }); } catch {}
+      } catch (err) {
+        logger.warn({ err }, "Failed to verify subagent image hash — rebuilding");
+        try { await execFileAsync("docker", ["rmi", "subagent"], { timeout: 10_000 }); } catch {}
+      }
+    }
+
+    logger.info({}, "Building subagent image from docker/subagent.Dockerfile");
 
     // Notify user that the image is being built (first time only)
     // We broadcast via any active session's connector, but since we don't have
     // direct access here, we log and let the caller handle timeout gracefully.
 
-    const localAppDir = process.cwd(); // /app inside the container
     const dockerfilePath = `${localAppDir}/docker/subagent.Dockerfile`;
 
     try {
