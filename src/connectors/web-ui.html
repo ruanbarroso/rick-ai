@@ -3095,6 +3095,8 @@ function handleServerMessage(msg) {
       )) {
         deployInProgress = true;
       }
+      // Hide typing indicator when agent responds (don't wait for the typing:false event)
+      if (from === 'agent') showTyping(false);
       storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);
       if (sid === currentSessionId) {
         appendMessageToDOM(msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);
@@ -4047,6 +4049,10 @@ async function sendMessage() {
    if (sid === currentSessionId) {
      appendMessageToDOM(text, 'user', localAudioUrl, localImageUrls.length > 0 ? localImageUrls : null, null, localFileInfos.length > 0 ? localFileInfos : null);
    }
+
+   // Show typing indicator immediately — don't wait for the server event.
+   // It will be hidden when the agent response (or a typing:false event) arrives.
+   showTyping(true);
 
   // Build files array for payload — inclui TODOS os arquivos (imagens e não-imagens)
   var filesPayload = [];
