@@ -512,6 +512,10 @@ export class SessionManager {
       // Blank session — waiting for user to send first message
       session.state = "waiting_user";
       session.updatedAt = Date.now();
+      // Notify session viewers so they update from "Trabalhando..." to "Aguardando..."
+      if (this.onSessionMessage) {
+        this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+      }
     }
   }
 
