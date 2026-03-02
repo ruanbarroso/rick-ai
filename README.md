@@ -88,6 +88,8 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 
 No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect via your existing Pro/Max subscriptions. API key fallback models (`claude-opus-4-6`, `gpt-5.3-codex`) are used when OAuth is not configured.
 
+OAuth refresh is coordinated with in-memory deduplication per provider/user, avoiding duplicate refresh calls within the running Rick instance.
+
 ### Persistent Memory
 
 Rick has two memory systems working together:

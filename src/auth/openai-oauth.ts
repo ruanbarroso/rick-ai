@@ -102,6 +102,10 @@ function extractEmail(tokens: TokenResponse): string | undefined {
 
 export class OpenAIOAuthService {
   private pendingAuths = new Map<string, PendingAuth>();
+  /** Shared in-memory token cache keyed by userId. */
+  private tokenCache = new Map<number, OpenAIOAuthTokens>();
+  /** Deduplicate concurrent refresh attempts in-process. */
+  private refreshInProgress = new Map<number, Promise<{ accessToken: string; accountId: string | null } | null>>();
 
   constructor() {
     // Clean up expired pending auths every 5 minutes
@@ -237,6 +241,13 @@ export class OpenAIOAuthService {
       const email = extractEmail(tokens) || null;
 
       await this.saveTokens(userId, tokens, accountId, email);
+      this.tokenCache.set(userId, {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresAt: Date.now() + (tokens.expires_in || 3600) * 1000,
+        accountId,
+        accountEmail: email,
+      });
 
       // Clean up pending auth
       this.pendingAuths.delete(pending.state);
@@ -257,10 +268,16 @@ export class OpenAIOAuthService {
    * Get a valid access token. Auto-refreshes if expired.
    */
   async getValidToken(userId: number): Promise<{ accessToken: string; accountId: string | null } | null> {
+    const cached = this.tokenCache.get(userId);
+    if (cached && cached.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
+      return { accessToken: cached.accessToken, accountId: cached.accountId };
+    }
+
     const stored = await this.loadTokens(userId);
     if (!stored) return null;
 
     if (stored.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
+      this.tokenCache.set(userId, stored);
       return { accessToken: stored.accessToken, accountId: stored.accountId };
     }
 
@@ -269,18 +286,15 @@ export class OpenAIOAuthService {
       return null;
     }
 
-    try {
-      const refreshed = await this.refreshTokens(stored.refreshToken);
-      const accountId = extractAccountId(refreshed) || stored.accountId;
-      const email = extractEmail(refreshed) || stored.accountEmail;
-      await this.saveTokens(userId, refreshed, accountId, email);
+    const existing = this.refreshInProgress.get(userId);
+    if (existing) return existing;
 
-      logger.info({ userId }, "OpenAI OAuth: token refreshed");
-      return { accessToken: refreshed.access_token, accountId };
-    } catch (err) {
-      logger.error({ err, userId }, "OpenAI OAuth: refresh failed");
-      await this.markDisconnected(userId);
-      return null;
+    const refreshPromise = this.doRefresh(userId, stored.refreshToken);
+    this.refreshInProgress.set(userId, refreshPromise);
+    try {
+      return await refreshPromise;
+    } finally {
+      this.refreshInProgress.delete(userId);
     }
   }
 
@@ -298,6 +312,7 @@ export class OpenAIOAuthService {
   }
 
   async disconnect(userId: number): Promise<void> {
+    this.tokenCache.delete(userId);
     await query(
       `DELETE FROM oauth_tokens WHERE user_id = $1 AND provider = 'openai'`,
       [userId]
@@ -336,9 +351,19 @@ export class OpenAIOAuthService {
     accountId: string | null,
     email: string | null
   ): Promise<void> {
+    await this.saveTokensWithQuery(query, userId, tokens, accountId, email);
+  }
+
+  private async saveTokensWithQuery(
+    q: (text: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number }>,
+    userId: number,
+    tokens: TokenResponse,
+    accountId: string | null,
+    email: string | null
+  ): Promise<void> {
     const expiresAt = Date.now() + (tokens.expires_in || 3600) * 1000;
 
-    await query(
+    await q(
       `INSERT INTO oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, is_active, updated_at)
        VALUES ($1, 'openai', $2, $3, $4, $5, $6, $7, TRUE, NOW())
        ON CONFLICT (user_id, provider)
@@ -363,6 +388,36 @@ export class OpenAIOAuthService {
     );
   }
 
+  private async doRefresh(
+    userId: number,
+    refreshToken: string
+  ): Promise<{ accessToken: string; accountId: string | null } | null> {
+    try {
+      const refreshed = await this.refreshTokens(refreshToken);
+      const current = await this.loadTokens(userId);
+      const accountId = extractAccountId(refreshed) || current?.accountId || null;
+      const email = extractEmail(refreshed) || current?.accountEmail || null;
+      await this.saveTokens(userId, refreshed, accountId, email);
+
+      const newTokens: OpenAIOAuthTokens = {
+        accessToken: refreshed.access_token,
+        refreshToken: refreshed.refresh_token,
+        expiresAt: Date.now() + (refreshed.expires_in || 3600) * 1000,
+        accountId,
+        accountEmail: email,
+      };
+      this.tokenCache.set(userId, newTokens);
+
+      logger.info({ userId }, "OpenAI OAuth: token refreshed (deduped in-process)");
+      return { accessToken: refreshed.access_token, accountId };
+    } catch (err) {
+      logger.error({ err, userId }, "OpenAI OAuth: refresh failed");
+      this.tokenCache.delete(userId);
+      await this.markDisconnected(userId);
+      return null;
+    }
+  }
+
   private async loadTokens(userId: number): Promise<OpenAIOAuthTokens | null> {
     const result = await query(
       `SELECT access_token, refresh_token, expires_at, account_email, org_name
@@ -384,6 +439,7 @@ export class OpenAIOAuthService {
   }
 
   private async markDisconnected(userId: number): Promise<void> {
+    this.tokenCache.delete(userId);
     await query(
       `UPDATE oauth_tokens SET is_active = FALSE, updated_at = NOW()
        WHERE user_id = $1 AND provider = 'openai'`,

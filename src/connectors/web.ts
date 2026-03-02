@@ -14,6 +14,7 @@ import { isPostgres, query } from "../memory/database.js";
 import { logger, getLogBuffer } from "../config/logger.js";
 import { ClaudeOAuthService } from "../auth/claude-oauth.js";
 import { OpenAIOAuthService } from "../auth/openai-oauth.js";
+import { claudeOAuthService, openaiOAuthService } from "../auth/oauth-singleton.js";
 import { GeminiProvider } from "../llm/providers/gemini.js";
 
 /**
@@ -98,8 +99,8 @@ export class WebConnector implements Connector {
   private currentlyTyping = false;
   /** Cached QR code data URL so late-connecting clients can still see the current QR */
   private pendingQrDataUrl: string | null = null;
-  private claudeOAuth = new ClaudeOAuthService();
-  private openaiOAuth = new OpenAIOAuthService();
+  private claudeOAuth: ClaudeOAuthService = claudeOAuthService;
+  private openaiOAuth: OpenAIOAuthService = openaiOAuthService;
   constructor(manager: ConnectorManager) {
     this.manager = manager;
   }

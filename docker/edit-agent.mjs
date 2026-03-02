@@ -281,6 +281,16 @@ async function agenticLoop(adapter) {
   adapter.persistHistory(state);
 }
 
+async function runOpenAI(history, userContent) {
+  await agenticLoop(makeOpenAIAdapter(history, userContent));
+  emitResult("Tarefa concluida pelo GPT.");
+}
+
+async function runGemini(history, userContent) {
+  await agenticLoop(makeGeminiAdapter(history, userContent));
+  emitResult("Tarefa concluida pelo Gemini Pro.");
+}
+
 // ── OpenAI adapter ───────────────────────────────────────────────────────────
 function makeOpenAIAdapter(history, userContent) {
   const apiKey = process.env.OPENAI_API_KEY ?? "";
@@ -314,8 +324,7 @@ function makeOpenAIAdapter(history, userContent) {
       });
 
       if (!res.ok) {
-        emitError(`OpenAI API error ${res.status}: ${await res.text()}`);
-        process.exit(1);
+        throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
       }
 
       const data = await res.json();
@@ -381,15 +390,13 @@ function makeGeminiAdapter(history, userContent) {
       });
 
       if (!res.ok) {
-        emitError(`Gemini API error ${res.status}: ${await res.text()}`);
-        process.exit(1);
+        throw new Error(`Gemini API error ${res.status}: ${await res.text()}`);
       }
 
       const data = await res.json();
       const candidate = data.candidates?.[0];
       if (!candidate) {
-        emitError("Gemini retornou resposta vazia.");
-        process.exit(1);
+        throw new Error("Gemini retornou resposta vazia.");
       }
 
       const modelParts = candidate.content.parts ?? [];
@@ -428,38 +435,76 @@ function makeGeminiAdapter(history, userContent) {
   };
 }
 
-// ── Claude: pass-through to claude CLI ───────────────────────────────────────
-if (hasClaude) {
-  const child = spawn("claude", rawArgs, { stdio: "inherit" });
-  child.on("exit", (code) => process.exit(code ?? 0));
-  child.on("error", (err) => {
-    process.stderr.write(`Erro ao iniciar Claude CLI: ${err.message}\n`);
-    process.exit(1);
+async function runClaudeRaw() {
+  return await new Promise((resolve) => {
+    const child = spawn("claude", rawArgs, { stdio: ["inherit", "pipe", "pipe"] });
+    let hadStdout = false;
+
+    child.stdout?.on("data", (chunk) => {
+      if (chunk.length > 0) hadStdout = true;
+      process.stdout.write(chunk);
+    });
+
+    child.stderr?.on("data", (chunk) => {
+      process.stderr.write(chunk);
+    });
+
+    child.on("exit", (code) => resolve({ ok: (code ?? 0) === 0, code: code ?? 0, hadStdout }));
+    child.on("error", (err) => {
+      process.stderr.write(`Erro ao iniciar Claude CLI: ${err.message}\n`);
+      resolve({ ok: false, code: 1, hadStdout: false });
+    });
   });
 }
 
-// ── Non-Claude providers ─────────────────────────────────────────────────────
-else {
-  if (!prompt) {
-    emitError("Nenhum prompt fornecido (flag -p ausente).");
-    process.exit(1);
+// ── Main with provider fallback ───────────────────────────────────────────────
+if (!prompt) {
+  emitError("Nenhum prompt fornecido (flag -p ausente).");
+  process.exit(1);
+}
+
+const history = loadHistory();
+const fileList = listWorkspace(WORKSPACE).join("\n") || "(workspace vazio)";
+const userContent = `Arquivos disponíveis no workspace:\n${fileList}\n\n---\n\n${prompt}`;
+const errors = [];
+
+if (hasClaude) {
+  const claude = await runClaudeRaw();
+  if (claude.ok) {
+    process.exit(0);
   }
+  // If Claude produced output and then failed, preserve that failure and stop.
+  if (claude.hadStdout) {
+    process.exit(claude.code || 1);
+  }
+  errors.push(`Claude CLI saiu com code ${claude.code || 1}`);
+}
 
-  const history = loadHistory();
-  const fileList = listWorkspace(WORKSPACE).join("\n") || "(workspace vazio)";
-  const userContent = `Arquivos disponíveis no workspace:\n${fileList}\n\n---\n\n${prompt}`;
-
-  if (hasOpenAI) {
-    await agenticLoop(makeOpenAIAdapter(history, userContent));
-    emitResult("Tarefa concluída pelo GPT.");
-  } else if (hasGemini) {
-    await agenticLoop(makeGeminiAdapter(history, userContent));
-    emitResult("Tarefa concluída pelo Gemini Pro.");
-  } else {
-    emitError(
-      "Nenhum provedor de LLM disponível no container. " +
-      "Configure CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY ou GEMINI_API_KEY."
-    );
-    process.exit(1);
+if (hasOpenAI) {
+  try {
+    await runOpenAI(history, userContent);
+    process.exit(0);
+  } catch (err) {
+    errors.push(err?.message || String(err));
   }
 }
+
+if (hasGemini) {
+  try {
+    await runGemini(history, userContent);
+    process.exit(0);
+  } catch (err) {
+    errors.push(err?.message || String(err));
+  }
+}
+
+if (!hasClaude && !hasOpenAI && !hasGemini) {
+  emitError(
+    "Nenhum provedor de LLM disponivel no container. " +
+    "Configure CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY ou GEMINI_API_KEY."
+  );
+  process.exit(1);
+}
+
+emitError(`Todos os provedores falharam: ${errors.join(" | ")}`);
+process.exit(1);

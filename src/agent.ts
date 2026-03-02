@@ -6,6 +6,7 @@ import { MemoryService } from "./memory/memory-service.js";
 import { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { ClaudeOAuthService } from "./auth/claude-oauth.js";
 import { OpenAIOAuthService } from "./auth/openai-oauth.js";
+import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
 import { SessionManager, getSessionRickName } from "./subagent/session-manager.js";
 import { EditSession, AuthExpiredCallback, GetFreshTokenCallback, SaveHistoryFn } from "./subagent/edit-session.js";
 import { classifyTask } from "./subagent/classifier.js";
@@ -64,8 +65,8 @@ export class Agent {
     this.memory = memory;
     this.connectorManager = connectorManager;
     this.vectorMemory = vectorMemory || null;
-    this.claudeOAuth = new ClaudeOAuthService();
-    this.openaiOAuth = new OpenAIOAuthService();
+    this.claudeOAuth = claudeOAuthService;
+    this.openaiOAuth = openaiOAuthService;
     this.sessionManager = new SessionManager(connectorManager, memory);
   }
 
@@ -1432,14 +1433,15 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
       activeProvider,
     );
 
-    // Build env for the container — inject provider credentials based on active provider
+    // Build env for the container — inject all available provider credentials
+    // so edit-agent can cascade Claude -> GPT -> Gemini when needed.
     const env: Record<string, string> = {};
 
-    // Gemini is always available as last resort
+    // Gemini as last resort
     if (config.gemini?.apiKey) env.GEMINI_API_KEY = config.gemini.apiKey;
 
-    if (activeProvider === "claude" && claudeToken) {
-      // Claude OAuth credentials
+    // Claude credentials
+    if (claudeToken) {
       env.CLAUDE_CODE_OAUTH_TOKEN = claudeToken;
       try {
         const { query } = await import("./memory/db.js");
@@ -1451,17 +1453,16 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
           env.CLAUDE_REFRESH_TOKEN = result.rows[0].refresh_token;
         }
       } catch (_) { /* ignore */ }
-    } else if (activeProvider === "openai") {
-      // OpenAI credentials (OAuth token or API key)
-      const gptToken = await this.openaiOAuth.getValidToken(userId);
-      if (gptToken) {
-        env.OPENAI_ACCESS_TOKEN = gptToken.accessToken;
-        if (gptToken.accountId) env.OPENAI_ACCOUNT_ID = gptToken.accountId;
-      } else if (config.openai?.apiKey) {
-        env.OPENAI_API_KEY = config.openai.apiKey;
-      }
     }
-    // For "gemini" provider: GEMINI_API_KEY already set above
+
+    // OpenAI credentials (OAuth token or API key)
+    const gptToken = await this.openaiOAuth.getValidToken(userId);
+    if (gptToken) {
+      env.OPENAI_ACCESS_TOKEN = gptToken.accessToken;
+      if (gptToken.accountId) env.OPENAI_ACCOUNT_ID = gptToken.accountId;
+    } else if (config.openai?.apiKey) {
+      env.OPENAI_API_KEY = config.openai.apiKey;
+    }
 
     // Set this.editSession BEFORE start() so that saveHistoryCb (which reads
     // this.editSession?.id) can persist the welcome message to session_messages.

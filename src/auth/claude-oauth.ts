@@ -301,7 +301,6 @@ export class ClaudeOAuthService {
       const refreshed = await this.refreshTokens(refreshToken);
       await this.saveTokens(userId, refreshed);
 
-      // Update in-memory cache with the fresh token
       const newTokens: OAuthTokens = {
         accessToken: refreshed.access_token,
         refreshToken: refreshed.refresh_token,
@@ -312,7 +311,7 @@ export class ClaudeOAuthService {
       };
       this.tokenCache.set(userId, newTokens);
 
-      logger.info({ userId }, "Claude OAuth: token refreshed (cached globally)");
+      logger.info({ userId }, "Claude OAuth: token refreshed (deduped in-process)");
       return refreshed.access_token;
     } catch (err) {
       logger.error({ err, userId }, "Claude OAuth: refresh failed");
@@ -395,12 +394,20 @@ export class ClaudeOAuthService {
     userId: number,
     tokens: TokenResponse
   ): Promise<void> {
+    await this.saveTokensWithQuery(query, userId, tokens);
+  }
+
+  private async saveTokensWithQuery(
+    q: (text: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number }>,
+    userId: number,
+    tokens: TokenResponse
+  ): Promise<void> {
     const expiresAt = Date.now() + tokens.expires_in * 1000;
     const scopes = tokens.scope.split(" ");
     const email = tokens.account?.email_address || null;
     const orgName = tokens.organization?.name || null;
 
-    await query(
+    await q(
       `INSERT INTO oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, updated_at)
        VALUES ($1, 'claude', $2, $3, $4, $5, $6, $7, NOW())
        ON CONFLICT (user_id, provider)
