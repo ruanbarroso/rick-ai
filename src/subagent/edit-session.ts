@@ -10,6 +10,7 @@ import { config } from "../config/env.js";
 import { createAgentToken } from "./agent-token.js";
 import type { MemoryService } from "../memory/memory-service.js";
 import type { MediaAttachment } from "../llm/types.js";
+import { editImageBuilder } from "./edit-image-builder.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -491,95 +492,26 @@ export class EditSession {
    * Rebuilds when image is missing or labels differ.
    */
   private async ensureImageExists(): Promise<void> {
-    const localAppDir = process.cwd(); // /app inside the container
-    const editAgentPath = `${localAppDir}/docker/edit-agent.mjs`;
-    const dockerfilePath = `${localAppDir}/docker/subagent-edit.Dockerfile`;
-    const versionFilePath = `${localAppDir}/.rick-version`;
-    const packageJsonPath = `${localAppDir}/package.json`;
-
-    const { createHash } = await import("node:crypto");
-    const { readFileSync, existsSync } = await import("node:fs");
-
-    const localHash = createHash("sha256")
-      .update(readFileSync(editAgentPath))
-      .update("\n---\n")
-      .update(readFileSync(dockerfilePath))
-      .digest("hex")
-      .substring(0, 16);
-
-    let localVersion = "unknown";
-    try {
-      if (existsSync(versionFilePath)) {
-        const first = readFileSync(versionFilePath, "utf-8")
-          .split(/\r?\n/)
-          .map((s) => s.trim())
-          .find(Boolean);
-        if (first) localVersion = first;
-      } else {
-        const pkg = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as { version?: string };
-        if (pkg.version) localVersion = `pkg-${pkg.version}`;
-      }
-    } catch {
-      // Keep unknown and refresh labels on next build.
-    }
-
-    try {
-      const { stdout } = await execFileAsync(
-        "docker",
-        [
-          "inspect",
-          "--format",
-          "{{index .Config.Labels \"edit-agent.bundle.hash\"}}|{{index .Config.Labels \"rick.version\"}}",
-          "subagent-edit",
-        ],
-        { timeout: 10_000 }
-      );
-      const [imageHash = "", imageVersion = ""] = stdout.trim().split("|");
-      if (imageHash === localHash && imageVersion === localVersion) {
-        return; // Image is up to date
-      }
-
-      logger.info(
-        {
-          localHash,
-          imageHash: imageHash || "(none)",
-          localVersion,
-          imageVersion: imageVersion || "(none)",
-        },
-        "subagent-edit image out of date — rebuilding"
-      );
-      await this.sendMessage(
-        "_Imagem do agente de edicao desatualizada para esta versao. " +
-        "Reconstruindo agora..._"
-      );
-    } catch {
-      // Image not found — build it
-      logger.info({}, "subagent-edit image not found — building from docker/subagent-edit.Dockerfile");
-      await this.sendMessage(
-        "_Imagem do agente de edicao nao encontrada localmente. " +
-        "Construindo agora (pode levar alguns minutos na primeira vez)..._"
-      );
-    }
-
-    // docker build reads the context from the CLI side (inside this container),
-    // so we use the local /app path where docker/ is mounted read-only.
-    // The Dockerfile's COPY instructions reference paths relative to this context.
-    await execFileAsync(
-      "docker",
-      [
-        "build",
-        "--no-cache",
-        "-t", "subagent-edit",
-        "--label", `edit-agent.bundle.hash=${localHash}`,
-        "--label", `rick.version=${localVersion}`,
-        "-f", `${localAppDir}/docker/subagent-edit.Dockerfile`,
-        localAppDir,
-      ],
-      { timeout: 600_000 } // 10 minutes max for first build
-    );
-
-    logger.info({ hash: localHash, version: localVersion }, "subagent-edit image built successfully");
-    await this.sendMessage("_Imagem construida com sucesso! Iniciando sessao..._");
+    await editImageBuilder.ensureReady({
+      onStatus: async (status) => {
+        if (status === "building_outdated") {
+          await this.sendMessage(
+            "_Imagem do agente de edicao desatualizada para esta versao. Reconstruindo agora..._"
+          );
+          return;
+        }
+        if (status === "building_missing") {
+          await this.sendMessage(
+            "_Imagem do agente de edicao nao encontrada localmente. Construindo agora (pode levar alguns minutos na primeira vez)..._"
+          );
+          return;
+        }
+        await this.sendMessage(
+          "_Aguardando finalizacao da construcao da imagem do agente de edicao..._"
+        );
+      },
+    });
+    await this.sendMessage("_Imagem pronta. Iniciando sessao..._");
   }
 
   /**
@@ -1726,5 +1658,9 @@ echo "[publish] Codigo publicado com sucesso em github.com/${targetRepo}"
     }, intervalMs);
 
     return () => clearInterval(interval);
+  }
+
+  static warmupImage(): void {
+    editImageBuilder.warmup("startup");
   }
 }

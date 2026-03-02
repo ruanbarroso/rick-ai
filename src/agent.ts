@@ -78,6 +78,10 @@ export class Agent {
     return this.sessionManager.recoverSessions();
   }
 
+  warmupSubagentImage(): void {
+    this.sessionManager.warmupSubagentImage();
+  }
+
   /**
    * Public entry point — serializes per user to prevent race conditions.
    * Two messages from the same user are processed sequentially, never concurrently.

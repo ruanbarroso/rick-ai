@@ -12,6 +12,7 @@ import { logger } from "../config/logger.js";
 import { config } from "../config/env.js";
 import { createAgentToken } from "./agent-token.js";
 import type { MemoryService } from "../memory/memory-service.js";
+import { subagentImageBuilder, SUBAGENT_RUNTIME_IMAGE } from "./subagent-image-builder.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -321,6 +322,9 @@ export class SessionManager {
 
     this.sessions.set(id, session);
 
+    // Show immediate feedback in the session viewer while the container is being prepared.
+    await this.sendToUser(session, "Preparando ambiente do sub-agente...");
+
     // Persist session to DB for audit trail
     if (numericUserId) {
       this.persistSessionToDB(session).catch((err) =>
@@ -329,7 +333,19 @@ export class SessionManager {
     }
 
     try {
-      await this.ensureSubagentImage();
+      let notified = false;
+      await subagentImageBuilder.ensureForSession({
+        onStatus: (status) => {
+          if (notified) return;
+          notified = true;
+          const text = status === "building_fresh"
+            ? "Primeira execucao detectada. Construindo imagem do sub-agente..."
+            : status === "waiting_first_build"
+              ? "Aguardando finalizacao da preparacao inicial do sub-agente..."
+              : "Atualizacao da imagem em segundo plano. Iniciando com a imagem atual...";
+          this.sendToUser(session, text, "tool_use").catch(() => {});
+        },
+      });
       await this.startContainer(session, env, images);
     } catch (err) {
       logger.error({ err, sessionId: id }, "Failed to start sub-agent container");
@@ -341,6 +357,10 @@ export class SessionManager {
     }
 
     return session;
+  }
+
+  warmupSubagentImage(): void {
+    subagentImageBuilder.warmup("startup");
   }
 
   /**
@@ -453,92 +473,6 @@ export class SessionManager {
 
   // ==================== CONTAINER MANAGEMENT ====================
 
-  /**
-   * Ensure the "subagent" Docker image exists locally.
-   * Rebuild when code hash or Rick version label differs.
-   */
-  private async ensureSubagentImage(): Promise<void> {
-    const localAppDir = process.cwd(); // /app inside the container
-    const agentMjsPath = `${localAppDir}/docker/agent.mjs`;
-    const dockerfilePath = `${localAppDir}/docker/subagent.Dockerfile`;
-    const versionFilePath = `${localAppDir}/.rick-version`;
-    const packageJsonPath = `${localAppDir}/package.json`;
-
-    // Compute hash of local subagent sources
-    const { createHash } = await import("node:crypto");
-    const { readFileSync, existsSync } = await import("node:fs");
-    const localHash = createHash("sha256")
-      .update(readFileSync(agentMjsPath))
-      .update("\n---\n")
-      .update(readFileSync(dockerfilePath))
-      .digest("hex")
-      .substring(0, 16);
-
-    let localVersion = "unknown";
-    try {
-      if (existsSync(versionFilePath)) {
-        const first = readFileSync(versionFilePath, "utf-8")
-          .split(/\r?\n/)
-          .map((s) => s.trim())
-          .find(Boolean);
-        if (first) localVersion = first;
-      } else {
-        const pkg = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as { version?: string };
-        if (pkg.version) localVersion = `pkg-${pkg.version}`;
-      }
-    } catch {
-      // Keep "unknown" and force label refresh if needed.
-    }
-
-    // Check if image exists and has matching hash + version labels
-    try {
-      const { stdout } = await execFileAsync("docker", [
-        "inspect", "--format",
-        "{{index .Config.Labels \"agent.bundle.hash\"}}|{{index .Config.Labels \"rick.version\"}}",
-        "subagent",
-      ], { timeout: 10_000 });
-      const [imageHash = "", imageVersion = ""] = stdout.trim().split("|");
-      if (imageHash === localHash && imageVersion === localVersion) {
-        return; // Image is up to date
-      }
-      logger.info(
-        {
-          localHash,
-          imageHash: imageHash || "(none)",
-          localVersion,
-          imageVersion: imageVersion || "(none)",
-        },
-        "subagent image out of date — rebuilding"
-      );
-    } catch {
-      // Image not found — will build
-    }
-
-    logger.info(
-      { hash: localHash, version: localVersion },
-      "Building subagent image from docker/subagent.Dockerfile"
-    );
-
-    try {
-      await execFileAsync(
-        "docker",
-        [
-          "build", "--no-cache",
-          "-t", "subagent",
-          "--label", `agent.bundle.hash=${localHash}`,
-          "--label", `rick.version=${localVersion}`,
-          "-f", dockerfilePath,
-          localAppDir,
-        ],
-        { timeout: 600_000 } // 10 minutes max for first build (Playwright install is slow)
-      );
-      logger.info({ hash: localHash, version: localVersion }, "subagent image built successfully");
-    } catch (err) {
-      logger.error({ err }, "Failed to build subagent image");
-      throw new Error("Falha ao construir imagem do sub-agente. Verifique os logs.");
-    }
-  }
-
   private async startContainer(session: SubAgentSession, env: Record<string, string>, images?: MediaAttachment[]): Promise<void> {
     // === Agent API: generate JWT and resolve upfront credentials ===
     const agentApiEnv = await this.buildAgentApiEnv(session);
@@ -567,7 +501,7 @@ export class SessionManager {
       "--add-host=host.docker.internal:host-gateway",
       "--name", session.containerName,
       ...envArgs,
-      "subagent",
+      SUBAGENT_RUNTIME_IMAGE,
       "sleep", "86400", // 24h max lifetime
     ]);
 

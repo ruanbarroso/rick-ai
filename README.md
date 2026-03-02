@@ -126,6 +126,7 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 - **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick's read-only API for memories, credentials, semantic search, conversations, and config — all scoped to the owner's data.
 - **Session recovery**: Running containers are recovered after Rick restarts
 - **Image freshness**: `subagent` image is rebuilt automatically whenever bundle hash or Rick version label differs (no stale image reuse across versions)
+- **Centralized image builder**: main container warms the `subagent` image in background at startup; new sessions reuse `subagent:current`, while a new version builds in the background and is promoted atomically when ready
 
 Each sub-agent gets a unique Rick variant name (Rick Prime, Pickle Rick, Evil Rick, etc.) for easy identification.
 
@@ -134,7 +135,7 @@ Each sub-agent gets a unique Rick variant name (Rick Prime, Pickle Rick, Evil Ri
 Rick can edit his own source code:
 
 1. `/edit` — Starts an edit session. Creates a staging copy of the repository (excluding runtime artifacts like `.git`, `node_modules`, and `dist`), launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-5.3 Codex → Gemini 3.1 Pro**, chosen automatically based on which credentials are available.
-   - `subagent-edit` image is auto-rebuilt when source hash/version labels differ, so edit mode always runs the current release image.
+   - `subagent-edit` image is warmed up in background at startup and auto-rebuilt when source hash/version labels differ; edit mode always waits for the current image (never runs with stale image).
 2. Send prompts describing what to change — the active provider edits the files directly inside the isolated container.
 3. `/deploy` — Triggers the deploy pipeline:
    - Backup current `src/` → build candidate image → smoke test (health-only mode) → swap containers → 60s watchdog → rollback on failure

@@ -102,6 +102,14 @@ async function main() {
   const connectorManager = new ConnectorManager();
   const agent = new Agent(llm, memory, connectorManager, vectorMemory);
 
+  // Kick off centralized sub-agent image warmup in background.
+  // First sessions can then reuse the ready image instead of triggering a cold build.
+  agent.warmupSubagentImage();
+
+  // Warm up edit-mode image as well.
+  // Edit mode is strict: if version changed, sessions wait for rebuild completion.
+  EditSession.warmupImage();
+
   // Register services for the sub-agent read-only API (/api/agent/*)
   registerAgentApiServices(memory, vectorMemory);
 
