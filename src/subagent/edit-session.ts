@@ -992,7 +992,7 @@ export class EditSession {
     this.state = "running";
     if (this.activeProvider === "claude") await this.ensureFreshToken();
     this.lastFailedPrompt = { text: prompt, medias, isContinue: false, hadOutput: false };
-    const augmentedPrompt = await this.augmentPromptWithImages(prompt, medias);
+    const augmentedPrompt = await this.augmentPromptWithAttachments(prompt, medias);
     // Pass prompt as a direct argument — no shell escaping needed.
     // Node's spawn() passes each arg via execve(), so no shell metacharacters
     // are interpreted regardless of prompt content.
@@ -1034,7 +1034,7 @@ export class EditSession {
     this.state = "running";
     if (this.activeProvider === "claude") await this.ensureFreshToken();
     this.lastFailedPrompt = { text: prompt, medias, isContinue: true, hadOutput: false };
-    const augmentedPrompt = await this.augmentPromptWithImages(prompt, medias);
+    const augmentedPrompt = await this.augmentPromptWithAttachments(prompt, medias);
     // Same sanitization as sendPrompt
     const safePrompt = augmentedPrompt.startsWith("-") ? `\n${augmentedPrompt}` : augmentedPrompt;
     await this.runClaude([
@@ -1049,27 +1049,41 @@ export class EditSession {
   }
 
   /**
-   * Inject all images into the container and augment the prompt to reference each one.
-   * Claude Code CLI doesn't support --image, so we docker cp each file in
-   * and tell Claude to read them with its Read tool.
-   * Returns the original prompt if no images, or augmented prompt with all image paths.
+   * Inject all attachments into the container and augment the prompt to reference each one.
+   * Returns the original prompt if no attachments, or augmented prompt with all file paths.
    */
-  private async augmentPromptWithImages(prompt: string, medias?: MediaAttachment[]): Promise<string> {
+  private async augmentPromptWithAttachments(prompt: string, medias?: MediaAttachment[]): Promise<string> {
     if (!medias || medias.length === 0 || !this.containerId) {
       return prompt;
     }
 
-    const imagePaths: string[] = [];
+    const attachmentPaths: string[] = [];
+
+    const extFromMime = (mimeType: string): string => {
+      const map: Record<string, string> = {
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/gif": "gif",
+        "application/pdf": "pdf",
+        "text/plain": "txt",
+        "text/csv": "csv",
+        "application/json": "json",
+        "application/xml": "xml",
+        "application/javascript": "js",
+      };
+      if (map[mimeType]) return map[mimeType];
+      const raw = mimeType.split("/")[1] || "bin";
+      return raw.replace("+xml", "xml").replace(/[^a-zA-Z0-9]/g, "") || "bin";
+    };
 
     for (const media of medias) {
-      if (!media.mimeType.startsWith("image/")) continue;
-
       try {
-        const ext = media.mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png";
-        const containerPath = `/tmp/edit-image-${Date.now()}-${randomBytes(2).toString("hex")}.${ext}`;
+        const ext = extFromMime(media.mimeType);
+        const containerPath = `/tmp/edit-attachment-${Date.now()}-${randomBytes(2).toString("hex")}.${ext}`;
 
-        // Write image to a host temp file, then docker cp into the container.
-        const tmpFile = join(tmpdir(), `edit-image-${randomBytes(4).toString("hex")}.${ext}`);
+        // Write file to a host temp path, then docker cp into the container.
+        const tmpFile = join(tmpdir(), `edit-attachment-${randomBytes(4).toString("hex")}.${ext}`);
         await writeFile(tmpFile, media.data);
         try {
           await execFileAsync("docker", ["cp", tmpFile, `${this.containerName}:${containerPath}`]);
@@ -1077,20 +1091,29 @@ export class EditSession {
           await unlink(tmpFile).catch(() => {});
         }
 
-        logger.info({ containerPath, size: media.data.length, mimeType: media.mimeType, sessionId: this.id }, "Image injected into edit container");
-        imagePaths.push(containerPath);
+        logger.info({ containerPath, size: media.data.length, mimeType: media.mimeType, sessionId: this.id }, "Attachment injected into edit container");
+        attachmentPaths.push(containerPath);
       } catch (err) {
-        logger.warn({ err, sessionId: this.id }, "Failed to inject image into edit container");
+        logger.warn({ err, sessionId: this.id, mimeType: media.mimeType }, "Failed to inject attachment into edit container");
       }
     }
 
-    if (imagePaths.length === 0) return prompt;
+    if (attachmentPaths.length === 0) return prompt;
 
-    const imageInstructions = imagePaths
-      .map((p) => `[O usuario anexou uma imagem. Use o Read tool para ler o arquivo de imagem em: ${p}]`)
+    const attachmentInstructions = attachmentPaths
+      .map((p) => `- ${p}`)
       .join("\n");
 
-    return `${prompt}\n\n${imageInstructions}`;
+    const mandatoryReadStep = [
+      "[REGRA OBRIGATORIA - ARQUIVOS ANEXADOS]",
+      "Antes de qualquer analise de codigo, leia TODOS os arquivos anexados usando a ferramenta Read nos caminhos abaixo.",
+      "Nao pule esta etapa. So depois de ler os anexos voce pode continuar a tarefa.",
+      "Se algum arquivo nao puder ser lido, informe explicitamente o erro antes de prosseguir.",
+      "Caminhos dos anexos:",
+      attachmentInstructions,
+    ].join("\n");
+
+    return `${mandatoryReadStep}\n\nPedido do usuario:\n${prompt}`;
   }
 
   /**

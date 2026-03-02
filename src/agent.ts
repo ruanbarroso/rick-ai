@@ -199,24 +199,25 @@ export class Agent {
       }
 
       // Audio: pre-transcribe with Gemini and fold into text
-      // Collect all image medias to forward to edit session (supports multiple images)
+      // Collect all non-audio attachments to forward to edit session.
       let editMedias: MediaAttachment[] = [];
       if (media?.mimeType.startsWith("audio/")) {
         const transcription = await this.transcribeAudioWithGemini(media);
         const prefix = fullText.trim() ? `${fullText.trim()}\n\n` : "";
         fullText = `${prefix}[Áudio transcrito: "${transcription}"]`;
-        editMedias = imageMedias ?? []; // use all images if combined audio+image
+        editMedias = imageMedias ?? []; // keep attachments sent alongside audio
         // Send transcription to frontend so "Processando audio..." is replaced
         if (audioUrl && this.webBridge) {
           this.webBridge.sendTranscription(audioUrl, transcription);
         }
-      } else if (media?.mimeType.startsWith("image/")) {
-        // Primary media is an image — include it plus any extra images in imageMedias
-        const extras = (imageMedias ?? []).filter((m) => m !== media);
-        editMedias = [media, ...extras];
-      } else if (imageMedias && imageMedias.length > 0) {
-        // No primary media (or non-image primary) — forward all imageMedias
-        editMedias = imageMedias;
+      } else {
+        // Keep primary non-audio attachment (if any), plus additional attachments.
+        if (media) editMedias.push(media);
+        if (imageMedias && imageMedias.length > 0) {
+          for (const m of imageMedias) {
+            if (!editMedias.includes(m)) editMedias.push(m);
+          }
+        }
       }
 
       logger.info(

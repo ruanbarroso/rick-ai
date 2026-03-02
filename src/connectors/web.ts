@@ -571,6 +571,9 @@ export class WebConnector implements Connector {
     const fileTexts: string[] = [];
     // Generic file attachments (non-image/non-audio) for chat history display
     const fileInfos: Array<{ url: string; name: string; mimeType: string }> = [];
+    const editModeActive = this.agentBridge?.isEditModeActive() ?? false;
+    let imageAttachmentCount = 0;
+    let attachmentCount = 0;
 
     for (const f of files) {
       const buffer = Buffer.from(f.base64, "base64");
@@ -579,6 +582,8 @@ export class WebConnector implements Connector {
         // Imagens: tratamento existente
         const attachment: MediaAttachment = { data: buffer, mimeType: f.mimeType };
         imageMedias.push(attachment);
+        imageAttachmentCount += 1;
+        attachmentCount += 1;
         logger.info({ type: "image", size: buffer.length, mimeType: f.mimeType }, "Web image received");
         try {
           const id = genId();
@@ -598,6 +603,10 @@ export class WebConnector implements Connector {
         const content = buffer.toString("utf-8");
         const fileName = f.name || "arquivo";
         fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+        if (editModeActive) {
+          imageMedias.push({ data: buffer, mimeType: f.mimeType });
+          attachmentCount += 1;
+        }
         logger.info({ type: "text-file", size: buffer.length, mimeType: f.mimeType, name: fileName }, "Web text file received");
         // Também salvar o blob para exibição no histórico com card de arquivo
         try {
@@ -609,9 +618,10 @@ export class WebConnector implements Connector {
           logger.error({ err }, "Failed to save text file blob");
         }
       } else if (f.mimeType === "application/pdf") {
-        // PDFs: passar como media (Claude suporta PDFs como documentos)
+        // PDFs: passar como anexo de media
         const attachment: MediaAttachment = { data: buffer, mimeType: f.mimeType };
         imageMedias.push(attachment);
+        attachmentCount += 1;
         const fileName = f.name || "documento.pdf";
         logger.info({ type: "pdf", size: buffer.length, name: f.name }, "Web PDF received");
         try {
@@ -624,6 +634,10 @@ export class WebConnector implements Connector {
       } else {
         // Outros tipos binários: salvar e mostrar como card de arquivo genérico
         const fileName = f.name || "arquivo";
+        if (editModeActive) {
+          imageMedias.push({ data: buffer, mimeType: f.mimeType });
+          attachmentCount += 1;
+        }
         logger.info({ mimeType: f.mimeType, name: fileName }, "Generic file received");
         try {
           const id = genId();
@@ -643,16 +657,21 @@ export class WebConnector implements Connector {
 
     // Build prompt text
     let promptText: string;
-    const hasImages = imageMedias.length > 0 || (media && !msg.audio);
-    if (media && msg.audio && hasImages) {
-      promptText = text || "O usuario enviou um audio e imagens.";
+    const hasAttachments = attachmentCount > 0 || (!!media && !msg.audio);
+    const hasImages = imageAttachmentCount > 0;
+    if (media && msg.audio && hasAttachments) {
+      promptText = text || "O usuario enviou um audio e arquivos anexados.";
     } else if (media && msg.audio) {
       promptText = text || "O usuario enviou um audio. Ouca, entenda e responda naturalmente.";
-    } else if (hasImages) {
-      const count = imageUrls.length;
-      promptText = text || (count > 1
-        ? `O usuario enviou ${count} imagens. Analise e descreva o que voce ve.`
-        : "O usuario enviou uma imagem. Analise a imagem e descreva o que voce ve.");
+    } else if (hasAttachments) {
+      if (hasImages && attachmentCount === imageAttachmentCount) {
+        const count = imageAttachmentCount;
+        promptText = text || (count > 1
+          ? `O usuario enviou ${count} imagens. Analise e descreva o que voce ve.`
+          : "O usuario enviou uma imagem. Analise a imagem e descreva o que voce ve.");
+      } else {
+        promptText = text || "O usuario enviou arquivos anexados. Leia-os e responda com base neles.";
+      }
     } else {
       promptText = text;
     }
@@ -884,7 +903,8 @@ export class WebConnector implements Connector {
       return;
     }
 
-    const result = await this.agentBridge.startEditMode(this.name, config.ownerPhone);
+    const editUserId = this.adminUserId != null ? String(this.adminUserId) : config.ownerPhone;
+    const result = await this.agentBridge.startEditMode(this.name, editUserId);
     if (result) {
       // Non-empty result means there was an error message
       this.send(ws, { type: "error", text: result });
