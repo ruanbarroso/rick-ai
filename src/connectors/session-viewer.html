@@ -479,6 +479,7 @@ var ws = null;
 var reconnectAttempts = 0;
 var reconnectTimer = null;
 var sessionState = 'unknown'; // unknown, running, done, killed
+var pendingUserEcho = false; // true after local sendMessage — skip server echo
 var sessionName = sessionVariantName(sessionId, null);
 
 document.title = sessionName;
@@ -669,6 +670,11 @@ function connect() {
 
     switch (msg.type) {
       case 'message':
+        // Skip echo for user messages already shown locally by sendMessage()
+        if (msg.role === 'user' && pendingUserEcho) {
+          pendingUserEcho = false;
+          break;
+        }
         appendMessage(msg.text, msg.role, msg.messageType);
         break;
 
@@ -897,7 +903,8 @@ function sendMessage() {
 
   var payload = { type: 'message', text: text };
 
-  // Show user message immediately
+  // Show user message immediately and flag to skip server echo
+  pendingUserEcho = true;
   if (!hasAudio) {
     appendMessage(text || '(arquivo)', 'user');
   } else {
