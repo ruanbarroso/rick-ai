@@ -56,6 +56,9 @@ export class WhatsAppConnector implements Connector {
   private manualDisconnectInProgress = false;
   private processing = new Set<string>();
 
+  /** Interval that refreshes "composing" presence every 10s (WhatsApp auto-expires after ~25s). */
+  private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
+
   /**
    * Store poll creation messages so we can decrypt votes later.
    * Capped at MAX_POLL_MESSAGES to prevent unbounded memory growth.
@@ -211,6 +214,12 @@ export class WhatsAppConnector implements Connector {
   }
 
   async stop(): Promise<void> {
+    // Clear all typing refresh intervals
+    for (const interval of this.typingIntervals.values()) {
+      clearInterval(interval);
+    }
+    this.typingIntervals.clear();
+
     if (this.sock) {
       this.sock.end(undefined);
       this.sock = null;
@@ -276,11 +285,35 @@ export class WhatsAppConnector implements Connector {
     if (!this.sock) return;
     const jid = `${userId}@s.whatsapp.net`;
 
+    // Clear any existing refresh interval for this user
+    const existing = this.typingIntervals.get(userId);
+    if (existing) {
+      clearInterval(existing);
+      this.typingIntervals.delete(userId);
+    }
+
     try {
       await this.sock.presenceSubscribe(jid);
       await this.sock.sendPresenceUpdate(composing ? "composing" : "paused", jid);
     } catch (err) {
       logger.warn({ err }, "Failed to update WhatsApp presence");
+    }
+
+    // WhatsApp auto-expires "composing" after ~25s. Refresh every 10s while active.
+    if (composing) {
+      const interval = setInterval(async () => {
+        try {
+          if (this.sock) {
+            await this.sock.sendPresenceUpdate("composing", jid);
+          } else {
+            clearInterval(interval);
+            this.typingIntervals.delete(userId);
+          }
+        } catch {
+          // Ignore — best effort
+        }
+      }, 10_000);
+      this.typingIntervals.set(userId, interval);
     }
   }
 
