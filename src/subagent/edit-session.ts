@@ -185,7 +185,7 @@ class StreamQueue {
  */
 const EDIT_SYSTEM_PROMPT = [
   `Voce e um agente de edicao do ${config.agentName} AI, um agente pessoal de IA.`,
-  "O workspace /workspace contem o codigo do projeto (src/, Dockerfile, docker-compose.yml, package.json, tsconfig.json, README.md).",
+  "O workspace /workspace contem uma copia completa do repositorio para edicao (inclui src/, docker/, scripts/, Dockerfile, docker-compose.yml, package.json, tsconfig.json, README.md e demais arquivos versionados).",
   "O projeto usa Node.js 22, TypeScript, e roda em Docker.",
   "Sempre responda em portugues brasileiro (pt-BR).",
   "Use npx tsc --noEmit para verificar erros de TypeScript antes de concluir.",
@@ -585,7 +585,7 @@ export class EditSession {
   /**
    * Start the edit session:
    * 1. Build subagent-edit image if not present
-   * 2. Create staging dir with copy of src/
+   * 2. Create staging dir with a full project copy
    * 3. Spin up subagent-edit container with staging dir mounted
    */
   async start(env: Record<string, string>): Promise<void> {
@@ -594,8 +594,10 @@ export class EditSession {
 
     const projectDir = await getHostProjectDir();
 
-    // Create staging directory with copy of current source on the HOST.
-    // We copy src/, package.json, tsconfig.json, package-lock.json from the host project,
+    // Create staging directory with a full copy of the host project.
+    // We intentionally copy the whole repository so edit mode can modify any source file
+    // used by runtime/build flows (e.g. docker/agent.mjs, Dockerfiles, scripts, etc.).
+    // Exclusions keep the workspace lean and avoid copying runtime artifacts.
     // then run `npm install` to get ALL dependencies including devDependencies (typescript).
     // This lets Claude Code run `npx tsc --noEmit` to check for errors.
     //
@@ -609,16 +611,11 @@ export class EditSession {
       "sh", "-c",
       [
         `mkdir -p ${this.stagingDir}`,
-        `cp -r /source/src /source/package.json /source/tsconfig.json ${this.stagingDir}/`,
-        `cp -r /source/scripts ${this.stagingDir}/ 2>/dev/null || true`,
-        `cp /source/package-lock.json ${this.stagingDir}/ 2>/dev/null || true`,
-        `cp /source/*.md ${this.stagingDir}/ 2>/dev/null || true`,
-        `cp /source/Dockerfile /source/docker-compose.yml ${this.stagingDir}/ 2>/dev/null || true`,
-        `cp -r /source/.github ${this.stagingDir}/ 2>/dev/null || true`,
+        `tar -C /source --exclude=.git --exclude=node_modules --exclude=dist --exclude=src.bak --exclude=.rick-latest-version.json --exclude=auth_info -cf - . | tar -C ${this.stagingDir} -xf -`,
         `cd ${this.stagingDir} && npm install --prefer-offline 2>/dev/null`,
         `chown -R 1001:1001 ${this.stagingDir}`,
       ].join(" && "),
-    ], { timeout: 120_000 });
+    ], { timeout: 180_000 });
 
     logger.info({ stagingDir: this.stagingDir, sessionId: this.id }, "Staging directory created");
 
@@ -1386,18 +1383,19 @@ if git rev-parse origin/main >/dev/null 2>&1; then
   fi
 fi
 
-# Stage ONLY project-tracked paths (not random files in the repo root).
-# This mirrors exactly what deploy.sh copies from staging → project.
-for d in src scripts docker .github; do
-  [ -d "$d" ] && git add "$d/" 2>/dev/null || true
-done
-for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \\
-         .gitignore .env.example LICENSE .rick-version; do
-  [ -f "$f" ] && git add "$f" 2>/dev/null || true
-done
-for f in *.md; do
-  [ -f "$f" ] && git add "$f" 2>/dev/null || true
-done
+# Stage all managed source files, excluding runtime artifacts.
+# This mirrors deploy.sh syncing logic (full tree minus artifacts).
+git add -A -- . \\
+  ':(exclude)node_modules' \\
+  ':(exclude)node_modules/**' \\
+  ':(exclude)dist' \\
+  ':(exclude)dist/**' \\
+  ':(exclude)auth_info' \\
+  ':(exclude)auth_info/**' \\
+  ':(exclude).deploy-backup' \\
+  ':(exclude).deploy-backup/**' \\
+  ':(exclude).rick-latest-version.json' \\
+  ':(exclude).env'
 
 # Safety: detect merge conflict markers in staged files
 CONFLICT_FILES=$(git diff --cached --name-only 2>/dev/null | while read -r cf; do

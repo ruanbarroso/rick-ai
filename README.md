@@ -133,7 +133,7 @@ Each sub-agent gets a unique Rick variant name (Rick Prime, Pickle Rick, Evil Ri
 
 Rick can edit his own source code:
 
-1. `/edit` — Starts an edit session. Creates a staging copy of `src/`, launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-5.3 Codex → Gemini 3.1 Pro**, chosen automatically based on which credentials are available.
+1. `/edit` — Starts an edit session. Creates a staging copy of the repository (excluding runtime artifacts like `.git`, `node_modules`, and `dist`), launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-5.3 Codex → Gemini 3.1 Pro**, chosen automatically based on which credentials are available.
    - `subagent-edit` image is auto-rebuilt when source hash/version labels differ, so edit mode always runs the current release image.
 2. Send prompts describing what to change — the active provider edits the files directly inside the isolated container.
 3. `/deploy` — Triggers the deploy pipeline:
@@ -414,13 +414,13 @@ memory_embeddings (id, content, category, source, embedding vector(768),
 The deploy pipeline (`scripts/deploy.sh`) ensures safe self-editing:
 
 ```
-1. Backup current src/ → src.bak/
-2. Copy staged files from edit session
+1. Backup managed project tree (all non-artifact files)
+2. Sync staged files from edit session (full tree minus artifacts)
 3. Build candidate Docker image (TypeScript errors = fail)
 4. Start candidate in HEALTH_ONLY mode on port 8081
 5. Health check (20 attempts, 3s apart)
 6. If healthy → re-tag candidate as main image, docker compose up -d (no rebuild)
-7. Watchdog: monitor health for 60s (12 checks, 5s apart)
+7. Watchdog: monitor health for up to 120s
 8. On any failure → rollback (restore backup, rebuild)
 ```
 

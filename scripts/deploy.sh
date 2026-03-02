@@ -7,8 +7,8 @@
 # Runs inside a docker:cli container (Alpine) with docker.sock mounted.
 #
 # Flow:
-#   1. Backup current project files (src/, scripts/, docker/, Dockerfile, etc.)
-#   2. Copy all edited files from staging area to project dir
+#   1. Backup current managed project tree (all non-artifact files)
+#   2. Sync staged tree to project dir (all non-artifact files)
 #   3. Build candidate image (includes tsc — if tsc fails, build fails)
 #   4. Start candidate container in HEALTH_ONLY mode (no WhatsApp conflict)
 #   5. Health check candidate via wget
@@ -17,8 +17,7 @@
 #   8. If unhealthy at any point: rollback
 #
 # Usage: deploy.sh <staging_dir>
-#   staging_dir: directory containing the edited src/ files (and optionally
-#                scripts/, docker/, Dockerfile, package.json, etc.)
+#   staging_dir: directory containing the edited project tree
 #
 # Exit codes:
 #   0 = success
@@ -56,81 +55,70 @@ fi
 
 # ==================== HELPERS ====================
 
+is_preserved_path() {
+  case "$1" in
+    .|..|.git|node_modules|dist|auth_info|.deploy-backup|.env|.rick-latest-version.json)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+clear_managed_tree() {
+  for p in "$PROJECT_DIR"/* "$PROJECT_DIR"/.[!.]* "$PROJECT_DIR"/..?*; do
+    [ -e "$p" ] || continue
+    base=$(basename "$p")
+    if is_preserved_path "$base"; then
+      continue
+    fi
+    rm -rf "$p"
+  done
+}
+
 do_rollback() {
   log "Restoring from backup..."
-  # Restore directories
-  for d in src scripts docker .github; do
-    if [ -d "$BACKUP_DIR/$d" ]; then
-      rm -rf "$PROJECT_DIR/$d"
-      cp -r "$BACKUP_DIR/$d" "$PROJECT_DIR/$d"
-    fi
-  done
-  # Restore root files
-  for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \
-            .gitignore .env.example LICENSE .rick-version; do
-    if [ -f "$BACKUP_DIR/$f" ]; then
-      cp "$BACKUP_DIR/$f" "$PROJECT_DIR/$f"
-    fi
-  done
-  for f in "$BACKUP_DIR"/*.md; do
-    [ -f "$f" ] && cp "$f" "$PROJECT_DIR/" || true
-  done
+  if [ ! -f "$BACKUP_DIR/project-managed.tar" ]; then
+    err "Backup archive not found: $BACKUP_DIR/project-managed.tar"
+    return 1
+  fi
+  clear_managed_tree
+  tar -C "$PROJECT_DIR" -xf "$BACKUP_DIR/project-managed.tar"
   rm -rf "$BACKUP_DIR"
 }
 
 # ==================== STEP 1: BACKUP ====================
 
-log "Step 1: Backing up project files"
+log "Step 1: Backing up managed project tree"
 rm -rf "$BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
-# Backup directories
-for d in src scripts docker .github; do
-  if [ -d "$PROJECT_DIR/$d" ]; then
-    cp -r "$PROJECT_DIR/$d" "$BACKUP_DIR/$d"
-  fi
-done
-# Backup root-level files
-for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \
-          .gitignore .env.example LICENSE .rick-version; do
-  if [ -f "$PROJECT_DIR/$f" ]; then
-    cp "$PROJECT_DIR/$f" "$BACKUP_DIR/$f"
-  fi
-done
-for f in "$PROJECT_DIR"/*.md; do
-  [ -f "$f" ] && cp "$f" "$BACKUP_DIR/" || true
-done
+tar -C "$PROJECT_DIR" \
+  --exclude=.git \
+  --exclude=node_modules \
+  --exclude=dist \
+  --exclude=auth_info \
+  --exclude=.deploy-backup \
+  --exclude=.env \
+  --exclude=.rick-latest-version.json \
+  -cf "$BACKUP_DIR/project-managed.tar" .
 log "Backup created at $BACKUP_DIR"
 
 # ==================== STEP 2: COPY STAGED FILES ====================
 
-log "Step 2: Copying staged files to project dir"
+log "Step 2: Syncing staged tree to project dir"
 
-# Clear and replace directories to avoid stale files from deleted sources.
-# Using rm -rf + cp -r instead of cp -r src/* prevents deleted files from
-# persisting across deploys.
-rm -rf "$PROJECT_DIR/src" && cp -r "$STAGING_DIR/src" "$PROJECT_DIR/src"
-
-if [ -d "$STAGING_DIR/scripts" ]; then
-  rm -rf "$PROJECT_DIR/scripts" && cp -r "$STAGING_DIR/scripts" "$PROJECT_DIR/scripts"
-fi
-if [ -d "$STAGING_DIR/docker" ]; then
-  rm -rf "$PROJECT_DIR/docker" && cp -r "$STAGING_DIR/docker" "$PROJECT_DIR/docker"
-fi
-if [ -d "$STAGING_DIR/.github" ]; then
-  rm -rf "$PROJECT_DIR/.github" && cp -r "$STAGING_DIR/.github" "$PROJECT_DIR/.github"
-fi
-
-# Copy root-level config files that may have been edited in the staging dir
-for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \
-          .gitignore .env.example LICENSE .rick-version; do
-  if [ -f "$STAGING_DIR/$f" ]; then
-    cp "$STAGING_DIR/$f" "$PROJECT_DIR/$f"
-  fi
-done
-# Copy markdown files (README.md, AGENTS.md, etc.)
-for f in "$STAGING_DIR"/*.md; do
-  [ -f "$f" ] && cp "$f" "$PROJECT_DIR/" || true
-done
+# Keep only runtime artifacts in place, then extract all non-artifact staged files.
+clear_managed_tree
+tar -C "$STAGING_DIR" \
+  --exclude=.git \
+  --exclude=node_modules \
+  --exclude=dist \
+  --exclude=auth_info \
+  --exclude=.deploy-backup \
+  --exclude=.env \
+  --exclude=.rick-latest-version.json \
+  -cf - . | tar -C "$PROJECT_DIR" -xf -
 
 log "Staged files applied"
 
