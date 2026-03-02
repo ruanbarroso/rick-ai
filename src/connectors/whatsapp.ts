@@ -28,6 +28,28 @@ import { config } from "../config/env.js";
 const AUTH_DIR = path.join(process.cwd(), "auth_info");
 
 /**
+ * Build the correct JID for an external_id stored in connector_identities.
+ *
+ * Modern WhatsApp (Baileys v7) may identify users by either:
+ *  - Phone number (e.g. "5534XXXXXXXX") → "5534XXXXXXXX@s.whatsapp.net"
+ *  - LID (Linked ID, e.g. "139496712581324") → "139496712581324@lid"
+ *
+ * We store the bare identifier in the DB.  At send-time we need to
+ * reconstruct the full JID.  The heuristic: Brazilian phone numbers
+ * are 12-13 digits (55 + 2-digit area + 8-9-digit number) while LIDs
+ * are 15+ digit opaque identifiers that don't start with a country code.
+ *
+ * NOTE: This also works with a stored LID-to-JID map if we build one later.
+ */
+function toJid(externalId: string): string {
+  // LIDs are 15 digits; phone numbers (with country code) are ≤ 13
+  if (externalId.length >= 15) {
+    return `${externalId}@lid`;
+  }
+  return `${externalId}@s.whatsapp.net`;
+}
+
+/**
  * WhatsApp connector using Baileys v7.
  *
  * Implements the Connector interface so the Agent can communicate
@@ -270,20 +292,20 @@ export class WhatsAppConnector implements Connector {
       logger.warn({ userId }, "WhatsApp: cannot send message — not connected");
       return;
     }
-    // userId here is the external_id (phone number) from connector_identities
-    const jid = `${userId}@s.whatsapp.net`;
+    // userId here is the external_id from connector_identities (phone or LID)
+    const jid = toJid(userId);
     await this.sendTextMessage(jid, text);
   }
 
   async sendPoll(userId: string, question: string, options: string[]): Promise<void> {
     if (!this.sock) return;
-    const jid = `${userId}@s.whatsapp.net`;
+    const jid = toJid(userId);
     await this.sendPollMessage(jid, question, options);
   }
 
   async setTyping(userId: string, composing: boolean): Promise<void> {
     if (!this.sock) return;
-    const jid = `${userId}@s.whatsapp.net`;
+    const jid = toJid(userId);
 
     // Clear any existing refresh interval for this user
     const existing = this.typingIntervals.get(userId);
@@ -395,8 +417,12 @@ export class WhatsAppConnector implements Connector {
       // Skip messages from self (fromMe) — admin uses Web UI only
       if (fromMe) return;
 
-      // Extract sender phone from JID
-      const senderPhone = chatJid.split("@")[0].split(":")[0];
+      // Extract sender identifier from JID.
+      // WhatsApp can send messages with phone-based JIDs (@s.whatsapp.net)
+      // or LID-based JIDs (@lid). We store the bare identifier and remember
+      // the domain so we can send replies to the correct JID later.
+      const jidParts = chatJid.split("@");
+      const senderId = jidParts[0].split(":")[0];
       const pushName = msg.pushName || undefined;
 
       // Track message in message_log for dedup
@@ -404,7 +430,7 @@ export class WhatsAppConnector implements Connector {
       await this.memory.trackMessage(msgId, "USER", trackText);
 
       // ==================== RBAC: Resolve user ====================
-      const user = await this.userService.resolveUser("whatsapp", senderPhone, pushName);
+      const user = await this.userService.resolveUser("whatsapp", senderId, pushName);
       const isNewPending = user.status === "pending" && user.role === null;
 
       // Update activity timestamp
@@ -423,11 +449,11 @@ export class WhatsAppConnector implements Connector {
 
       // If user is blocked or pending, don't process further (no LLM, no response)
       if (user.status === "blocked") {
-        logger.debug({ userId: user.id, senderPhone }, "Blocked user message saved, no response");
+        logger.debug({ userId: user.id, senderId }, "Blocked user message saved, no response");
         return;
       }
       if (user.status === "pending" || !user.role || !canChat(user.role)) {
-        logger.debug({ userId: user.id, senderPhone }, "Pending user message saved, no response");
+        logger.debug({ userId: user.id, senderId }, "Pending user message saved, no response");
         return;
       }
 
@@ -446,7 +472,7 @@ export class WhatsAppConnector implements Connector {
             mimeType: audioInfo.mimeType,
           };
           logger.info(
-            { from: senderPhone, type: "audio", seconds: audioInfo.seconds, ptt: audioInfo.ptt },
+            { from: senderId, type: "audio", seconds: audioInfo.seconds, ptt: audioInfo.ptt },
             "Audio message received"
           );
         } catch (err) {
@@ -462,7 +488,7 @@ export class WhatsAppConnector implements Connector {
             mimeType: imageInfo.mimeType,
           };
           logger.info(
-            { from: senderPhone, type: "image", mimeType: imageInfo.mimeType, hasCaption: !!text },
+            { from: senderId, type: "image", mimeType: imageInfo.mimeType, hasCaption: !!text },
             "Image message received"
           );
         } catch (err) {
@@ -473,7 +499,7 @@ export class WhatsAppConnector implements Connector {
       } else {
         logger.info(
           {
-            from: senderPhone,
+            from: senderId,
             text: (text || "").substring(0, 100),
             ...(quotedText ? { quotedText: quotedText.substring(0, 80) } : {}),
           },
@@ -498,7 +524,7 @@ export class WhatsAppConnector implements Connector {
       // Build IncomingMessage and route through ConnectorManager
       const incoming: IncomingMessage = {
         connectorName: this.name,
-        userId: senderPhone,
+        userId: senderId,
         numericUserId: user.id,
         userRole: user.role,
         userStatus: user.status,
@@ -519,7 +545,7 @@ export class WhatsAppConnector implements Connector {
       }
 
       logger.info(
-        { to: senderPhone, responseLength: response.length },
+        { to: senderId, responseLength: response.length },
         "Response sent"
       );
     } catch (err) {
