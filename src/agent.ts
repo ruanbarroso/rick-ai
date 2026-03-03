@@ -283,15 +283,14 @@ export class Agent {
         if (fullText.includes("#") && this.claudeOAuth.hasPendingAuth()) {
           const result = await this.cmdExchangeClaudeCode(user.id, fullText);
           if (result?.includes("conectado com sucesso")) {
-            // Token exchanged — re-inject into edit session
-            const newToken = await this.claudeOAuth.getValidToken(user.id);
+            // Token exchanged — re-inject into edit session (with admin fallback)
+            const newToken = await this.resolveClaudeToken(user.id);
             if (newToken && this.editSession) {
               let refreshToken: string | undefined;
               try {
                 const { query: dbQuery } = await import("./memory/db.js");
                 const r = await dbQuery(
-                  `SELECT refresh_token FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
-                  [user.id]
+                  `SELECT refresh_token FROM oauth_tokens WHERE provider = 'claude' AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`,
                 );
                 refreshToken = r.rows[0]?.refresh_token;
               } catch (_) { /* ignore */ }
@@ -595,27 +594,35 @@ export class Agent {
    * DATABASE_URL and PGVECTOR_URL are intentionally omitted —
    * subagents access data via the read-only Agent API (/api/agent/*) with JWT auth.
    */
+
+  /** Resolve a Claude OAuth token, falling back to admin (id=1) when the user has none. */
+  private async resolveClaudeToken(userId: number): Promise<string | null> {
+    const adminUserId = 1;
+    const uids = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
+    for (const uid of uids) {
+      const token = await this.claudeOAuth.getValidToken(uid);
+      if (token) return token;
+    }
+    return null;
+  }
+
+  /** Resolve an OpenAI OAuth token, falling back to admin (id=1) when the user has none. */
+  private async resolveOpenAIToken(userId: number): Promise<{ accessToken: string; accountId: string | null } | null> {
+    const adminUserId = 1;
+    const uids = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
+    for (const uid of uids) {
+      const token = await this.openaiOAuth.getValidToken(uid);
+      if (token) return token;
+    }
+    return null;
+  }
+
   private async buildSubAgentEnv(userId: number): Promise<Record<string, string>> {
     const env: Record<string, string> = {};
 
-    // OAuth tokens are global (shared across all users), stored under admin user (id=1).
-    // Try the requesting user first, then fall back to admin.
-    const adminUserId = 1;
-    const userIdsToTry = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
-
-    // Fetch Claude and OpenAI tokens — try user first, then admin
-    let claudeToken: string | null = null;
-    let openaiToken: { accessToken: string; accountId: string | null } | null = null;
-
-    for (const uid of userIdsToTry) {
-      if (!claudeToken) {
-        claudeToken = await this.claudeOAuth.getValidToken(uid);
-      }
-      if (!openaiToken) {
-        openaiToken = await this.openaiOAuth.getValidToken(uid);
-      }
-      if (claudeToken && openaiToken) break;
-    }
+    // Fetch Claude and OpenAI tokens (with admin fallback)
+    const claudeToken = await this.resolveClaudeToken(userId);
+    const openaiToken = await this.resolveOpenAIToken(userId);
 
     // Anthropic (Claude) — OAuth token first, then API key fallback
     if (claudeToken) {
@@ -1017,20 +1024,21 @@ export class Agent {
 
   /**
    * Ensure the LLM service has the user's OAuth tokens if they're connected.
+   * Falls back to admin (id=1) when the user has no tokens configured.
    */
   private async ensureOAuthTokens(userId: number): Promise<void> {
-    // Claude
+    // Claude (with admin fallback)
     try {
-      const claudeToken = await this.claudeOAuth.getValidToken(userId);
+      const claudeToken = await this.resolveClaudeToken(userId);
       this.llm.setAnthropicOAuthToken(claudeToken);
     } catch (err) {
       logger.warn({ err }, "Failed to get Claude OAuth token");
       this.llm.setAnthropicOAuthToken(null);
     }
 
-    // OpenAI
+    // OpenAI (with admin fallback)
     try {
-      const openaiData = await this.openaiOAuth.getValidToken(userId);
+      const openaiData = await this.resolveOpenAIToken(userId);
       if (openaiData) {
         this.llm.setOpenAIOAuthToken(openaiData.accessToken, openaiData.accountId);
       } else {
@@ -1246,11 +1254,11 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
       return `Falha ao validar GitHub Token: ${msg}`;
     }
 
-    // Provider priority: Claude → OpenAI → Gemini Pro
-    const claudeToken = await this.claudeOAuth.getValidToken(userId);
+    // Provider priority: Claude → OpenAI → Gemini Pro (with admin fallback)
+    const claudeToken = await this.resolveClaudeToken(userId);
     let activeProvider: import("./subagent/edit-session.js").EditProvider = "claude";
     if (!claudeToken) {
-      const gptToken = await this.openaiOAuth.getValidToken(userId);
+      const gptToken = await this.resolveOpenAIToken(userId);
       if (gptToken) {
         activeProvider = "openai";
       } else if (config.gemini?.apiKey) {
@@ -1267,16 +1275,16 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
     const authExpiredCb: AuthExpiredCallback = async () => {
       logger.info({ userId }, "Edit session auth expired — attempting refresh");
 
-      // Try automatic refresh first
-      const newToken = await this.claudeOAuth.getValidToken(userId);
+      // Try automatic refresh first (with admin fallback)
+      const newToken = await this.resolveClaudeToken(userId);
       if (newToken) {
-        // Refresh worked — re-inject into container
+        // Refresh worked — re-inject into container.
+        // Look up refresh_token for the admin user (id=1) since that's where OAuth is stored.
         let refreshToken: string | undefined;
         try {
           const { query: dbQuery } = await import("./memory/db.js");
           const r = await dbQuery(
-            `SELECT refresh_token FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
-            [userId]
+            `SELECT refresh_token FROM oauth_tokens WHERE provider = 'claude' AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`,
           );
           refreshToken = r.rows[0]?.refresh_token;
         } catch (_) { /* ignore */ }
@@ -1300,17 +1308,16 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
       return false;
     };
 
-    // Proactive token refresh callback — called before each Claude invocation
+    // Proactive token refresh callback — called before each Claude invocation (with admin fallback)
     const getFreshTokenCb: GetFreshTokenCallback = async () => {
-      const token = await this.claudeOAuth.getValidToken(userId);
+      const token = await this.resolveClaudeToken(userId);
       if (!token) return null;
 
       let refreshToken: string | undefined;
       try {
         const { query: dbQuery } = await import("./memory/db.js");
         const r = await dbQuery(
-          `SELECT refresh_token FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
-          [userId]
+          `SELECT refresh_token FROM oauth_tokens WHERE provider = 'claude' AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`,
         );
         refreshToken = r.rows[0]?.refresh_token;
       } catch (_) { /* ignore */ }
@@ -1383,8 +1390,8 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
       } catch (_) { /* ignore */ }
     }
 
-    // OpenAI credentials (OAuth token or API key)
-    const gptToken = await this.openaiOAuth.getValidToken(userId);
+    // OpenAI credentials (OAuth token or API key, with admin fallback)
+    const gptToken = await this.resolveOpenAIToken(userId);
     if (gptToken) {
       env.OPENAI_ACCESS_TOKEN = gptToken.accessToken;
       if (gptToken.accountId) env.OPENAI_ACCOUNT_ID = gptToken.accountId;

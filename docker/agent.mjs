@@ -124,15 +124,20 @@ const initialProviderList = getProviderList();
 
 /**
  * Refresh LLM tokens from the host API.
- * Called before each turn to detect providers connected after session start.
- * Updates cachedClaudeToken / cachedOpenAIToken so has*() functions return true.
+ * Called before each turn to get fresh OAuth tokens from the host (which handles
+ * refresh-token rotation). Always fetches — even if static env vars exist — because
+ * OAuth access tokens are short-lived and the env-var values injected at container
+ * start may have expired.
+ * Static API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY) don't expire, so we skip
+ * the fetch only when those are present.
  */
 async function refreshLLMTokens() {
   if (!process.env.RICK_API_URL || !process.env.RICK_SESSION_TOKEN) return;
 
-  // Only fetch if we don't have static keys (OAuth is the only dynamic source)
-  const needClaude = !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_ACCESS_TOKEN;
-  const needOpenAI = !process.env.OPENAI_API_KEY && !process.env.OPENAI_ACCESS_TOKEN;
+  // Static API keys don't expire — no need to refresh.
+  // OAuth tokens (ANTHROPIC_ACCESS_TOKEN, OPENAI_ACCESS_TOKEN) DO expire, so always refresh those.
+  const needClaude = !process.env.ANTHROPIC_API_KEY;
+  const needOpenAI = !process.env.OPENAI_API_KEY;
 
   const fetches = [];
   // Use silent: true to avoid showing 404 errors when OAuth is not configured
@@ -341,8 +346,9 @@ async function runGeminiLoop(userText, signal) {
 
 async function runOpenAILoop(userText, signal) {
   const apiKey = process.env.OPENAI_API_KEY ?? "";
-  // Prefer static OAuth token, fall back to dynamically cached token
-  const oauthToken = process.env.OPENAI_ACCESS_TOKEN || cachedOpenAIToken || "";
+  // Prefer dynamically cached token (freshly refreshed from host API) over
+  // the static env var which may have expired since container start.
+  const oauthToken = cachedOpenAIToken || process.env.OPENAI_ACCESS_TOKEN || "";
   const token = oauthToken || apiKey;
   if (!token) {
     throw new Error("OpenAI: nenhum token disponível");
@@ -428,8 +434,9 @@ async function runOpenAILoop(userText, signal) {
 
 async function runClaudeLoop(userText, signal) {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
-  // Prefer static OAuth token, fall back to dynamically cached token
-  const oauthToken = process.env.ANTHROPIC_ACCESS_TOKEN || cachedClaudeToken || "";
+  // Prefer dynamically cached token (freshly refreshed from host API) over
+  // the static env var which may have expired since container start.
+  const oauthToken = cachedClaudeToken || process.env.ANTHROPIC_ACCESS_TOKEN || "";
   const claudeTools = toolDeclarations.map((t) => ({
     name: t.name,
     description: t.description,
@@ -643,7 +650,8 @@ rl.on("line", async (line) => {
     seedProviderHistory(provider.name);
 
     let attempts = 0;
-    const maxAttempts = 1 + MAX_TIMEOUT_RETRIES; // 1 initial + N retries
+    let authRetried = false; // auth refresh retry is separate from timeout retries
+    const maxAttempts = 1 + MAX_TIMEOUT_RETRIES; // 1 initial + N timeout retries
     while (attempts < maxAttempts) {
       attempts++;
       try {
@@ -679,6 +687,24 @@ rl.on("line", async (line) => {
           // Need a fresh AbortController for the retry (the old one's signal may be timed out)
           currentAbortController = new AbortController();
           signal = currentAbortController.signal;
+          continue;
+        }
+
+        // Detect auth errors (401) — OAuth token may have expired mid-session.
+        // Refresh the token from the host API and retry this provider once.
+        // Auth retry is tracked separately from timeout retries so both can
+        // fire independently (e.g. timeout → auth error → refreshed success).
+        const isAuthError = err.message?.includes("API error 401")
+          || err.message?.includes("authentication_error")
+          || err.message?.includes("Invalid bearer token")
+          || err.message?.includes("invalid_api_key");
+
+        if (isAuthError && !authRetried) {
+          authRetried = true;
+          attempts--; // don't consume a timeout-retry slot for auth refresh
+          process.stderr.write(`Provedor ${provider.name} auth error, refreshing token...\n`);
+          emitStatus(`${provider.name} token expirado — renovando...`);
+          await refreshLLMTokens();
           continue;
         }
 
