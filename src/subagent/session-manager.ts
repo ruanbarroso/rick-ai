@@ -195,9 +195,40 @@ export class SessionManager {
   /** Active child processes for each session (docker exec) */
   private processes = new Map<string, ChildProcess>();
 
+  /** Cached Docker network name for sub-agent containers (null = use default bridge) */
+  private resolvedNetwork: string | null = null;
+  /** Cached API host for sub-agents to reach the main container */
+  private resolvedApiHost: string | null = null;
+
   constructor(connectorManager: ConnectorManager, memoryService?: MemoryService) {
     this.connectorManager = connectorManager;
     this.memoryService = memoryService ?? null;
+    this.detectDockerNetwork();
+  }
+
+  /**
+   * Detect the Docker network of the main container (if running inside Docker).
+   * Sub-agents will be attached to the same network so they can reach the host API
+   * via container name instead of host.docker.internal.
+   */
+  private detectDockerNetwork(): void {
+    const hostname = process.env.HOSTNAME;
+    if (!hostname) return; // Not running in Docker
+
+    execFileAsync("docker", [
+      "inspect", "--format",
+      "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}",
+      hostname,
+    ]).then(({ stdout }) => {
+      const net = stdout.trim();
+      if (net && net !== "bridge" && net !== "host") {
+        this.resolvedNetwork = net;
+        this.resolvedApiHost = hostname;
+        logger.info({ network: net, apiHost: hostname }, "Sub-agents will use main container's Docker network");
+      }
+    }).catch(() => {
+      // Not running in Docker or inspect failed — sub-agents will use default bridge
+    });
   }
 
   setSessionMessageCallback(cb: SessionMessageCallback): void {
@@ -639,10 +670,17 @@ export class SessionManager {
       if (v) envArgs.push("-e", `${k}=${v}`);
     }
 
+    // Attach sub-agent to the same Docker network as the main container (if detected).
+    // This allows sub-agents to reach the host API by container name.
+    // Falls back to default bridge + host.docker.internal when not on a custom network.
+    const networkArgs: string[] = this.resolvedNetwork
+      ? ["--network", this.resolvedNetwork]
+      : ["--add-host=host.docker.internal:host-gateway"];
+
     // Start the container
     const { stdout } = await execFileAsync("docker", [
       "run", "-d", "--init", "--ipc=host",
-      "--add-host=host.docker.internal:host-gateway",
+      ...networkArgs,
       "--name", session.containerName,
       ...envArgs,
       SUBAGENT_RUNTIME_IMAGE,
@@ -696,7 +734,10 @@ export class SessionManager {
     // JWT token for authenticating against Rick's /api/agent/* endpoints
     // numericUserId is embedded so API endpoints can skip the getOrCreateUser DB call
     const token = createAgentToken(session.id, session.userId, 86400, session.numericUserId ?? undefined); // 24h TTL matches container lifetime
-    const apiUrl = `http://host.docker.internal:${config.webPort}`;
+    // When running inside Docker on a custom network, use the container hostname
+    // so sub-agents on the same network can reach us. Fall back to host.docker.internal.
+    const apiHost = this.resolvedApiHost ?? "host.docker.internal";
+    const apiUrl = `http://${apiHost}:${config.webPort}`;
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
 
