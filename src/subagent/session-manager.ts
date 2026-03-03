@@ -340,13 +340,16 @@ export class SessionManager {
   async getSessionInfoFromDB(sessionId: string): Promise<{ status: string; variantName: string | null } | null> {
     try {
       const result = await query(
-        `SELECT status, variant_name FROM sub_agent_sessions WHERE id = $1`,
+        `SELECT status, variant_name, user_id FROM sub_agent_sessions WHERE id = $1`,
         [sessionId]
       );
       if (result.rows.length > 0) {
+        const row = result.rows[0];
+        // Compute variant name on-the-fly for old sessions without one stored
+        const variantName = row.variant_name || await getSessionVariantName(sessionId, row.user_id ?? null);
         return {
-          status: result.rows[0].status,
-          variantName: result.rows[0].variant_name || null,
+          status: row.status,
+          variantName,
         };
       }
       return null;

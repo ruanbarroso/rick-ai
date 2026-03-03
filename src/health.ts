@@ -9,7 +9,7 @@ import { config } from "./config/env.js";
 import { configGet } from "./memory/config-store.js";
 import { verifyAgentToken, type AgentTokenPayload } from "./subagent/agent-token.js";
 import { isSensitiveCategory } from "./memory/crypto.js";
-import { resolveSessionsToken } from "./subagent/session-manager.js";
+import { resolveSessionsToken, getSessionVariantName } from "./subagent/session-manager.js";
 import type { MemoryService } from "./memory/memory-service.js";
 import type { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
@@ -689,17 +689,17 @@ async function handlePublicSessionsApi(token: string, res: ServerResponse): Prom
       [userId],
     );
 
-    const sessions = result.rows.map((r: any) => ({
+    const sessions = await Promise.all(result.rows.map(async (r: any) => ({
       id: r.id,
       task: r.task,
       status: r.status,
       startedAt: r.started_at,
       endedAt: r.ended_at,
       connectorName: r.connector_name,
-      variantName: r.variant_name || null,
+      variantName: r.variant_name || await getSessionVariantName(r.id, userId),
       lastUserMessage: r.last_user_message,
       lastMessageAt: r.last_message_at,
-    }));
+    })));
 
     const agentLogo = await configGet("AGENT_LOGO") || "";
 
