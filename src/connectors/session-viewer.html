@@ -695,13 +695,27 @@ function connect() {
         break;
 
       case 'session_history':
+        // Clear existing messages to avoid duplicates on reconnect
+        var container = document.getElementById('messages');
+        var typing = document.getElementById('typing-indicator');
+        while (container.firstChild && container.firstChild !== typing) {
+          container.removeChild(container.firstChild);
+        }
+        // Also clear tool blocks
+        var existingTools = document.querySelectorAll('.tool-block');
+        for (var t = 0; t < existingTools.length; t++) {
+          existingTools[t].parentNode.removeChild(existingTools[t]);
+        }
+        // Re-show empty state if no messages
+        var empty = document.getElementById('empty-state');
+        if (empty) empty.classList.remove('hidden');
+
         // Load existing messages
         var msgs = msg.messages || [];
         for (var i = 0; i < msgs.length; i++) {
           appendHistoryMessage(msgs[i].content, msgs[i].role, msgs[i].created_at, msgs[i].message_type);
         }
         // Scroll to bottom after loading history
-        var container = document.getElementById('messages');
         container.scrollTop = container.scrollHeight;
         break;
 
