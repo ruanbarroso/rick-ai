@@ -61,6 +61,10 @@ body {
 .header-name { font-weight: 600; font-size: 16px; }
 .header-subtitle { font-size: 13px; color: var(--text2); margin-top: 2px; }
 
+/* Embed mode: hide header when loaded inside an iframe with ?embed=1 */
+body.embed .header { display: none; }
+body.embed .container { padding-top: 8px; }
+
 .container {
   max-width: 640px;
   margin: 0 auto;
@@ -257,6 +261,11 @@ body {
 </div>
 
 <script>
+// Embed mode — hide header when loaded as iframe
+if (new URLSearchParams(window.location.search).get('embed') === '1') {
+  document.body.classList.add('embed');
+}
+
 // ==================== VARIANT NAMES ====================
 // Variant names are now computed server-side and returned in the API response.
 // This function is only a fallback for old sessions without a stored variant_name.

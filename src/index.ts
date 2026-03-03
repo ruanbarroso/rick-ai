@@ -153,7 +153,7 @@ async function main() {
   const web = new WebConnector(connectorManager);
   web.setWhatsAppConnector(whatsapp);
   web.setAgentBridge(agent.createWebBridge(web));
-  web.setUserService(userService, memory);
+  web.setUserService(userService);
   connectorManager.register(web);
 
   // Wire pending user notifications: WhatsApp → Web UI badge

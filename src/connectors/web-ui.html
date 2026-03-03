@@ -734,95 +734,14 @@
     background: #002d00;
   }
 
-  .user-detail-section {
-    margin-bottom: 16px;
-  }
-
-  .user-detail-section h4 {
-    font-size: 0.78rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-muted);
-    margin: 0 0 8px;
-  }
-
-  .user-detail-messages {
-    max-height: 300px;
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px;
-    background: var(--sidebar-bg);
-  }
-
-  .user-detail-msg {
-    padding: 6px 10px;
-    margin-bottom: 6px;
-    border-radius: 8px;
-    font-size: 0.82rem;
-    line-height: 1.4;
-    word-wrap: break-word;
-  }
-
-  .user-detail-msg.user {
-    background: var(--msg-user);
-    color: #fff;
-    margin-left: 30px;
-  }
-
-  .user-detail-msg.assistant {
-    background: var(--msg-agent);
-    color: var(--text);
-    margin-right: 30px;
-  }
-
-  .user-detail-msg-time {
-    font-size: 0.68rem;
-    color: var(--text-muted);
-    margin-top: 2px;
-  }
-
-  .user-sessions-list {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-  }
-
-  .user-session-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border);
-    font-size: 0.82rem;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-
-  .user-session-item:last-child { border-bottom: none; }
-  .user-session-item:hover { background: var(--sidebar-hover); }
-
-  .user-session-task {
+  .user-detail-sessions-iframe {
+    width: 100%;
     flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text);
+    min-height: 300px;
+    border: none;
+    border-radius: 10px;
+    margin-top: 12px;
   }
-
-  .user-session-status {
-    font-size: 0.72rem;
-    padding: 2px 8px;
-    border-radius: 8px;
-    flex-shrink: 0;
-    margin-left: 8px;
-  }
-
-  .user-session-status.active { background: #1565c0; color: #fff; }
-  .user-session-status.done { background: #2e7d32; color: #fff; }
-  .user-session-status.killed { background: #555; color: #aaa; }
 
   /* ==================== MAIN AREA ==================== */
   .main-area {
@@ -2917,9 +2836,8 @@ var currentSettings = {};
 var pendingUserCount = 0;
 var usersData = [];
 var selectedUserId = null;
-var pendingUserConversations = null;
-var pendingUserSessions = null;
-var userDetailTimeout = null;
+
+
 var blockedSectionCollapsed = true;
 var avatarHovering = false;
 var avatarClickCount = 0;
@@ -3329,15 +3247,6 @@ function handleServerMessage(msg) {
     case 'user_detail':
       if (msg.user) {
         renderUserDetail(msg.user);
-        // Apply any cached conversations/sessions that arrived before the detail was rendered
-        if (pendingUserConversations && pendingUserConversations.userId === msg.user.id) {
-          renderUserConversations(pendingUserConversations.userId, pendingUserConversations.messages);
-          pendingUserConversations = null;
-        }
-        if (pendingUserSessions && pendingUserSessions.userId === msg.user.id) {
-          renderUserSessions(pendingUserSessions.userId, pendingUserSessions.sessions);
-          pendingUserSessions = null;
-        }
       }
       break;
 
@@ -3349,11 +3258,9 @@ function handleServerMessage(msg) {
           Object.assign(usersData[idx], msg.user);
           renderUsersList();
         }
-        // If viewing this user's detail, refresh it (including conversations and sessions)
+        // If viewing this user's detail, refresh it
         if (selectedUserId === msg.user.id) {
           ws.send(JSON.stringify({ type: 'get_user_detail', userId: msg.user.id }));
-          ws.send(JSON.stringify({ type: 'get_user_conversations', userId: msg.user.id, limit: 30 }));
-          ws.send(JSON.stringify({ type: 'get_user_sessions', userId: msg.user.id }));
         }
         if (msg.welcomeSent) {
           showToast('Usuario ativado! Mensagem de boas-vindas enviada.');
@@ -3361,29 +3268,6 @@ function handleServerMessage(msg) {
           showToast('Usuario ativado, mas boas-vindas falhou: ' + msg.welcomeError, 'error');
         } else {
           showToast('Usuario atualizado');
-        }
-      }
-      break;
-
-    case 'user_conversations':
-      if (msg.userId && msg.messages) {
-        var convContainer = document.getElementById('user-conv-' + msg.userId);
-        if (convContainer) {
-          renderUserConversations(msg.userId, msg.messages);
-        } else {
-          // Detail not rendered yet — cache for when it arrives
-          pendingUserConversations = { userId: msg.userId, messages: msg.messages };
-        }
-      }
-      break;
-
-    case 'user_sessions':
-      if (msg.userId && msg.sessions) {
-        var sessContainer = document.getElementById('user-sessions-' + msg.userId);
-        if (sessContainer) {
-          renderUserSessions(msg.userId, msg.sessions);
-        } else {
-          pendingUserSessions = { userId: msg.userId, sessions: msg.sessions };
         }
       }
       break;
@@ -4808,14 +4692,12 @@ function closeUsers() {
   document.getElementById('users-overlay').classList.remove('visible');
   document.getElementById('users-panel').classList.remove('visible');
   selectedUserId = null;
-  if (userDetailTimeout) { clearTimeout(userDetailTimeout); userDetailTimeout = null; }
 }
 
 function showUsersList() {
   document.getElementById('users-list-view').style.display = 'block';
   document.getElementById('user-detail-view').classList.remove('visible');
   selectedUserId = null;
-  if (userDetailTimeout) { clearTimeout(userDetailTimeout); userDetailTimeout = null; }
 }
 
 function getUserInitials(user) {
@@ -4940,29 +4822,12 @@ function toggleBlockedSection() {
 
 function openUserDetail(userId) {
   selectedUserId = userId;
-  pendingUserConversations = null;
-  pendingUserSessions = null;
-  if (userDetailTimeout) clearTimeout(userDetailTimeout);
   document.getElementById('users-list-view').style.display = 'none';
   document.getElementById('user-detail-view').classList.add('visible');
   // Request full user detail
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'get_user_detail', userId: userId }));
-    ws.send(JSON.stringify({ type: 'get_user_conversations', userId: userId, limit: 30 }));
-    ws.send(JSON.stringify({ type: 'get_user_sessions', userId: userId }));
   }
-  // Timeout: if "Carregando..." is still showing after 8s, replace with fallback
-  userDetailTimeout = setTimeout(function() {
-    if (selectedUserId !== userId) return;
-    var convEl = document.getElementById('user-conv-' + userId);
-    if (convEl && convEl.textContent.indexOf('Carregando') !== -1) {
-      convEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Nao foi possivel carregar conversas</div>';
-    }
-    var sessEl = document.getElementById('user-sessions-' + userId);
-    if (sessEl && sessEl.textContent.indexOf('Carregando') !== -1) {
-      sessEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Nao foi possivel carregar sessoes</div>';
-    }
-  }, 8000);
 }
 
 function renderUserDetail(user) {
@@ -5001,89 +4866,12 @@ function renderUserDetail(user) {
   }
   html += '</div>';
 
-  // Profile section
-  html += '<div class="user-detail-section">';
-  html += '<h4>Perfil</h4>';
-  var profile = user.profile || {};
-  var profileFields = ['nome', 'email', 'telefone', 'cidade', 'trabalho'];
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
-  profileFields.forEach(function(field) {
-    html += '<div style="font-size:0.82rem;">';
-    html += '<span style="color:var(--text-muted);text-transform:capitalize;">' + field + ':</span> ';
-    html += '<span style="color:var(--text);">' + escapeHtml(profile[field] || '-') + '</span>';
-    html += '</div>';
-  });
-  html += '</div>';
-  html += '</div>';
-
-  // Conversations section (placeholder — filled by renderUserConversations)
-  html += '<div class="user-detail-section">';
-  html += '<h4>Conversas recentes</h4>';
-  html += '<div class="user-detail-messages" id="user-conv-' + user.id + '">';
-  html += '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Carregando...</div>';
-  html += '</div>';
-  html += '</div>';
-
-  // Sessions section (placeholder — filled by renderUserSessions)
-  html += '<div class="user-detail-section">';
-  html += '<h4>Sessoes de sub-agente</h4>';
-  html += '<div id="user-sessions-' + user.id + '">';
-  html += '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Carregando...</div>';
-  html += '</div>';
-  html += '</div>';
-
-  container.innerHTML = html;
-}
-
-function renderUserConversations(userId, messages) {
-  var container = document.getElementById('user-conv-' + userId);
-  if (!container) return;
-  if (messages.length === 0) {
-    container.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Nenhuma conversa</div>';
-    return;
+  // Sessions embed — reuses the public sessions-list page (/u/:token)
+  if (user.sessionsToken) {
+    html += '<iframe class="user-detail-sessions-iframe" src="/u/' + user.sessionsToken + '?embed=1" frameborder="0"></iframe>';
   }
-  var html = '';
-  messages.forEach(function(m) {
-    var cls = m.role === 'user' ? 'user' : 'assistant';
-    var content = m.content || '';
-    if (content.length > 300) content = content.substring(0, 300) + '...';
-    html += '<div class="user-detail-msg ' + cls + '">';
-    html += escapeHtml(content);
-    if (m.created_at) {
-      html += '<div class="user-detail-msg-time">' + new Date(m.created_at).toLocaleString('pt-BR') + '</div>';
-    }
-    html += '</div>';
-  });
-  container.innerHTML = html;
-  container.scrollTop = container.scrollHeight;
-}
 
-function renderUserSessions(userId, sessions) {
-  var container = document.getElementById('user-sessions-' + userId);
-  if (!container) return;
-  if (sessions.length === 0) {
-    container.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:0.82rem;">Nenhuma sessao</div>';
-    return;
-  }
-  var html = '<div class="user-sessions-list">';
-  sessions.forEach(function(s) {
-    var task = s.task || '(sem descricao)';
-    if (task.length > 60) task = task.substring(0, 60) + '...';
-    var statusClass = s.status || 'active';
-    var statusLabel = s.status === 'active' ? 'Ativo' : s.status === 'done' ? 'Encerrado' : s.status === 'failed' ? 'Erro' : 'Encerrado';
-    html += '<div class="user-session-item" onclick="openSessionFromDetail(\'' + s.id + '\')">';
-    html += '<div class="user-session-task">' + escapeHtml(task) + '</div>';
-    html += '<span class="user-session-status ' + statusClass + '">' + statusLabel + '</span>';
-    html += '</div>';
-  });
-  html += '</div>';
   container.innerHTML = html;
-}
-
-function openSessionFromDetail(sessionId) {
-  closeUsers();
-  // Navigate to session page
-  window.open('/s/' + sessionId, '_blank');
 }
 
 function setUserRole(userId, role) {

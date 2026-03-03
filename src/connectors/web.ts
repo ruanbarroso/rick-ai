@@ -6,7 +6,7 @@ import type { ConnectorManager } from "./connector-manager.js";
 import type { WhatsAppConnector } from "./whatsapp.js";
 import type { MediaAttachment } from "../llm/types.js";
 import type { UserService, User, UserWithIdentities } from "../auth/user-service.js";
-import type { MemoryService } from "../memory/memory-service.js";
+
 import { httpServer } from "../health.js";
 import { config, reloadConfig } from "../config/env.js";
 import { configGet, configSet, SETTINGS_KEY_MAP, ENV_SKIP_KEYS } from "../memory/config-store.js";
@@ -16,7 +16,7 @@ import { ClaudeOAuthService } from "../auth/claude-oauth.js";
 import { OpenAIOAuthService } from "../auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "../auth/oauth-singleton.js";
 import { GeminiProvider } from "../llm/providers/gemini.js";
-import { resolveSessionsToken, getMainSessionName } from "../subagent/session-manager.js";
+import { resolveSessionsToken, getMainSessionName, getUserSessionsToken } from "../subagent/session-manager.js";
 
 /**
  * Web UI connector using WebSocket on the shared HTTP server.
@@ -115,7 +115,7 @@ export class WebConnector implements Connector {
   /** RBAC: user service for admin management */
   private userService: UserService | null = null;
   /** RBAC: memory service for accessing user conversations/sessions */
-  private memoryService: MemoryService | null = null;
+
   /** Numeric user ID of the admin (resolved on first auth) */
   private adminUserId: number | null = null;
   /** Display name of the admin user (resolved alongside adminUserId) */
@@ -170,9 +170,8 @@ export class WebConnector implements Connector {
   /**
    * Wire up RBAC services for user management.
    */
-  setUserService(userService: UserService, memoryService: MemoryService): void {
+  setUserService(userService: UserService): void {
     this.userService = userService;
-    this.memoryService = memoryService;
   }
 
   /**
@@ -396,12 +395,7 @@ export class WebConnector implements Connector {
             case "update_user_profile":
               await this.handleUpdateUserProfile(ws, msg.userId, msg.profile, msg.displayName);
               break;
-            case "get_user_conversations":
-              await this.handleGetUserConversations(ws, msg.userId, msg.limit);
-              break;
-            case "get_user_sessions":
-              await this.handleGetUserSessions(ws, msg.userId);
-              break;
+
             case "test_database":
               await this.handleTestDatabase(ws, msg.which, msg.url);
               break;
@@ -1652,6 +1646,7 @@ export class WebConnector implements Connector {
           profile: userWithIds.profile,
           lastActivityAt: userWithIds.lastActivityAt?.toISOString() || null,
           createdAt: userWithIds.createdAt.toISOString(),
+          sessionsToken: getUserSessionsToken(userWithIds.id),
           identities: userWithIds.identities.map((i) => ({
             connector: i.connector,
             externalId: i.externalId,
@@ -1780,52 +1775,6 @@ export class WebConnector implements Connector {
     } catch (err) {
       logger.error({ err, userId }, "Failed to update user profile");
       this.send(ws, { type: "error", text: "Erro ao atualizar perfil." });
-    }
-  }
-
-  private async handleGetUserConversations(ws: WebSocket, userId: number, limit?: number): Promise<void> {
-    if (!this.memoryService || !userId) {
-      this.send(ws, { type: "user_conversations", userId, messages: [] });
-      return;
-    }
-
-    try {
-      const messages = await this.memoryService.getConversationHistoryByUserId(userId, limit || 50);
-      this.send(ws, { type: "user_conversations", userId, messages });
-    } catch (err) {
-      logger.error({ err, userId }, "Failed to load user conversations");
-      this.send(ws, { type: "user_conversations", userId, messages: [] });
-    }
-  }
-
-  private async handleGetUserSessions(ws: WebSocket, userId: number): Promise<void> {
-    if (!userId) {
-      this.send(ws, { type: "user_sessions", userId, sessions: [] });
-      return;
-    }
-
-    try {
-      const result = await query(
-        `SELECT id, task, status, started_at, ended_at
-         FROM sub_agent_sessions
-         WHERE user_id = $1
-         ORDER BY started_at DESC
-         LIMIT 50`,
-        [userId]
-      );
-
-      const sessions = result.rows.map((r: any) => ({
-        id: r.id,
-        task: r.task,
-        status: r.status,
-        startedAt: r.started_at,
-        endedAt: r.ended_at,
-      }));
-
-      this.send(ws, { type: "user_sessions", userId, sessions });
-    } catch (err) {
-      logger.error({ err, userId }, "Failed to load user sessions");
-      this.send(ws, { type: "user_sessions", userId, sessions: [] });
     }
   }
 
