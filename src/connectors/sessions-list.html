@@ -261,9 +261,12 @@ body.embed .container { padding-top: 8px; }
 </div>
 
 <script>
-// Embed mode — hide header when loaded as iframe
+// Embed mode — hide header when loaded as iframe, open links in new tab
 if (new URLSearchParams(window.location.search).get('embed') === '1') {
   document.body.classList.add('embed');
+  var base = document.createElement('base');
+  base.target = '_blank';
+  document.head.appendChild(base);
 }
 
 // ==================== VARIANT NAMES ====================
