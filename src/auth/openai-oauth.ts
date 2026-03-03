@@ -267,16 +267,20 @@ export class OpenAIOAuthService {
   /**
    * Get a valid access token. Auto-refreshes if expired.
    */
-  async getValidToken(userId: number): Promise<{ accessToken: string; accountId: string | null } | null> {
-    const cached = this.tokenCache.get(userId);
-    if (cached && cached.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
-      return { accessToken: cached.accessToken, accountId: cached.accountId };
+  async getValidToken(userId: number, forceRefresh = false): Promise<{ accessToken: string; accountId: string | null } | null> {
+    if (!forceRefresh) {
+      const cached = this.tokenCache.get(userId);
+      if (cached && cached.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
+        return { accessToken: cached.accessToken, accountId: cached.accountId };
+      }
+    } else {
+      this.tokenCache.delete(userId);
     }
 
     const stored = await this.loadTokens(userId);
     if (!stored) return null;
 
-    if (stored.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
+    if (!forceRefresh && stored.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
       this.tokenCache.set(userId, stored);
       return { accessToken: stored.accessToken, accountId: stored.accountId };
     }

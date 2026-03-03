@@ -132,7 +132,7 @@ const initialProviderList = getProviderList();
  * Static API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY) don't expire, so we skip
  * the fetch only when those are present.
  */
-async function refreshLLMTokens() {
+async function refreshLLMTokens({ force = false } = {}) {
   if (!process.env.RICK_API_URL || !process.env.RICK_SESSION_TOKEN) return;
 
   // Static API keys don't expire — no need to refresh.
@@ -140,10 +140,11 @@ async function refreshLLMTokens() {
   const needClaude = !process.env.ANTHROPIC_API_KEY;
   const needOpenAI = !process.env.OPENAI_API_KEY;
 
+  const forceParam = force ? "&force=true" : "";
   const fetches = [];
   // Use silent: true to avoid showing 404 errors when OAuth is not configured
-  if (needClaude) fetches.push(rickApiGet("/api/agent/llm-token?provider=claude", { silent: true }).then(d => ({ provider: "claude", data: d })));
-  if (needOpenAI) fetches.push(rickApiGet("/api/agent/llm-token?provider=openai", { silent: true }).then(d => ({ provider: "openai", data: d })));
+  if (needClaude) fetches.push(rickApiGet(`/api/agent/llm-token?provider=claude${forceParam}`, { silent: true }).then(d => ({ provider: "claude", data: d })));
+  if (needOpenAI) fetches.push(rickApiGet(`/api/agent/llm-token?provider=openai${forceParam}`, { silent: true }).then(d => ({ provider: "openai", data: d })));
 
   const results = await Promise.allSettled(fetches);
   for (const r of results) {
@@ -703,9 +704,11 @@ rl.on("line", async (line) => {
         if (isAuthError && !authRetried) {
           authRetried = true;
           attempts--; // don't consume a timeout-retry slot for auth refresh
-          process.stderr.write(`Provedor ${provider.name} auth error, refreshing token...\n`);
+          process.stderr.write(`Provedor ${provider.name} auth error, force-refreshing token...\n`);
           emitStatus(`${provider.name} token expirado — renovando...`);
-          await refreshLLMTokens();
+          // Force refresh bypasses the host's cache and DB expiry check,
+          // using the refresh-token flow to get a genuinely new access token.
+          await refreshLLMTokens({ force: true });
           continue;
         }
 

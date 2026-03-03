@@ -582,15 +582,19 @@ async function handleAgentApiGet(
       return;
     }
 
-    // GET /api/agent/llm-token?provider=claude|openai — Fresh LLM OAuth access token.
+    // GET /api/agent/llm-token?provider=claude|openai[&force=true] — Fresh LLM OAuth access token.
     // Allows sub-agents to refresh their LLM credentials when an OAuth token expires
     // mid-task (401 from provider) without restarting the container.
+    // When force=true, bypasses the cache and DB expiry check to get a genuinely fresh
+    // token via the refresh-token flow (used after 401 when the provider revoked the token
+    // before its nominal expiry).
     if (path === "/api/agent/llm-token") {
       const provider = url.searchParams.get("provider") || "claude";
       if (provider !== "claude" && provider !== "openai") {
         jsonResponse(res, 400, { error: "Provider invalido. Use 'claude' ou 'openai'" });
         return;
       }
+      const forceRefresh = url.searchParams.get("force") === "true";
 
       // Use numericUserId from JWT when available to skip the DB lookup
       const userId = await resolveUserId(session, registeredMemoryService);
@@ -607,9 +611,9 @@ async function handleAgentApiGet(
       for (const uid of userIdsToTry) {
         if (accessToken) break;
         if (provider === "claude") {
-          accessToken = await claudeOAuthService.getValidToken(uid);
+          accessToken = await claudeOAuthService.getValidToken(uid, forceRefresh);
         } else {
-          const oauthToken = await openaiOAuthService.getValidToken(uid);
+          const oauthToken = await openaiOAuthService.getValidToken(uid, forceRefresh);
           accessToken = oauthToken?.accessToken ?? null;
         }
       }
@@ -619,7 +623,7 @@ async function handleAgentApiGet(
         return;
       }
 
-      logger.info({ sessionId: session.sessionId, provider }, "Agent API: LLM token refreshed");
+      logger.info({ sessionId: session.sessionId, provider, forceRefresh }, "Agent API: LLM token refreshed");
       jsonResponse(res, 200, { accessToken, provider });
       return;
     }

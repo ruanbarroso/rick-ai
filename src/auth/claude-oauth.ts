@@ -248,11 +248,15 @@ export class ClaudeOAuthService {
    * Deduplicates concurrent refresh attempts.
    * Returns null if user is not connected.
    */
-  async getValidToken(userId: number): Promise<string | null> {
-    // 1. Check in-memory cache first
-    const cached = this.tokenCache.get(userId);
-    if (cached && cached.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
-      return cached.accessToken;
+  async getValidToken(userId: number, forceRefresh = false): Promise<string | null> {
+    // 1. Check in-memory cache first (skip when force-refreshing, e.g. after 401)
+    if (!forceRefresh) {
+      const cached = this.tokenCache.get(userId);
+      if (cached && cached.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
+        return cached.accessToken;
+      }
+    } else {
+      this.tokenCache.delete(userId);
     }
 
     // 2. Cache miss or expired — load from DB
@@ -262,13 +266,13 @@ export class ClaudeOAuthService {
       return null;
     }
 
-    // 3. Token still valid? Update cache and return
-    if (stored.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
+    // 3. Token still valid? Update cache and return (skip when force-refreshing)
+    if (!forceRefresh && stored.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
       this.tokenCache.set(userId, stored);
       return stored.accessToken;
     }
 
-    // 4. Token expired — need refresh. Deduplicate concurrent refreshes.
+    // 4. Token expired (or force refresh) — need refresh. Deduplicate concurrent refreshes.
     if (!stored.refreshToken) {
       logger.warn({ userId }, "Claude OAuth: no refresh token, disconnecting");
       this.tokenCache.delete(userId);
