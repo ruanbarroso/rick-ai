@@ -481,14 +481,8 @@
     flex-direction: column;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.2s ease, transform 0.2s ease, width 0.25s ease, height 0.25s ease, max-height 0.25s ease;
+    transition: opacity 0.2s ease, transform 0.2s ease;
     box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
-  }
-
-  .users-panel.detail-open {
-    width: min(90vw, 1100px);
-    height: 92vh;
-    max-height: 92vh;
   }
 
   .users-panel.visible {
@@ -538,10 +532,6 @@
     padding: 12px 20px;
     border-radius: 0 0 16px 16px;
     min-height: 0;
-  }
-
-  .detail-open .users-body {
-    overflow-y: hidden;
     display: flex;
     flex-direction: column;
   }
@@ -4716,14 +4706,12 @@ function openUsers() {
 function closeUsers() {
   document.getElementById('users-overlay').classList.remove('visible');
   document.getElementById('users-panel').classList.remove('visible');
-  document.getElementById('users-panel').classList.remove('detail-open');
   selectedUserId = null;
 }
 
 function showUsersList() {
   document.getElementById('users-list-view').style.display = 'block';
   document.getElementById('user-detail-view').classList.remove('visible');
-  document.getElementById('users-panel').classList.remove('detail-open');
   selectedUserId = null;
 }
 
@@ -4851,7 +4839,6 @@ function openUserDetail(userId) {
   selectedUserId = userId;
   document.getElementById('users-list-view').style.display = 'none';
   document.getElementById('user-detail-view').classList.add('visible');
-  document.getElementById('users-panel').classList.add('detail-open');
   // Request full user detail
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'get_user_detail', userId: userId }));
