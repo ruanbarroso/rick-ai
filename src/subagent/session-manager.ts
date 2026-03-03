@@ -854,13 +854,29 @@ export class SessionManager {
       }
     });
 
+    // Collect stderr for error reporting
+    let stderrBuffer = "";
     proc.stderr!.on("data", (data: Buffer) => {
-      const text = data.toString().trim();
-      if (text) logger.debug({ sessionId: session.id, stderr: text.substring(0, 200) }, "Sub-agent stderr");
+      const text = data.toString();
+      stderrBuffer += text;
+      // Log immediately for debugging (truncated)
+      if (text.trim()) logger.debug({ sessionId: session.id, stderr: text.trim().substring(0, 500) }, "Sub-agent stderr");
     });
 
+    // Store stderr buffer on session for access in exit handler
+    (session as any)._stderrBuffer = () => stderrBuffer;
+
     proc.on("exit", (code) => {
-      logger.info({ sessionId: session.id, exitCode: code }, "Sub-agent process exited");
+      // Get stderr buffer if available
+      const getStderr = (session as any)._stderrBuffer;
+      const stderr = getStderr ? getStderr() : "";
+      
+      if (code !== 0 && code !== null) {
+        logger.error({ sessionId: session.id, exitCode: code, stderr: stderr.substring(0, 1000) }, "Sub-agent process crashed");
+      } else {
+        logger.info({ sessionId: session.id, exitCode: code }, "Sub-agent process exited");
+      }
+      
       this.processes.delete(session.id);
       if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
         // Notify user if process exited abnormally (crash, OOM, etc.)
