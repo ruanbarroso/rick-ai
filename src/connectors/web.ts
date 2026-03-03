@@ -110,6 +110,8 @@ export class WebConnector implements Connector {
   private memoryService: MemoryService | null = null;
   /** Numeric user ID of the admin (resolved on first auth) */
   private adminUserId: number | null = null;
+  /** Display name of the admin user (resolved alongside adminUserId) */
+  private adminDisplayName: string | null = null;
   /** Tracks whether the agent is currently typing, so reconnecting clients restore the indicator */
   private currentlyTyping = false;
   /** Cached QR code data URL so late-connecting clients can still see the current QR */
@@ -259,11 +261,14 @@ export class WebConnector implements Connector {
               client.authenticated = true;
               clearTimeout(authTimeout);
 
-              // Resolve admin user ID for RBAC (once, cached)
+              // Resolve admin user ID and display name for RBAC (once, cached)
               if (this.adminUserId === null && this.userService) {
                 try {
                   const admin = await this.userService.getAdminUser();
-                  if (admin) this.adminUserId = admin.id;
+                  if (admin) {
+                    this.adminUserId = admin.id;
+                    this.adminDisplayName = admin.displayName || null;
+                  }
                 } catch (_) { /* best-effort */ }
               }
 
@@ -836,6 +841,7 @@ export class WebConnector implements Connector {
     const incoming: AgentIncomingMessage = {
       connectorName: this.name,
       userId: config.ownerPhone,
+      userName: this.adminDisplayName || undefined,
       text: promptText,
       media,
       imageMedias: imageMedias.length > 0 ? imageMedias : undefined,
@@ -858,7 +864,10 @@ export class WebConnector implements Connector {
     if (this.adminUserId === null && this.userService) {
       try {
         const admin = await this.userService.getAdminUser();
-        if (admin) this.adminUserId = admin.id;
+        if (admin) {
+          this.adminUserId = admin.id;
+          this.adminDisplayName = admin.displayName || null;
+        }
       } catch (_) { /* best-effort */ }
     }
 
