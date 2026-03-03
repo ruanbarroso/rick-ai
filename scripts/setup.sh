@@ -67,19 +67,70 @@ else
   ok "Gemini API key set"
 
   # Web UI password (optional but recommended)
-  read -rp "  Web UI password (leave empty to disable Web UI): " WEB_PASSWORD
+  echo ""
+  echo -e "  ${CYAN}Web UI Password${NC} (recommended)"
+  echo ""
+  echo "  The Web UI gives you a browser-based admin panel with:"
+  echo "    - Chat interface with audio and image support"
+  echo "    - User management (approve/block users)"
+  echo "    - Sub-agent session viewer"
+  echo "    - Settings, OAuth, and WhatsApp management"
+  echo ""
+  echo "  Pick any password you want. Leave empty to disable the Web UI."
+  echo ""
+  read -rp "  Web UI password: " WEB_PASSWORD
+  if [[ -n "$WEB_PASSWORD" ]]; then
+    ok "Web UI enabled"
+  else
+    warn "Web UI disabled (no password set)"
+  fi
 
   # Database (optional)
   echo ""
+  echo -e "  ${CYAN}PostgreSQL Database${NC} (optional)"
+  echo ""
+  echo "  Rick can use PostgreSQL or SQLite for storing memories and conversations."
+  echo "  SQLite works out of the box (zero setup, stored at ./data/rick.db)."
+  echo "  PostgreSQL is recommended for production (multi-user, better search)."
+  echo ""
+  echo "  Format: postgresql://user:password@host:5432/dbname"
+  echo ""
   read -rp "  PostgreSQL URL (leave empty for SQLite): " DB_URL
-
-  VECTOR_DB_URL=""
   if [[ -n "$DB_URL" ]]; then
-    read -rp "  pgvector URL (leave empty to skip semantic memory): " VECTOR_DB_URL
+    ok "PostgreSQL configured"
+
+    echo ""
+    echo -e "  ${CYAN}pgvector Database${NC} (optional)"
+    echo ""
+    echo "  Semantic memory uses pgvector to search past conversations by meaning."
+    echo "  Requires a PostgreSQL instance with the pgvector extension installed."
+    echo "  Can be the same or a different database from the main one."
+    echo ""
+    read -rp "  pgvector URL (leave empty to skip): " VECTOR_DB_URL
+    if [[ -n "$VECTOR_DB_URL" ]]; then
+      ok "pgvector configured"
+    fi
+  else
+    ok "Using SQLite (zero setup)"
+    VECTOR_DB_URL=""
   fi
 
   # Encryption key (optional)
-  read -rp "  Memory encryption key (leave empty for plaintext): " ENCRYPTION_KEY
+  echo ""
+  echo -e "  ${CYAN}Memory Encryption Key${NC} (optional)"
+  echo ""
+  echo "  Rick can encrypt sensitive memories (passwords, tokens, credentials)"
+  echo "  at rest using AES-256-GCM. Without this, they're stored as plaintext."
+  echo ""
+  echo "  Use any passphrase you want, or generate one:"
+  echo "    openssl rand -base64 32"
+  echo ""
+  read -rp "  Encryption key (leave empty for plaintext): " ENCRYPTION_KEY
+  if [[ -n "$ENCRYPTION_KEY" ]]; then
+    ok "Memory encryption enabled"
+  else
+    warn "Credentials will be stored as plaintext"
+  fi
 
   # Generate .env
   cat > "$ENV_FILE" <<ENVEOF
