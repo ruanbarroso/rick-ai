@@ -130,17 +130,17 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 
 Each sub-agent gets a unique variant name assigned sequentially per user. When `AGENT_NAME=Rick`, names come from canonical Rick and Morty characters (Pickle Rick, Evil Rick, Doofus Rick, etc. — 130+ variants). For other agent names, generic suffixes are used (Alpha, Beta, Quantum, Nebula, etc. — 90+ variants). Names are persisted in the `variant_name` column and served to all clients from the server.
 
-### Self-Editing (`/edit` mode)
+### Self-Editing (edit mode)
 
-Rick can edit his own source code:
+Rick can edit his own source code. Edit mode is entered via a hidden easter egg: **triple-click on the agent avatar** in the web UI sidebar. Requires a GitHub Token and at least one AI provider (Claude/GPT/Gemini) to be configured.
 
-1. `/edit` — Starts an edit session. Creates a staging copy of the repository excluding runtime artifacts and local data (`.git`, `node_modules`, `dist`, `data`, `auth_info`, `.env`), launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-5.3 Codex → Gemini 3.1 Pro**, chosen automatically based on which credentials are available.
+1. **Enter edit mode** — Triple-click the agent avatar. Creates a staging copy of the repository excluding runtime artifacts and local data (`.git`, `node_modules`, `dist`, `data`, `auth_info`, `.env`), launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-5.3 Codex → Gemini 3.1 Pro**, chosen automatically based on which credentials are available.
    - `subagent-edit` image is warmed up in background at startup and auto-rebuilt when source hash/version labels differ; edit mode always waits for the current image (never runs with stale image).
 2. Send prompts describing what to change — the active provider edits the files directly inside the isolated container.
 3. `/deploy` — Triggers the deploy pipeline:
    - Backup current `src/` → build candidate image → smoke test (health-only mode) → swap containers → 60s watchdog → rollback on failure
 4. `/publish [usuario/repo]` — Deploy + push code to GitHub. Defaults to `ruanbarroso/rick-ai`. Resolves GitHub token from Rick's memories, validates write access, runs the full deploy pipeline, then pushes. Push strategy: fast-forward → rebase → `--force-with-lease`.
-5. `/exit` — Exits edit mode without deploying.
+5. **Exit edit mode** — Triple-click the Evil Morty avatar (shown while in edit mode). Discards uncommitted changes.
 
 ### Web UI
 
@@ -175,8 +175,6 @@ Sub-agent sessions have a lifecycle: `starting` → `running` → `waiting_user`
 
 | Command | Description |
 |---------|-------------|
-| `/edit` | Start edit mode (Claude Code on Rick's own source) |
-| `/exit` | Exit edit mode without deploying |
 | `/deploy` | Deploy staged changes (build + smoke test + swap + watchdog) |
 | `/publish [user/repo]` | Deploy + push to GitHub (default: `ruanbarroso/rick-ai`) |
 | `/status` | Show active sessions, memory stats, connected providers |
@@ -335,7 +333,7 @@ Host Docker (cluster-24g)
 ├── subagent-<id>                  # Ephemeral, created per task (unified)
 │   └── agent.mjs + Playwright + Chromium
 │
-└── subagent-edit-*                # Ephemeral, created per /edit session
+└── subagent-edit-*                # Ephemeral, created per edit session
     └── edit-agent.mjs (Claude Code CLI / GPT-5.3 Codex / Gemini 3.1 Pro) + Playwright
 ```
 

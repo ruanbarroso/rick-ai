@@ -2246,7 +2246,8 @@
           <div class="sidebar-subtitle" id="header-status">Conectando...</div>
         </div>
         <div class="sidebar-header-actions">
-          <button class="edit-mode-btn" id="edit-mode-btn" onclick="startEditMode()">Entrar no Modo Edicao</button>
+          <!-- Edit mode is entered via 3x click on agent logo (easter egg) -->
+          <span id="edit-mode-btn" style="display:none"></span>
           <button class="users-btn-header" id="users-btn-desktop" onclick="openUsers()" title="Usuarios">
             <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
             <span class="users-badge hidden" id="users-badge-desktop">0</span>
@@ -2838,8 +2839,12 @@ sidebarAvatarEl.addEventListener('mouseleave', function() {
   }
 });
 sidebarAvatarEl.addEventListener('click', function() {
+  if (!githubTokenConfigured) {
+    showToast('Configure o GitHub Token para habilitar o modo de edicao');
+    return;
+  }
   if (!providerConnectedForEdit) {
-    showToast('Configure um provedor de IA para habilitar o modo /edit');
+    showToast('Configure um provedor de IA para habilitar o modo de edicao');
     return;
   }
   if (!avatarHovering) return;
@@ -2860,13 +2865,12 @@ sidebarAvatarEl.addEventListener('click', function() {
 });
 
 function updateAvatarInteractivity() {
-  if (providerConnectedForEdit) {
+  if (providerConnectedForEdit && githubTokenConfigured) {
     sidebarAvatarEl.classList.remove('avatar-disabled');
-    sidebarAvatarEl.title = 'Clique 3x para alternar modo /edit';
   } else {
     sidebarAvatarEl.classList.add('avatar-disabled');
-    sidebarAvatarEl.title = 'Configure um provedor de IA para liberar o /edit';
   }
+  sidebarAvatarEl.title = '';
 }
 
 updateAvatarInteractivity();
@@ -2899,6 +2903,7 @@ var easterEggUnlocked = false;
 var devRepoConfigured = false;
 var oauthConnected = false;
 var providerConnectedForEdit = false;
+var githubTokenConfigured = false;
 var whatsappConnected = false;
 var currentSettings = {};
 var pendingUserCount = 0;
@@ -5120,6 +5125,7 @@ function populateSettings(settings) {
     document.getElementById('setting-github-token').value = settings.githubToken;
   }
   var ghTokenSet = !!settings.githubTokenSet;
+  githubTokenConfigured = ghTokenSet;
   setStatusBadge('github-token-status', ghTokenSet);
   setApiKeyInputState('setting-github-token', ghTokenSet);
 
@@ -6212,12 +6218,8 @@ function sendSaveSettings(settings) {
 
 // ==================== EDIT MODE ====================
 function checkEditModeButtonVisibility() {
-  var btn = document.getElementById('edit-mode-btn');
-  if (devRepoConfigured && oauthConnected && easterEggUnlocked) {
-    btn.classList.add('visible');
-  } else {
-    btn.classList.remove('visible');
-  }
+  // Edit mode button is no longer shown — edit mode is entered via 3x click on agent logo.
+  // This function is kept as a no-op to avoid breaking callers.
 }
 
 function startEditMode() {

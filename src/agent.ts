@@ -167,15 +167,13 @@ export class Agent {
     }
 
     // ==================== EDIT MODE ====================
-    // When in edit mode, only /exit and /deploy are recognized as commands.
+    // When in edit mode, only /deploy and /publish are recognized as commands.
+    // /exit is no longer a command — exit via 3x click on Evil Morty logo in the web UI.
     // Everything else goes directly to Claude Code.
     // Audio is pre-transcribed via Gemini; images are passed via --image flag.
     if (this.editSession) {
       const lower = fullText.trim().toLowerCase();
 
-      if (lower === "/exit") {
-        return this.cmdExitEdit();
-      }
       if (lower === "/deploy") {
         return this.cmdDeploy();
       }
@@ -210,7 +208,7 @@ export class Agent {
           return result || "Erro ao trocar codigo OAuth.";
         }
 
-        return "Token do Claude expirou. Cole o codigo OAuth para continuar, ou use */exit* para sair.";
+        return "Token do Claude expirou. Cole o codigo OAuth para continuar.";
       }
 
       // Proxy everything else to Claude Code
@@ -1090,18 +1088,13 @@ IMPORTANTE SOBRE SUB-AGENTE:
     }
 
     // ==================== EDIT MODE ====================
+    // /edit is no longer a text command — edit mode is entered via 3x click on agent logo in the web UI.
+    // /exit is no longer a text command — exit via 3x click on Evil Morty logo in the web UI.
 
-    if (lower === "/edit") {
-      return this.cmdStartEdit(userId, connectorName);
-    }
-
-    // /exit and /deploy are handled in the edit mode block at top of handleMessage
+    // /deploy is handled in the edit mode block at top of handleMessage
     // But if called outside edit mode, give a helpful message
-    if (lower === "/exit") {
-      return "Voce nao esta no modo de edicao. Use */edit* para entrar.";
-    }
     if (lower === "/deploy") {
-      return "Voce nao esta no modo de edicao. Use */edit* primeiro.";
+      return "Voce nao esta no modo de edicao.";
     }
 
     if (lower === "/help" || lower === "/ajuda") {
@@ -1390,7 +1383,12 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
 
   private async cmdStartEdit(userId: number, connectorName: string): Promise<string> {
     if (this.editSession) {
-      return "Voce ja esta no modo de edicao. Use */exit* para sair ou */deploy* para aplicar.";
+      return "Voce ja esta no modo de edicao.";
+    }
+
+    // Require GITHUB_TOKEN — needed for git push to deploy changes
+    if (!process.env.GITHUB_TOKEN) {
+      return "Configure o GitHub Token nas configuracoes antes de entrar no modo de edicao.";
     }
 
     // Provider priority: Claude → OpenAI → Gemini Pro
@@ -1665,8 +1663,6 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
 /desconectar claude | gpt
 
 *Auto-edicao:*
-/edit - entra no modo de edicao (editar codigo do ${config.agentName})
-/exit - sai do modo de edicao (descarta mudancas)
 /deploy - aplica mudancas com pipeline seguro
 /publish [usuario/repo] - deploy + push para GitHub
 
