@@ -66,9 +66,18 @@ else
   echo ""
 
   GEMINI_KEY=""
-  while [[ -z "$GEMINI_KEY" ]]; do
+  while true; do
     read -rp "  > API key: " GEMINI_KEY
-    [[ -z "$GEMINI_KEY" ]] && warn "Required. Rick won't start without it."
+    if [[ -z "$GEMINI_KEY" ]]; then
+      warn "Required. Rick won't start without it."
+    elif [[ ! "$GEMINI_KEY" =~ ^AIza ]]; then
+      warn "Key doesn't look right (should start with AIza). Try again or paste anyway."
+      read -rp "  > Use this key anyway? [y/N]: " USE_ANYWAY
+      [[ "$USE_ANYWAY" =~ ^[Yy]$ ]] && break
+      GEMINI_KEY=""
+    else
+      break
+    fi
   done
   ok "Gemini key set"
 
