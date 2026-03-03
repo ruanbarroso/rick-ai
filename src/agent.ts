@@ -143,9 +143,9 @@ export class Agent {
    * Two messages from the same user are processed sequentially, never concurrently.
    * Called by ConnectorManager when any connector receives a message.
    * 
-   * IMPORTANT: Abort is triggered IMMEDIATELY when a new message arrives,
-   * before waiting in the queue. This ensures in-flight LLM requests are
-   * cancelled as soon as possible, not after the previous message finishes.
+   * IMPORTANT: AbortController is created HERE (before queueing) and abort is
+   * triggered IMMEDIATELY when a new message arrives. This ensures in-flight
+   * LLM requests are cancelled as soon as possible.
    */
   async handleMessage(msg: IncomingMessage): Promise<string> {
     const { userId } = msg;
@@ -154,10 +154,18 @@ export class Agent {
     // This ensures the LLM request is cancelled as soon as the new message arrives.
     this.interruptUser(userId);
 
+    // Create AbortController NOW, before entering the queue.
+    // This way, if another message arrives while we're waiting in the queue,
+    // it can abort our controller immediately.
+    const abortController = new AbortController();
+    const generation = (this.userGenerations.get(userId) ?? 0) + 1;
+    this.userGenerations.set(userId, generation);
+    this.userAbortControllers.set(userId, { controller: abortController, generation });
+
     const prev = this.messageQueue.get(userId) ?? Promise.resolve("");
     const next = prev
       .catch(() => {}) // don't let a failed message block the queue
-      .then(() => this.handleMessageInternal(msg));
+      .then(() => this.handleMessageInternal(msg, abortController.signal, generation));
     this.messageQueue.set(userId, next);
     return next;
   }
@@ -192,20 +200,18 @@ export class Agent {
     }
   }
 
-  private async handleMessageInternal(msg: IncomingMessage): Promise<string> {
+  private async handleMessageInternal(msg: IncomingMessage, signal: AbortSignal, generation: number): Promise<string> {
     const { connectorName, userId: userPhone, userName, text: rawText, media, imageMedias, quotedText, audioUrl, imageUrls, fileInfos } = msg;
     const numericUserId = msg.numericUserId;
     // Web UI always sends messages as the admin user (the only Web UI user).
     // For connectors (WhatsApp), userRole comes from resolveUser() and can be null (pending).
     const userRole: UserRole = msg.userRole !== undefined ? msg.userRole : "admin";
 
-    // Create new AbortController for this request.
-    // Note: interruptUser() was already called in handleMessage() to abort any previous request.
-    const abortController = new AbortController();
-    const generation = (this.userGenerations.get(userPhone) ?? 0) + 1;
-    this.userGenerations.set(userPhone, generation);
-    this.userAbortControllers.set(userPhone, { controller: abortController, generation });
-    const signal = abortController.signal;
+    // Check if already aborted before starting (another message arrived while we were in queue)
+    if (signal.aborted) {
+      logger.info({ userPhone }, "Request already aborted before processing — skipping");
+      return "";
+    }
 
     // Get or create user — always yields a numeric user.id for DB operations.
     // When RBAC is active (numericUserId available), the user was already resolved by the connector.
