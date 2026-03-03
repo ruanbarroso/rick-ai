@@ -60,7 +60,7 @@ class EditImageBuilder {
     };
   }
 
-  private async imageFingerprint(): Promise<string | null> {
+  private async imageFingerprint(): Promise<{ hash: string; version: string; fingerprint: string } | null> {
     try {
       const { stdout } = await execFileAsync(
         "docker",
@@ -73,10 +73,29 @@ class EditImageBuilder {
         { timeout: 10_000 },
       );
       const out = stdout.trim();
-      return out || null;
+      if (!out) return null;
+      const [hash = "", version = ""] = out.split("|");
+      return { hash, version, fingerprint: out };
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Re-label the existing image with updated version metadata (no rebuild).
+   * Uses `docker build` with a trivial FROM+LABEL Dockerfile piped via shell,
+   * which is instant because no layers change.
+   */
+  private async relabel(local: { hash: string; version: string }): Promise<void> {
+    logger.info({ hash: local.hash, version: local.version }, "Re-labeling subagent-edit image (content unchanged, version updated)");
+    const { execSync } = await import("node:child_process");
+    execSync(
+      `printf 'FROM subagent-edit\\nLABEL edit-agent.bundle.hash=${local.hash} rick.version=${local.version}\\n' | docker build -t subagent-edit -f - .`,
+      { timeout: 30_000 },
+    );
+    execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 }).catch(() => {});
+    this.readyFingerprint = `${local.hash}|${local.version}`;
+    logger.info({ hash: local.hash, version: local.version }, "subagent-edit image re-labeled successfully");
   }
 
   private async build(local: { hash: string; version: string; dockerfilePath: string; localAppDir: string }): Promise<void> {
@@ -136,25 +155,32 @@ class EditImageBuilder {
       return;
     }
 
-    const imageFingerprint = await this.imageFingerprint();
-    if (imageFingerprint === local.fingerprint) {
+    const image = await this.imageFingerprint();
+
+    if (image?.fingerprint === local.fingerprint) {
       this.readyFingerprint = local.fingerprint;
       return;
     }
 
-    if (!imageFingerprint) {
+    if (!image) {
       opts?.onStatus?.("building_missing");
       await this.buildWithLock(local);
       return;
     }
 
-    const [imageHash = "", imageVersion = ""] = imageFingerprint.split("|");
+    // Content hash matches — only version label differs (e.g. new commit that didn't
+    // touch any docker/ files). Re-label the existing image instantly instead of rebuilding.
+    if (image.hash === local.hash) {
+      await this.relabel(local);
+      return;
+    }
+
     logger.info(
       {
         localHash: local.hash,
-        imageHash: imageHash || "(none)",
+        imageHash: image.hash || "(none)",
         localVersion: local.version,
-        imageVersion: imageVersion || "(none)",
+        imageVersion: image.version || "(none)",
       },
       "subagent-edit image out of date — rebuilding",
     );
@@ -177,13 +203,19 @@ class EditImageBuilder {
     if (this.inFlightBuild) return;
 
     this.imageFingerprint()
-      .then((imageFingerprint) => {
-        if (imageFingerprint === local.fingerprint) {
+      .then((image) => {
+        if (image?.fingerprint === local.fingerprint) {
           this.readyFingerprint = local.fingerprint;
           logger.info({ reason }, "Edit image already up to date");
           return;
         }
-        logger.info({ reason, imageFingerprint, localFingerprint: local.fingerprint }, "Edit image warmup starting build");
+        // Content hash matches — only version label differs. Re-label instantly.
+        if (image && image.hash === local.hash) {
+          return this.relabel(local).then(() => {
+            this.warmupRetries = 0;
+          });
+        }
+        logger.info({ reason, imageFingerprint: image?.fingerprint ?? null, localFingerprint: local.fingerprint }, "Edit image warmup starting build");
         return this.buildWithLock(local)
           .then(() => {
             this.warmupRetries = 0;

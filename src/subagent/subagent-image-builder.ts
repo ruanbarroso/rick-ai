@@ -75,7 +75,7 @@ class SubagentImageBuilder {
     }
   }
 
-  private async imageFingerprint(imageRef: string): Promise<string | null> {
+  private async imageFingerprint(imageRef: string): Promise<{ hash: string; version: string; fingerprint: string } | null> {
     try {
       const { stdout } = await execFileAsync("docker", [
         "inspect",
@@ -84,10 +84,28 @@ class SubagentImageBuilder {
         imageRef,
       ], { timeout: 10_000 });
       const out = stdout.trim();
-      return out || null;
+      if (!out) return null;
+      const [hash = "", version = ""] = out.split("|");
+      return { hash, version, fingerprint: out };
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Re-label the existing image with updated version metadata (no rebuild).
+   * Uses `docker build` with a trivial FROM+LABEL Dockerfile piped via shell,
+   * which is instant because no layers change.
+   */
+  private async relabel(imageRef: string, targetTag: string, local: { hash: string; version: string }): Promise<void> {
+    logger.info({ hash: local.hash, version: local.version, imageRef }, "Re-labeling subagent image (content unchanged, version updated)");
+    const { execSync } = await import("node:child_process");
+    execSync(
+      `printf 'FROM ${imageRef}\\nLABEL agent.bundle.hash=${local.hash} rick.version=${local.version}\\n' | docker build -t ${targetTag} -f - .`,
+      { timeout: 30_000 },
+    );
+    execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 }).catch(() => {});
+    logger.info({ hash: local.hash, version: local.version }, "subagent image re-labeled successfully");
   }
 
   private async ensureCurrentTagExists(): Promise<void> {
@@ -169,22 +187,30 @@ class SubagentImageBuilder {
       return CURRENT_IMAGE;
     }
 
-    const currentFingerprint = await this.imageFingerprint(CURRENT_IMAGE);
-    const hasCurrent = currentFingerprint !== null || await this.imageExists(CURRENT_IMAGE);
+    const current = await this.imageFingerprint(CURRENT_IMAGE);
+    const hasCurrent = current !== null || await this.imageExists(CURRENT_IMAGE);
 
-    if (currentFingerprint === local.fingerprint) {
+    if (current?.fingerprint === local.fingerprint) {
       this.readyFingerprint = local.fingerprint;
       return CURRENT_IMAGE;
     }
 
-    if (currentFingerprint) {
-      const [imageHash = "", imageVersion = ""] = currentFingerprint.split("|");
+    // Content hash matches — only version label differs. Re-label instantly.
+    if (current && current.hash === local.hash) {
+      await this.relabel(CURRENT_IMAGE, CURRENT_IMAGE, local);
+      // Also tag as legacy for compatibility
+      await execFileAsync("docker", ["tag", CURRENT_IMAGE, LEGACY_IMAGE], { timeout: 10_000 }).catch(() => {});
+      this.readyFingerprint = `${local.hash}|${local.version}`;
+      return CURRENT_IMAGE;
+    }
+
+    if (current) {
       logger.info(
         {
           localHash: local.hash,
-          imageHash: imageHash || "(none)",
+          imageHash: current.hash || "(none)",
           localVersion: local.version,
-          imageVersion: imageVersion || "(none)",
+          imageVersion: current.version || "(none)",
         },
         "subagent current image out of date",
       );
@@ -224,13 +250,20 @@ class SubagentImageBuilder {
     }
     this.ensureCurrentTagExists()
       .then(() => this.imageFingerprint(CURRENT_IMAGE))
-      .then((fp) => {
-        if (fp === local.fingerprint) {
+      .then((image) => {
+        if (image?.fingerprint === local.fingerprint) {
           this.readyFingerprint = local.fingerprint;
           logger.info({ reason }, "Subagent image already up to date");
           return;
         }
-        logger.info({ reason, imageFingerprint: fp, localFingerprint: local.fingerprint }, "Subagent image warmup starting build");
+        // Content hash matches — only version label differs. Re-label instantly.
+        if (image && image.hash === local.hash) {
+          return this.relabel(CURRENT_IMAGE, CURRENT_IMAGE, local).then(() => {
+            execFileAsync("docker", ["tag", CURRENT_IMAGE, LEGACY_IMAGE], { timeout: 10_000 }).catch(() => {});
+            this.readyFingerprint = `${local.hash}|${local.version}`;
+          });
+        }
+        logger.info({ reason, imageFingerprint: image?.fingerprint ?? null, localFingerprint: local.fingerprint }, "Subagent image warmup starting build");
         return this.startBackgroundBuild(local, reason);
       })
       .catch(async (err) => {
