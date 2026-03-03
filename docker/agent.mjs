@@ -115,17 +115,23 @@ const initialProviderList = getProviderList();
 
 // ── Rick API client (for querying memories/credentials) ─────────────────────
 
+// Note: RICK_SESSION_TOKEN is read dynamically from process.env because it can
+// be updated at runtime via the update_token message (for recovered sessions).
 const RICK_API_URL = process.env.RICK_API_URL || "";
-const RICK_SESSION_TOKEN = process.env.RICK_SESSION_TOKEN || "";
+
+function getRickSessionToken() {
+  return process.env.RICK_SESSION_TOKEN || "";
+}
 
 async function rickApiGet(path) {
-  if (!RICK_API_URL || !RICK_SESSION_TOKEN) {
+  const token = getRickSessionToken();
+  if (!RICK_API_URL || !token) {
     emitStatus("rick_memory/rick_search indisponível: RICK_API_URL ou RICK_SESSION_TOKEN não configurado");
     return null;
   }
   try {
     const res = await fetch(`${RICK_API_URL}${path}`, {
-      headers: { Authorization: `Bearer ${RICK_SESSION_TOKEN}` },
+      headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {
@@ -140,14 +146,15 @@ async function rickApiGet(path) {
 }
 
 async function rickApiPost(path, body) {
-  if (!RICK_API_URL || !RICK_SESSION_TOKEN) {
+  const token = getRickSessionToken();
+  if (!RICK_API_URL || !token) {
     return { error: "RICK_API_URL ou RICK_SESSION_TOKEN não configurado" };
   }
   try {
     const res = await fetch(`${RICK_API_URL}${path}`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${RICK_SESSION_TOKEN}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
