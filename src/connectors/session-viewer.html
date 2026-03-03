@@ -808,8 +808,8 @@ function updateSessionState(state) {
     typing.classList.remove('visible');
   } else if (state === 'done') {
     dot.classList.add('done');
-    text.textContent = 'Concluido';
-    banner.textContent = 'Tarefa concluida — somente leitura';
+    text.textContent = 'Encerrado';
+    banner.textContent = 'Sessao encerrada — somente leitura';
     banner.classList.add('visible');
     composeBar.style.display = 'none';
     attachPreview.classList.remove('visible');

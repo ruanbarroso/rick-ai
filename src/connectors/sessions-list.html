@@ -141,11 +141,7 @@ body {
   color: #1da1f2;
 }
 
-.card-status.done {
-  background: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-}
-
+.card-status.done,
 .card-status.failed,
 .card-status.killed, .card-status.error {
   background: rgba(107, 114, 128, 0.15);
@@ -296,7 +292,7 @@ function statusLabel(status) {
     running: 'Online',
     starting: 'Iniciando',
     waiting_user: 'Aguardando',
-    done: 'Concluido',
+    done: 'Encerrado',
     failed: 'Erro',
     killed: 'Encerrado',
     error: 'Erro'
