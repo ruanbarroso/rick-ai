@@ -790,10 +790,29 @@ export class WhatsAppConnector implements Connector {
   }
 
   /**
+   * Convert Markdown formatting to WhatsApp-compatible formatting.
+   *
+   * WhatsApp supports: *bold*, _italic_, ~strikethrough~, ```code```
+   * LLMs typically output: **bold**, *italic*, ~~strike~~, `code`
+   */
+  private markdownToWhatsApp(text: string): string {
+    let result = text;
+    // Convert markdown bold **text** → WhatsApp bold *text*
+    // Must be done before italic to avoid conflicts
+    result = result.replace(/\*\*(.+?)\*\*/g, "*$1*");
+    // Convert markdown headers (### Title) → WhatsApp bold (*Title*)
+    result = result.replace(/^#{1,6}\s+(.+)$/gm, "*$1*");
+    return result;
+  }
+
+  /**
    * Send a text message to a JID and track it as AGENT.
    */
   private async sendTextMessage(jid: string, text: string): Promise<void> {
     if (!this.sock) return;
+
+    // Convert markdown formatting to WhatsApp-compatible formatting
+    text = this.markdownToWhatsApp(text);
 
     const MAX_LENGTH = 4000;
     if (text.length <= MAX_LENGTH) {
