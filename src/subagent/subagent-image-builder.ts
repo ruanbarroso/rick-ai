@@ -23,6 +23,7 @@ class SubagentImageBuilder {
     const agentMjsPath = `${localAppDir}/docker/agent.mjs`;
     const sharedToolsPath = `${localAppDir}/docker/tools.mjs`;
     const sharedDeclsPath = `${localAppDir}/docker/tool-declarations.mjs`;
+    const rickApiPath = `${localAppDir}/docker/rick-api.mjs`;
     const dockerfilePath = `${localAppDir}/docker/subagent.Dockerfile`;
     const versionFilePath = `${localAppDir}/.rick-version`;
     const packageJsonPath = `${localAppDir}/package.json`;
@@ -33,6 +34,8 @@ class SubagentImageBuilder {
       .update(readFileSync(sharedToolsPath))
       .update("\n---\n")
       .update(readFileSync(sharedDeclsPath))
+      .update("\n---\n")
+      .update(readFileSync(rickApiPath))
       .update("\n---\n")
       .update(readFileSync(dockerfilePath))
       .digest("hex")

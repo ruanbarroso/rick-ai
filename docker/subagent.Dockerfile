@@ -16,6 +16,7 @@ RUN useradd -m -u 1001 -s /bin/bash agent \
 # Copy agent entry point and shared modules
 COPY docker/tools.mjs /app/tools.mjs
 COPY docker/tool-declarations.mjs /app/tool-declarations.mjs
+COPY docker/rick-api.mjs /app/rick-api.mjs
 COPY docker/agent.mjs /app/agent.mjs
 RUN chown -R agent:agent /app
 

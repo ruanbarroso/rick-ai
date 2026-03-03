@@ -19,6 +19,7 @@ RUN useradd -m -u 1001 -s /bin/bash claude \
 # Copy edit agent entry point and shared modules
 COPY docker/tools.mjs /app/tools.mjs
 COPY docker/tool-declarations.mjs /app/tool-declarations.mjs
+COPY docker/rick-api.mjs /app/rick-api.mjs
 COPY docker/edit-agent.mjs /app/edit-agent.mjs
 RUN chown -R claude:claude /app
 

@@ -17,6 +17,7 @@ class EditImageBuilder {
     const editAgentPath = `${localAppDir}/docker/edit-agent.mjs`;
     const sharedToolsPath = `${localAppDir}/docker/tools.mjs`;
     const sharedDeclsPath = `${localAppDir}/docker/tool-declarations.mjs`;
+    const rickApiPath = `${localAppDir}/docker/rick-api.mjs`;
     const dockerfilePath = `${localAppDir}/docker/subagent-edit.Dockerfile`;
     const versionFilePath = `${localAppDir}/.rick-version`;
     const packageJsonPath = `${localAppDir}/package.json`;
@@ -27,6 +28,8 @@ class EditImageBuilder {
       .update(readFileSync(sharedToolsPath))
       .update("\n---\n")
       .update(readFileSync(sharedDeclsPath))
+      .update("\n---\n")
+      .update(readFileSync(rickApiPath))
       .update("\n---\n")
       .update(readFileSync(dockerfilePath))
       .digest("hex")
