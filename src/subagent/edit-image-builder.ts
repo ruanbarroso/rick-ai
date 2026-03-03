@@ -97,6 +97,9 @@ class EditImageBuilder {
       ],
       { timeout: 600_000 },
     );
+    // Clean up the old image that became dangling after re-tagging
+    execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 }).catch(() => {});
+
     this.readyFingerprint = `${local.hash}|${local.version}`;
     logger.info({ hash: local.hash, version: local.version }, "subagent-edit image built successfully");
   }

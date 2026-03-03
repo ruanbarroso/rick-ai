@@ -125,6 +125,9 @@ class SubagentImageBuilder {
     await execFileAsync("docker", ["tag", NEXT_IMAGE, CURRENT_IMAGE], { timeout: 10_000 });
     await execFileAsync("docker", ["tag", NEXT_IMAGE, LEGACY_IMAGE], { timeout: 10_000 });
 
+    // Clean up the old image that became dangling after re-tagging
+    execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 }).catch(() => {});
+
     this.readyFingerprint = `${local.hash}|${local.version}`;
     logger.info({ hash: local.hash, version: local.version }, "subagent image built and promoted successfully");
   }

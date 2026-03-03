@@ -296,5 +296,12 @@ fi
 
 log "Deploy successful! Cleaning up backup..."
 rm -rf "$BACKUP_DIR"
+
+# Clean up Docker garbage left by previous deploys (dangling images, old build cache).
+# This runs in the background to not delay the deploy completion.
+log "Cleaning up Docker garbage..."
+docker image prune -f >/dev/null 2>&1 || true
+docker builder prune -f --keep-storage 200MB >/dev/null 2>&1 || true
+
 log "Done. Rick is running with the new code."
 exit 0
