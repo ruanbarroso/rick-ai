@@ -1,0 +1,252 @@
+/**
+ * Shared text rendering utilities for all viewer pages.
+ * Converts plain text with markdown-like syntax to HTML.
+ *
+ * Usage:
+ *   <script src="/static/render-text.js"></script>
+ *   renderText('hello **bold** world')  => 'hello <strong>bold</strong> world'
+ *
+ * Also exports: escapeHtml(), renderMessageContent(), getFileIcon(), getFileTypeLabel(),
+ *               openImageFullscreen(), closeImageFullscreen()
+ */
+
+// eslint-disable-next-line no-unused-vars
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// eslint-disable-next-line no-unused-vars
+function renderText(text) {
+  if (!text) return '';
+
+  // 1. Escape HTML
+  var escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // 2. Extract code blocks (replace with placeholder to avoid processing internals)
+  var codeBlocks = [];
+  escaped = escaped.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+    var langLabel = lang ? '<span class="code-lang">' + lang + '</span>' : '';
+    var block = '<pre>' + langLabel + '<code>' + code.trim() + '</code></pre>';
+    codeBlocks.push(block);
+    return '\x00CB' + (codeBlocks.length - 1) + '\x00';
+  });
+
+  // 3. Inline code
+  escaped = escaped.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+  // 4. Clickable URLs
+  escaped = escaped.replace(/(https?:\/\/[^\s<>"']+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+
+  // 5. Line-by-line processing (headers, lists, hr)
+  function inlineFmt(t) {
+    // Bold (**...**)
+    t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Italic (*...*) — single asterisk = italic
+    t = t.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+    // Italic (_..._)
+    t = t.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em>$1</em>');
+    // Strikethrough (~~...~~)
+    t = t.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+    return t;
+  }
+
+  var lines = escaped.split('\n');
+  var result = [];
+  var inList = false;
+  var listType = null;
+
+  function closeList() {
+    if (inList) { result.push('</' + listType + '>'); inList = false; listType = null; }
+  }
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+
+    // Code block placeholder
+    if (/\x00CB\d+\x00/.test(line)) {
+      closeList();
+      result.push(line.replace(/\x00CB(\d+)\x00/g, function(_, idx) { return codeBlocks[+idx]; }));
+      continue;
+    }
+
+    // Horizontal rule (--- / *** / ___)
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      closeList();
+      result.push('<hr>');
+      continue;
+    }
+
+    // Headings (# ## ###)
+    var hm = line.match(/^(#{1,3})\s+(.+)$/);
+    if (hm) {
+      closeList();
+      var lvl = hm[1].length;
+      result.push('<h' + lvl + '>' + inlineFmt(hm[2]) + '</h' + lvl + '>');
+      continue;
+    }
+
+    // Unordered list (- / * / +)
+    var ulm = line.match(/^[\-\*\+]\s+(.+)$/);
+    if (ulm) {
+      if (!inList || listType !== 'ul') { closeList(); result.push('<ul>'); inList = true; listType = 'ul'; }
+      result.push('<li>' + inlineFmt(ulm[1]) + '</li>');
+      continue;
+    }
+
+    // Ordered list (1. 2. ...)
+    var olm = line.match(/^\d+\.\s+(.+)$/);
+    if (olm) {
+      if (!inList || listType !== 'ol') { closeList(); result.push('<ol>'); inList = true; listType = 'ol'; }
+      result.push('<li>' + inlineFmt(olm[1]) + '</li>');
+      continue;
+    }
+
+    // Empty line
+    if (line.trim() === '') {
+      closeList();
+      result.push('<br>');
+      continue;
+    }
+
+    closeList();
+    result.push(inlineFmt(line) + '<br>');
+  }
+
+  closeList();
+
+  var finalHtml = result.join('');
+  // Remove trailing <br>s
+  finalHtml = finalHtml.replace(/(<br>\s*)+$/, '');
+  return finalHtml;
+}
+
+// ==================== MEDIA RENDERING ====================
+
+// eslint-disable-next-line no-unused-vars
+function getFileIcon(mimeType) {
+  if (!mimeType) return '\uD83D\uDCC4';
+  if (mimeType.startsWith('text/')) return '\uD83D\uDCDD';
+  if (mimeType === 'application/pdf') return '\uD83D\uDCD5';
+  if (mimeType === 'application/json') return '\uD83D\uDCCB';
+  if (mimeType === 'application/xml' || mimeType === 'text/xml') return '\uD83D\uDCCB';
+  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return '\uD83D\uDCDC';
+  if (mimeType.startsWith('application/zip') || mimeType.includes('compressed') || mimeType.includes('zip')) return '\uD83D\uDDDC\uFE0F';
+  if (mimeType.startsWith('video/')) return '\uD83C\uDFAC';
+  return '\uD83D\uDCCE';
+}
+
+// eslint-disable-next-line no-unused-vars
+function getFileTypeLabel(mimeType) {
+  if (!mimeType) return 'Arquivo';
+  if (mimeType === 'text/plain') return 'Texto';
+  if (mimeType === 'text/csv') return 'CSV';
+  if (mimeType === 'text/html') return 'HTML';
+  if (mimeType === 'application/pdf') return 'PDF';
+  if (mimeType === 'application/json') return 'JSON';
+  if (mimeType === 'application/xml' || mimeType === 'text/xml') return 'XML';
+  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return 'JavaScript';
+  var parts = mimeType.split('/');
+  return parts[1] ? parts[1].toUpperCase().substring(0, 10) : 'Arquivo';
+}
+
+/**
+ * Renders a message with optional media attachments (images, audio, files).
+ * Falls back to renderText() when no media is present.
+ */
+// eslint-disable-next-line no-unused-vars
+function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
+  var html = '';
+  var hasImages = imageUrls && imageUrls.length > 0;
+  var hasFileInfos = fileInfos && fileInfos.length > 0;
+
+  var displayText = text;
+  if (hasFileInfos && displayText) {
+    displayText = displayText.replace(/\n\n\[Conte\u00FAdo do arquivo "[^"]*"\]:[\s\S]*/g, '').trim();
+  }
+
+  // Image attachments
+  if (hasImages) {
+    for (var ii = 0; ii < imageUrls.length; ii++) {
+      html += '<div class="image-message">';
+      html += '<img src="' + imageUrls[ii] + '" alt="Imagem" loading="lazy" onclick="openImageFullscreen(this.src)">';
+      html += '</div>';
+    }
+  }
+
+  // Audio attachment
+  if (audioUrl) {
+    html += '<div class="audio-message">';
+    html += '<audio controls preload="metadata" src="' + audioUrl + '"></audio>';
+    if (displayText) {
+      var isPlaceholder = /^O usuario enviou um audio/i.test(displayText) || displayText === '[audio]';
+      if (!isPlaceholder) {
+        var cleanText = displayText.replace(/^aqui\s+est[a\u00E1]\s+a\s+transcri[c\u00E7][a\u00E3]o.*?:\s*/i, '');
+        cleanText = cleanText.replace(/^["\u201C\u201D](.+)["\u201C\u201D]$/, '$1');
+        if (cleanText.trim()) {
+          html += '<blockquote class="audio-transcription">' + renderText(cleanText) + '</blockquote>';
+        }
+      }
+    }
+    html += '</div>';
+  }
+
+  // File attachment cards
+  if (hasFileInfos) {
+    for (var fi = 0; fi < fileInfos.length; fi++) {
+      var fi_info = fileInfos[fi];
+      var fi_icon = getFileIcon(fi_info.mimeType);
+      var fi_label = getFileTypeLabel(fi_info.mimeType);
+      var fi_name = fi_info.name || 'arquivo';
+      if (fi_info.url) {
+        html += '<a class="file-attachment" href="' + fi_info.url + '" download="' + fi_name.replace(/"/g, '&quot;') + '" target="_blank">';
+      } else {
+        html += '<div class="file-attachment">';
+      }
+      html += '<span class="file-icon">' + fi_icon + '</span>';
+      html += '<div class="file-details">';
+      html += '<span class="file-name" title="' + fi_name.replace(/"/g, '&quot;') + '">' + escapeHtml(fi_name) + '</span>';
+      html += '<span class="file-type">' + escapeHtml(fi_label) + '</span>';
+      html += '</div>';
+      html += fi_info.url ? '</a>' : '</div>';
+    }
+  }
+
+  // If we had media, only show text if it's not a placeholder
+  if (hasImages || audioUrl) {
+    if (displayText && audioUrl && !hasImages) return html;
+    if (displayText && hasImages) {
+      var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(displayText);
+      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(displayText);
+      if (!isImgPlaceholder && !isAudioPlaceholder) {
+        html += renderText(displayText);
+      }
+    }
+    return html || renderText(displayText);
+  }
+
+  if (hasFileInfos) {
+    if (displayText) html += renderText(displayText);
+    return html || '';
+  }
+
+  return renderText(text);
+}
+
+// eslint-disable-next-line no-unused-vars
+function openImageFullscreen(src) {
+  var overlay = document.getElementById('image-overlay');
+  if (overlay) {
+    document.getElementById('fullscreen-img').src = src;
+    overlay.classList.add('visible');
+  }
+}
+
+// eslint-disable-next-line no-unused-vars
+function closeImageFullscreen() {
+  var overlay = document.getElementById('image-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}

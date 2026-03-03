@@ -174,6 +174,22 @@ body {
   font-size: 13px;
 }
 
+/* Markdown rendering (headings, lists, hr, code-lang) */
+.message pre code { background: none; padding: 0; }
+.message h1, .message h2, .message h3 {
+  margin: 10px 0 4px; font-weight: 700; line-height: 1.3; white-space: normal;
+}
+.message h1 { font-size: 1.1em; }
+.message h2 { font-size: 1.0em; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 3px; }
+.message h3 { font-size: 0.95em; color: var(--text2); }
+.message hr { border: none; border-top: 1px solid rgba(255,255,255,0.12); margin: 10px 0; }
+.message ul, .message ol { margin: 4px 0; padding-left: 22px; white-space: normal; }
+.message li { margin: 2px 0; line-height: 1.5; }
+.message pre .code-lang {
+  display: block; font-size: 0.75em; color: #8b949e;
+  margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em;
+}
+
 /* Compose bar */
 .compose-bar {
   display: flex;
@@ -603,6 +619,7 @@ body {
 </div>
 
 <script src="/static/tool-blocks.js"></script>
+<script src="/static/render-text.js"></script>
 <script>
 // ==================== STATE ====================
 var token = location.pathname.replace(/^\/m\//, '');
@@ -661,143 +678,8 @@ function scrollToBottom(force) {
 })();
 
 // ==================== RENDERING ====================
-function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function renderText(text) {
-  var s = escapeHtml(text);
-  // Code blocks
-  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
-    return '<pre><code>' + code.trim() + '</code></pre>';
-  });
-  // Inline code
-  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Bold
-  s = s.replace(/\*([^*]+)\*/g, '<strong>$1</strong>');
-  // Italic
-  s = s.replace(/_([^_]+)_/g, '<em>$1</em>');
-  // Links
-  s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" style="color:#60a5fa">$1</a>');
-  // Newlines
-  s = s.replace(/\n/g, '<br>');
-  return s;
-}
-
-// ==================== MEDIA RENDERING ====================
-
-function getFileIcon(mimeType) {
-  if (!mimeType) return '📄';
-  if (mimeType.startsWith('text/')) return '📝';
-  if (mimeType === 'application/pdf') return '📕';
-  if (mimeType === 'application/json') return '📋';
-  if (mimeType === 'application/xml' || mimeType === 'text/xml') return '📋';
-  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return '📜';
-  if (mimeType.startsWith('application/zip') || mimeType.includes('compressed') || mimeType.includes('zip')) return '🗜️';
-  if (mimeType.startsWith('video/')) return '🎬';
-  return '📎';
-}
-
-function getFileTypeLabel(mimeType) {
-  if (!mimeType) return 'Arquivo';
-  if (mimeType === 'text/plain') return 'Texto';
-  if (mimeType === 'text/csv') return 'CSV';
-  if (mimeType === 'text/html') return 'HTML';
-  if (mimeType === 'application/pdf') return 'PDF';
-  if (mimeType === 'application/json') return 'JSON';
-  if (mimeType === 'application/xml' || mimeType === 'text/xml') return 'XML';
-  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return 'JavaScript';
-  var parts = mimeType.split('/');
-  return parts[1] ? parts[1].toUpperCase().substring(0, 10) : 'Arquivo';
-}
-
-function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
-  var html = '';
-  var hasImages = imageUrls && imageUrls.length > 0;
-  var hasFileInfos = fileInfos && fileInfos.length > 0;
-
-  var displayText = text;
-  if (hasFileInfos && displayText) {
-    displayText = displayText.replace(/\n\n\[Conteúdo do arquivo "[^"]*"\]:[\s\S]*/g, '').trim();
-  }
-
-  // Image attachments
-  if (hasImages) {
-    for (var ii = 0; ii < imageUrls.length; ii++) {
-      html += '<div class="image-message">';
-      html += '<img src="' + imageUrls[ii] + '" alt="Imagem" loading="lazy" onclick="openImageFullscreen(this.src)">';
-      html += '</div>';
-    }
-  }
-
-  // Audio attachment
-  if (audioUrl) {
-    html += '<div class="audio-message">';
-    html += '<audio controls preload="metadata" src="' + audioUrl + '"></audio>';
-    if (displayText) {
-      var isPlaceholder = /^O usuario enviou um audio/i.test(displayText) || displayText === '[audio]';
-      if (!isPlaceholder) {
-        var cleanText = displayText.replace(/^aqui\s+est[aá]\s+a\s+transcri[cç][aã]o.*?:\s*/i, '');
-        cleanText = cleanText.replace(/^[""](.+)[""]$/, '$1');
-        if (cleanText.trim()) {
-          html += '<blockquote class="audio-transcription">' + renderText(cleanText) + '</blockquote>';
-        }
-      }
-    }
-    html += '</div>';
-  }
-
-  // File attachment cards
-  if (hasFileInfos) {
-    for (var fi = 0; fi < fileInfos.length; fi++) {
-      var fi_info = fileInfos[fi];
-      var fi_icon = getFileIcon(fi_info.mimeType);
-      var fi_label = getFileTypeLabel(fi_info.mimeType);
-      var fi_name = fi_info.name || 'arquivo';
-      if (fi_info.url) {
-        html += '<a class="file-attachment" href="' + fi_info.url + '" download="' + fi_name.replace(/"/g, '&quot;') + '" target="_blank">';
-      } else {
-        html += '<div class="file-attachment">';
-      }
-      html += '<span class="file-icon">' + fi_icon + '</span>';
-      html += '<div class="file-details">';
-      html += '<span class="file-name" title="' + fi_name.replace(/"/g, '&quot;') + '">' + escapeHtml(fi_name) + '</span>';
-      html += '<span class="file-type">' + escapeHtml(fi_label) + '</span>';
-      html += '</div>';
-      html += fi_info.url ? '</a>' : '</div>';
-    }
-  }
-
-  // If we had media, only show text if it's not a placeholder
-  if (hasImages || audioUrl) {
-    if (displayText && audioUrl && !hasImages) return html;
-    if (displayText && hasImages) {
-      var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(displayText);
-      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(displayText);
-      if (!isImgPlaceholder && !isAudioPlaceholder) {
-        html += renderText(displayText);
-      }
-    }
-    return html || renderText(displayText);
-  }
-
-  if (hasFileInfos) {
-    if (displayText) html += renderText(displayText);
-    return html || '';
-  }
-
-  return renderText(text);
-}
-
-function openImageFullscreen(src) {
-  var overlay = document.getElementById('image-overlay');
-  document.getElementById('fullscreen-img').src = src;
-  overlay.classList.add('visible');
-}
-
-function closeImageFullscreen() {
-  document.getElementById('image-overlay').classList.remove('visible');
-}
+// escapeHtml(), renderText(), renderMessageContent(), getFileIcon(), getFileTypeLabel(),
+// openImageFullscreen(), closeImageFullscreen() are loaded from /static/render-text.js
 
 // formatToolLine() and makeToolUseBlock() are loaded from /static/tool-blocks.js
 

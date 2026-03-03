@@ -256,8 +256,12 @@ rick-ai/
 │   │   ├── web.ts                     # Web UI connector (WebSocket, settings, sessions, OAuth)
 │   │   ├── web-ui.html                # Web UI frontend (single HTML file)
 │   │   ├── main-session-viewer.html   # Public main-session viewer page (text + audio + files)
-│   │   ├── session-viewer.html        # Public sub-agent session viewer page
-│   │   └── sessions-list.html        # Public sessions dashboard (per-user)
+│   │   ├── session-viewer.html        # Public sub-agent session viewer page (text + audio + files)
+│   │   ├── sessions-list.html        # Public sessions dashboard (per-user)
+│   │   └── static/                    # Shared assets served at /static/
+│   │       ├── render-text.js         # Markdown→HTML, media rendering, image fullscreen
+│   │       ├── tool-blocks.js         # Terminal-style tool-use blocks
+│   │       └── tool-blocks.css        # Tool-use block styles
 │   ├── llm/
 │   │   ├── llm-service.ts             # Provider abstraction + model switching
 │   │   ├── types.ts                   # Model registry + shared types
@@ -293,6 +297,7 @@ rick-ai/
 │   │   ├── Dockerfile                 # Chromium + Playwright + Node.js image
 │   │   └── agent.mjs                  # Autonomous agent script (LLM cascade + tools)
 │   ├── subagent-edit.Dockerfile       # Multi-provider edit image (Claude→GPT→Gemini, auto-built)
+│   ├── rick-api.mjs                   # Shared: Rick API client, tool declarations, tool handler, timeout constants
 │   └── edit-agent.mjs                 # Entry point: routes to Claude CLI / OpenAI / Gemini API
 ├── scripts/
 │   └── deploy.sh                      # Safe deploy pipeline (backup → build → smoke → swap → watchdog)

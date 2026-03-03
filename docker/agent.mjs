@@ -21,6 +21,11 @@
 import { createInterface } from "readline";
 import { WORKSPACE, listWorkspace, executeTool, toolStatusLabel } from "./tools.mjs";
 import { coreToolDeclarations } from "./tool-declarations.mjs";
+import {
+  rickApiGet, rickApiPost, agentToolHandler as sharedAgentToolHandler,
+  buildAgentToolDeclarations,
+  LLM_TIMEOUT_MS, MAX_TIMEOUT_RETRIES,
+} from "./rick-api.mjs";
 
 // ── NDJSON helpers ──────────────────────────────────────────────────────────
 
@@ -113,62 +118,9 @@ function getProviderList() {
 // Initial provider list (may expand after fetching fresh tokens)
 const initialProviderList = getProviderList();
 
-// ── Rick API client (for querying memories/credentials) ─────────────────────
-
-// Note: RICK_SESSION_TOKEN is read dynamically from process.env because it can
-// be updated at runtime via the update_token message (for recovered sessions).
-const RICK_API_URL = process.env.RICK_API_URL || "";
-
-function getRickSessionToken() {
-  return process.env.RICK_SESSION_TOKEN || "";
-}
-
-async function rickApiGet(path, { silent = false } = {}) {
-  const token = getRickSessionToken();
-  if (!RICK_API_URL || !token) {
-    if (!silent) emitStatus("rick_memory/rick_search indisponível: RICK_API_URL ou RICK_SESSION_TOKEN não configurado");
-    return null;
-  }
-  try {
-    const res = await fetch(`${RICK_API_URL}${path}`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) {
-      if (!silent) emitStatus(`rick API erro: ${res.status} ${res.statusText}`);
-      return null;
-    }
-    return await res.json();
-  } catch (err) {
-    if (!silent) emitStatus(`rick API falhou: ${err.message || "timeout/rede"}`);
-    return null;
-  }
-}
-
-async function rickApiPost(path, body) {
-  const token = getRickSessionToken();
-  if (!RICK_API_URL || !token) {
-    return { error: "RICK_API_URL ou RICK_SESSION_TOKEN não configurado" };
-  }
-  try {
-    const res = await fetch(`${RICK_API_URL}${path}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5000),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return { error: data.error || `HTTP ${res.status}` };
-    }
-    return data;
-  } catch (err) {
-    return { error: err.message || "timeout/rede" };
-  }
-}
+// ── Rick API helpers (imported from rick-api.mjs) ───────────────────────────
+// rickApiGet, rickApiPost, agentToolHandler, buildAgentToolDeclarations,
+// LLM_TIMEOUT_MS, MAX_TIMEOUT_RETRIES are all imported at the top.
 
 /**
  * Refresh LLM tokens from the host API.
@@ -176,7 +128,7 @@ async function rickApiPost(path, body) {
  * Updates cachedClaudeToken / cachedOpenAIToken so has*() functions return true.
  */
 async function refreshLLMTokens() {
-  if (!RICK_API_URL || !getRickSessionToken()) return;
+  if (!process.env.RICK_API_URL || !process.env.RICK_SESSION_TOKEN) return;
 
   // Only fetch if we don't have static keys (OAuth is the only dynamic source)
   const needClaude = !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_ACCESS_TOKEN;
@@ -201,98 +153,18 @@ async function refreshLLMTokens() {
   }
 }
 
-// ── Agent-specific tool handler (web_fetch, rick_memory, rick_search) ────────
-
-async function agentToolHandler(name, input) {
-  switch (name) {
-    case "web_fetch": {
-      try {
-        const res = await fetch(input.url, { signal: AbortSignal.timeout(15000) });
-        const text = await res.text();
-        return text.length > 20000 ? text.substring(0, 20000) + "\n...(truncado)" : text;
-      } catch (e) {
-        return `Erro ao acessar ${input.url}: ${e.message}`;
-      }
-    }
-    case "rick_memory": {
-      const data = await rickApiGet(`/api/agent/memories${input.category ? `?category=${encodeURIComponent(input.category)}` : ""}`);
-      if (!data) return "Não foi possível acessar as memórias do assistente.";
-      return JSON.stringify(data.memories || [], null, 2);
-    }
-    case "rick_search": {
-      const data = await rickApiGet(`/api/agent/search?q=${encodeURIComponent(input.query)}&limit=${input.limit || 5}`);
-      if (!data) return "Busca semântica não disponível no assistente.";
-      return JSON.stringify(data.results || [], null, 2);
-    }
-    case "rick_save_memory": {
-      const data = await rickApiPost("/api/agent/memory", {
-        key: input.key,
-        value: input.value,
-        category: input.category || "geral",
-      });
-      if (data.error) return `Erro ao salvar memória: ${data.error}`;
-      return `Memória salva: [${data.category}] ${data.key}`;
-    }
-    default:
-      return undefined; // fall through to "unknown tool"
-  }
-}
+// ── Agent-specific tool handler (delegates to shared rick-api.mjs) ───────────
 
 /** Wrapper that routes to shared tools + agent-specific tools */
 async function runTool(name, input) {
-  return executeTool(name, input, agentToolHandler);
+  return executeTool(name, input, (n, i) => sharedAgentToolHandler(n, i, { emitStatus }));
 }
 
 // ── Agent name (used in tool descriptions and system prompt) ────────────────
 const agentName = process.env.AGENT_NAME || "Rick";
 
-// ── Tool declarations (core + agent-specific) ───────────────────────────────
-
-const toolDeclarations = [
-  ...coreToolDeclarations,
-  {
-    name: "web_fetch",
-    description: "Faz uma requisição HTTP GET e retorna o conteúdo da página",
-    parameters: {
-      type: "object",
-      properties: { url: { type: "string", description: "URL para acessar" } },
-      required: ["url"],
-    },
-  },
-  {
-    name: "rick_memory",
-    description: `Lista memórias salvas pelo ${agentName} (credenciais, links, preferências, informações do usuário). Sem categoria retorna TODAS as memórias. USE ESTA FERRAMENTA PRIMEIRO quando precisar de informações que o usuário já tenha ensinado.`,
-    parameters: {
-      type: "object",
-      properties: { category: { type: "string", description: "Categoria opcional para filtrar. Categorias comuns: credenciais, senhas, geral, pessoal, notas, preferências. Omita para listar TODAS." } },
-    },
-  },
-  {
-    name: "rick_search",
-    description: `Busca semântica nas conversas e memórias do ${agentName}. Use quando precisar encontrar algo específico por significado (ex: 'repositório zydon', 'email do cliente').`,
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Texto para buscar por significado" },
-        limit: { type: "number", description: "Número máximo de resultados (padrão: 5)" },
-      },
-      required: ["query"],
-    },
-  },
-  {
-    name: "rick_save_memory",
-    description: `Salva uma informação na memória persistente do ${agentName}. Use quando o usuário ensinar algo útil (URLs de repositórios, preferências, nomes de projetos, padrões, etc.) para que outros agentes futuros possam consultar. NÃO use para credenciais/senhas — essas são protegidas.`,
-    parameters: {
-      type: "object",
-      properties: {
-        key: { type: "string", description: "Identificador curto da memória (ex: 'github_org_zydon', 'preferencia_linguagem')" },
-        value: { type: "string", description: "Valor a salvar (ex: 'https://github.com/zydontecnologia', 'TypeScript com NestJS')" },
-        category: { type: "string", description: "Categoria: geral, notas, preferencias, projetos, links. Padrão: geral. NÃO use: credenciais, tokens, senhas." },
-      },
-      required: ["key", "value"],
-    },
-  },
-];
+// ── Tool declarations (core + agent-specific from rick-api.mjs) ─────────────
+const toolDeclarations = [...coreToolDeclarations, ...buildAgentToolDeclarations(agentName)];
 
 const toolNames = toolDeclarations.map((t) => t.name);
 
@@ -324,11 +196,7 @@ FERRAMENTAS DISPONÍVEIS: ${toolNames.join(", ")}`;
 
 const FALLBACK_RESULT = "Tarefa concluída.";
 
-/** Timeout for LLM API calls (ms). 5 minutes — complex tool-use turns can be slow. */
-const LLM_TIMEOUT_MS = 300_000;
-
-/** Maximum retries per provider on timeout before falling through to the next one. */
-const MAX_TIMEOUT_RETRIES = 1;
+// LLM_TIMEOUT_MS and MAX_TIMEOUT_RETRIES are imported from rick-api.mjs
 
 // ── Gemini adapter ──────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { LLMProvider, LLMMessage, LLMResponse } from "../types.js";
+import { LLMProvider, LLMMessage, LLMResponse, MAIN_LLM_TIMEOUT_MS } from "../types.js";
 import { config } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 
@@ -97,7 +97,7 @@ export class AnthropicProvider implements LLMProvider {
         max_tokens: 4096,
         system: systemPrompt || undefined,
         messages: anthropicMessages,
-      }, { timeout: 60_000, signal }); // 60s timeout + abort signal
+      }, { timeout: MAIN_LLM_TIMEOUT_MS, signal });
 
       const text =
         response.content[0].type === "text" ? response.content[0].text : "";

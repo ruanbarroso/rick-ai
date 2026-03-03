@@ -3,12 +3,9 @@ import {
   Content,
   Part,
 } from "@google/generative-ai";
-import { LLMProvider, LLMMessage, LLMResponse } from "../types.js";
+import { LLMProvider, LLMMessage, LLMResponse, MAIN_LLM_TIMEOUT_MS } from "../types.js";
 import { config } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
-
-/** Default timeout for Gemini API calls (60 seconds) */
-const LLM_TIMEOUT_MS = 60_000;
 
 export class GeminiProvider implements LLMProvider {
   name = "gemini";
@@ -71,7 +68,7 @@ export class GeminiProvider implements LLMProvider {
     // Apply timeout and abort signal to prevent indefinite hangs on API calls
     const resultPromise = chat.sendMessage(lastParts);
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Gemini API timeout after ${LLM_TIMEOUT_MS / 1000}s`)), LLM_TIMEOUT_MS)
+      setTimeout(() => reject(new Error(`Gemini API timeout after ${MAIN_LLM_TIMEOUT_MS / 1000}s`)), MAIN_LLM_TIMEOUT_MS)
     );
     const abortPromise = signal
       ? new Promise<never>((_, reject) => {

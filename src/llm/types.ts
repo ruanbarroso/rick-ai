@@ -1,3 +1,6 @@
+/** Default timeout for main-session LLM API calls (60 seconds). */
+export const MAIN_LLM_TIMEOUT_MS = 60_000;
+
 export interface MediaAttachment {
   data: Buffer;
   mimeType: string;

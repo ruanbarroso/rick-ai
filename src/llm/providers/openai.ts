@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { LLMProvider, LLMMessage, LLMResponse } from "../types.js";
+import { LLMProvider, LLMMessage, LLMResponse, MAIN_LLM_TIMEOUT_MS } from "../types.js";
 import { config } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 
@@ -94,7 +94,7 @@ export class OpenAIProvider implements LLMProvider {
       model,
       messages: openaiMessages,
       max_tokens: 4096,
-    }, { timeout: 60_000, signal }); // 60s timeout + abort signal
+    }, { timeout: MAIN_LLM_TIMEOUT_MS, signal });
 
     const text = response.choices[0]?.message?.content || "";
     const tokensUsed = response.usage?.total_tokens;
@@ -163,8 +163,7 @@ export class OpenAIProvider implements LLMProvider {
       headers["ChatGPT-Account-Id"] = this.oauthAccountId;
     }
 
-    // 60s timeout for Codex API, combined with external abort signal
-    const timeoutSignal = AbortSignal.timeout(60_000);
+    const timeoutSignal = AbortSignal.timeout(MAIN_LLM_TIMEOUT_MS);
     const combinedSignal = signal
       ? AbortSignal.any([timeoutSignal, signal])
       : timeoutSignal;
