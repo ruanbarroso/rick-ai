@@ -17,14 +17,14 @@ echo "Installing ${SERVICE_NAME} systemd service..."
 echo "  Project dir: ${PROJECT_DIR}"
 
 # Substitute working directory and install
-sed "s|__WORKING_DIR__|${PROJECT_DIR}|g" "$SERVICE_TEMPLATE" \
+WORKING_DIR="$PROJECT_DIR" envsubst '$WORKING_DIR' < "$SERVICE_TEMPLATE" \
   | sudo tee "${SYSTEMD_DIR}/${SERVICE_NAME}.service" > /dev/null
 
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME"
 
 # Stop docker compose if already running (hand off to systemd)
-if docker compose -f "$COMPOSE_FILE" ps --quiet 2>/dev/null | grep -q .; then
+if [[ -f "$COMPOSE_FILE" ]] && docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | grep -q .; then
   echo "Stopping existing docker compose stack (systemd will manage it now)..."
   docker compose -f "$COMPOSE_FILE" down
 fi
