@@ -152,7 +152,8 @@ export class Agent {
 
     // Abort any in-flight request IMMEDIATELY — don't wait for the queue.
     // This ensures the LLM request is cancelled as soon as the new message arrives.
-    this.interruptUser(userId);
+    const wasInterrupted = this.interruptUser(userId);
+    logger.info({ userId, wasInterrupted, text: msg.text?.substring(0, 30) }, "handleMessage: new message arrived");
 
     // Create AbortController NOW, before entering the queue.
     // This way, if another message arrives while we're waiting in the queue,
@@ -207,9 +208,11 @@ export class Agent {
     // For connectors (WhatsApp), userRole comes from resolveUser() and can be null (pending).
     const userRole: UserRole = msg.userRole !== undefined ? msg.userRole : "admin";
 
+    logger.info({ userPhone, generation, aborted: signal.aborted, text: rawText?.substring(0, 30) }, "handleMessageInternal: starting");
+
     // Check if already aborted before starting (another message arrived while we were in queue)
     if (signal.aborted) {
-      logger.info({ userPhone }, "Request already aborted before processing — skipping");
+      logger.info({ userPhone, generation }, "Request already aborted before processing — skipping");
       return "";
     }
 
