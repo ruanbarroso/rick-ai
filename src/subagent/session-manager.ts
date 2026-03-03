@@ -651,6 +651,15 @@ export class SessionManager {
     const newGen = (this.sessionGenerations.get(sessionId) ?? 0) + 1;
     this.sessionGenerations.set(sessionId, newGen);
 
+    // Update session state immediately so UI shows correct state on reconnect
+    session.state = "waiting_user";
+    session.updatedAt = Date.now();
+    
+    // Notify session viewers of state change immediately
+    if (this.onSessionMessage) {
+      this.onSessionMessage(sessionId, "system", JSON.stringify({ state: "waiting_user" }), "system");
+    }
+
     // Send interrupt message with the new generation to the agent process
     this.sendToAgentProcess(sessionId, { type: "interrupt", generation: newGen });
     
