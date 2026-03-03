@@ -176,7 +176,7 @@ async function rickApiPost(path, body) {
  * Updates cachedClaudeToken / cachedOpenAIToken so has*() functions return true.
  */
 async function refreshLLMTokens() {
-  if (!RICK_API_URL || !RICK_SESSION_TOKEN) return;
+  if (!RICK_API_URL || !getRickSessionToken()) return;
 
   // Only fetch if we don't have static keys (OAuth is the only dynamic source)
   const needClaude = !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_ACCESS_TOKEN;
