@@ -257,6 +257,121 @@ body {
 }
 
 .empty-state.hidden { display: none; }
+
+/* Media messages */
+.message:has(.audio-message),
+.message:has(.image-message),
+.message:has(.file-attachment) {
+  white-space: normal;
+  min-width: 260px;
+}
+
+.image-message {
+  margin-bottom: 4px;
+}
+
+.image-message img {
+  display: block;
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 8px;
+  cursor: pointer;
+  object-fit: contain;
+}
+
+.image-fullscreen-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.9);
+  z-index: 9999;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+}
+
+.image-fullscreen-overlay.visible {
+  display: flex;
+}
+
+.image-fullscreen-overlay img {
+  max-width: 95vw;
+  max-height: 95vh;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.audio-message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.audio-message audio {
+  display: block;
+  width: 100%;
+  min-width: 240px;
+  height: 40px;
+  border-radius: 8px;
+}
+
+.audio-transcription {
+  margin: 4px 0 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--text2);
+  color: var(--text2);
+  font-size: 0.85em;
+  font-style: italic;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.file-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-width: 280px;
+  margin-bottom: 4px;
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.15s;
+}
+
+.file-attachment:hover {
+  background: var(--border);
+}
+
+.file-attachment .file-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.file-attachment .file-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.file-attachment .file-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-attachment .file-type {
+  font-size: 0.72rem;
+  color: var(--text2);
+  margin-top: 2px;
+}
 /* Tool-use terminal block — loaded from /static/tool-blocks.css */
 </style>
 <link rel="stylesheet" href="/static/tool-blocks.css">
@@ -283,6 +398,10 @@ body {
   <div class="typing-indicator" id="typing-indicator">
     <span></span><span></span><span></span>
   </div>
+</div>
+
+<div class="image-fullscreen-overlay" id="image-overlay" onclick="closeImageFullscreen()">
+  <img id="fullscreen-img" src="" alt="">
 </div>
 
 <div class="compose-bar">
@@ -332,6 +451,121 @@ function renderText(text) {
   return s;
 }
 
+// ==================== MEDIA RENDERING ====================
+
+function getFileIcon(mimeType) {
+  if (!mimeType) return '📄';
+  if (mimeType.startsWith('text/')) return '📝';
+  if (mimeType === 'application/pdf') return '📕';
+  if (mimeType === 'application/json') return '📋';
+  if (mimeType === 'application/xml' || mimeType === 'text/xml') return '📋';
+  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return '📜';
+  if (mimeType.startsWith('application/zip') || mimeType.includes('compressed') || mimeType.includes('zip')) return '🗜️';
+  if (mimeType.startsWith('video/')) return '🎬';
+  return '📎';
+}
+
+function getFileTypeLabel(mimeType) {
+  if (!mimeType) return 'Arquivo';
+  if (mimeType === 'text/plain') return 'Texto';
+  if (mimeType === 'text/csv') return 'CSV';
+  if (mimeType === 'text/html') return 'HTML';
+  if (mimeType === 'application/pdf') return 'PDF';
+  if (mimeType === 'application/json') return 'JSON';
+  if (mimeType === 'application/xml' || mimeType === 'text/xml') return 'XML';
+  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return 'JavaScript';
+  var parts = mimeType.split('/');
+  return parts[1] ? parts[1].toUpperCase().substring(0, 10) : 'Arquivo';
+}
+
+function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
+  var html = '';
+  var hasImages = imageUrls && imageUrls.length > 0;
+  var hasFileInfos = fileInfos && fileInfos.length > 0;
+
+  var displayText = text;
+  if (hasFileInfos && displayText) {
+    displayText = displayText.replace(/\n\n\[Conteúdo do arquivo "[^"]*"\]:[\s\S]*/g, '').trim();
+  }
+
+  // Image attachments
+  if (hasImages) {
+    for (var ii = 0; ii < imageUrls.length; ii++) {
+      html += '<div class="image-message">';
+      html += '<img src="' + imageUrls[ii] + '" alt="Imagem" loading="lazy" onclick="openImageFullscreen(this.src)">';
+      html += '</div>';
+    }
+  }
+
+  // Audio attachment
+  if (audioUrl) {
+    html += '<div class="audio-message">';
+    html += '<audio controls preload="metadata" src="' + audioUrl + '"></audio>';
+    if (displayText) {
+      var isPlaceholder = /^O usuario enviou um audio/i.test(displayText) || displayText === '[audio]';
+      if (!isPlaceholder) {
+        var cleanText = displayText.replace(/^aqui\s+est[aá]\s+a\s+transcri[cç][aã]o.*?:\s*/i, '');
+        cleanText = cleanText.replace(/^[""](.+)[""]$/, '$1');
+        if (cleanText.trim()) {
+          html += '<blockquote class="audio-transcription">' + renderText(cleanText) + '</blockquote>';
+        }
+      }
+    }
+    html += '</div>';
+  }
+
+  // File attachment cards
+  if (hasFileInfos) {
+    for (var fi = 0; fi < fileInfos.length; fi++) {
+      var fi_info = fileInfos[fi];
+      var fi_icon = getFileIcon(fi_info.mimeType);
+      var fi_label = getFileTypeLabel(fi_info.mimeType);
+      var fi_name = fi_info.name || 'arquivo';
+      if (fi_info.url) {
+        html += '<a class="file-attachment" href="' + fi_info.url + '" download="' + fi_name.replace(/"/g, '&quot;') + '" target="_blank">';
+      } else {
+        html += '<div class="file-attachment">';
+      }
+      html += '<span class="file-icon">' + fi_icon + '</span>';
+      html += '<div class="file-details">';
+      html += '<span class="file-name" title="' + fi_name.replace(/"/g, '&quot;') + '">' + escapeHtml(fi_name) + '</span>';
+      html += '<span class="file-type">' + escapeHtml(fi_label) + '</span>';
+      html += '</div>';
+      html += fi_info.url ? '</a>' : '</div>';
+    }
+  }
+
+  // If we had media, only show text if it's not a placeholder
+  if (hasImages || audioUrl) {
+    if (displayText && audioUrl && !hasImages) return html;
+    if (displayText && hasImages) {
+      var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(displayText);
+      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(displayText);
+      if (!isImgPlaceholder && !isAudioPlaceholder) {
+        html += renderText(displayText);
+      }
+    }
+    return html || renderText(displayText);
+  }
+
+  if (hasFileInfos) {
+    if (displayText) html += renderText(displayText);
+    return html || '';
+  }
+
+  return renderText(text);
+}
+
+function openImageFullscreen(src) {
+  var overlay = document.getElementById('image-overlay');
+  document.getElementById('fullscreen-img').src = src;
+  overlay.classList.add('visible');
+}
+
+function closeImageFullscreen() {
+  document.getElementById('image-overlay').classList.remove('visible');
+}
+
 // formatToolLine() and makeToolUseBlock() are loaded from /static/tool-blocks.js
 
 function appendToolLine(text, timeStr) {
@@ -358,7 +592,7 @@ function appendToolLine(text, timeStr) {
 
 // ==================== MESSAGE RENDERING ====================
 
-function appendMessage(text, role, messageType) {
+function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) {
   if (role === 'system' || messageType === 'system') return;
 
   if (messageType === 'tool_use') {
@@ -376,7 +610,7 @@ function appendMessage(text, role, messageType) {
   var div = document.createElement('div');
   var cssClass = messageType === 'error' ? 'error' : (role === 'user' ? 'user' : 'agent');
   div.className = 'message ' + cssClass;
-  div.innerHTML = renderText(text);
+  div.innerHTML = renderMessageContent(text, audioUrl, imageUrls, fileInfos);
 
   var time = document.createElement('div');
   time.className = 'time';
@@ -387,7 +621,25 @@ function appendMessage(text, role, messageType) {
   container.scrollTop = container.scrollHeight;
 }
 
-function appendHistoryMessage(text, role, timestamp, messageType, connectorName) {
+function appendHistoryMessage(msg) {
+  var text = msg.content;
+  var role = msg.role;
+  var timestamp = msg.created_at;
+  var messageType = msg.message_type;
+  var connectorName = msg.connector_name;
+  var audioUrl = msg.audio_url || null;
+  var imageUrls = msg.image_urls || null;
+  var fileInfos = msg.file_infos || null;
+
+  // Parse image_urls if it's a JSON string
+  if (imageUrls && typeof imageUrls === 'string') {
+    try { imageUrls = JSON.parse(imageUrls); } catch(e) { imageUrls = [imageUrls]; }
+  }
+  // Parse file_infos if it's a JSON string
+  if (fileInfos && typeof fileInfos === 'string') {
+    try { fileInfos = JSON.parse(fileInfos); } catch(e) { fileInfos = null; }
+  }
+
   if (role === 'system' || messageType === 'system') return;
 
   var timeStr = (timestamp ? new Date(timestamp) : new Date())
@@ -407,7 +659,7 @@ function appendHistoryMessage(text, role, timestamp, messageType, connectorName)
   var div = document.createElement('div');
   var cssClass = messageType === 'error' ? 'error' : (role === 'user' ? 'user' : 'agent');
   div.className = 'message ' + cssClass;
-  div.innerHTML = renderText(text);
+  div.innerHTML = renderMessageContent(text, audioUrl, imageUrls, fileInfos);
 
   var time = document.createElement('div');
   time.className = 'time';
@@ -474,10 +726,7 @@ function connect() {
 
         var msgs = msg.messages || [];
         for (var i = 0; i < msgs.length; i++) {
-          appendHistoryMessage(
-            msgs[i].content, msgs[i].role, msgs[i].created_at,
-            msgs[i].message_type, msgs[i].connector_name
-          );
+          appendHistoryMessage(msgs[i]);
         }
         container.scrollTop = container.scrollHeight;
         break;
