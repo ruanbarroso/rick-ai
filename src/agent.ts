@@ -522,7 +522,13 @@ export class Agent {
       }
     }
 
-    // Resolve credentials from memory for the hinted services
+    // Resolve credentials from memory for the hinted services.
+    // Also check config-store env vars (e.g. GITHUB_TOKEN set via Web UI settings)
+    // so services configured through settings aren't flagged as "missing".
+    const configStoreHints: Record<string, string> = {
+      github: "GITHUB_TOKEN",
+    };
+
     const resolved: Record<string, string> = { ...preResolvedCredentials };
     const missing: string[] = [];
 
@@ -533,7 +539,14 @@ export class Agent {
         resolved[hint] = found;
         logger.info({ hint, found: found.substring(0, 20) + "..." }, "Credential found in memory");
       } else {
-        missing.push(hint);
+        // Check config store env vars (e.g. GitHub token from Web UI settings)
+        const envKey = configStoreHints[hint.toLowerCase()];
+        if (envKey && process.env[envKey]) {
+          resolved[hint] = `[configurado via settings]`;
+          logger.info({ hint, envKey }, "Credential found in config store");
+        } else {
+          missing.push(hint);
+        }
       }
     }
 
