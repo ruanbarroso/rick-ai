@@ -489,11 +489,12 @@ export class Agent {
       if (currentState && currentState.generation === generation) {
         this.userAbortControllers.delete(userPhone);
       }
-      // Always turn off typing indicator when processing ends (success, error, or abort).
-      // The WebConnector will also send typing:false after broadcasting the response,
-      // but we need this here to handle aborted requests that return early.
-      await this.connectorManager.setTyping(connectorName, userPhone, false);
-      if (this.mainTypingCallback) try { this.mainTypingCallback(user.id, false); } catch {}
+      // Only turn off typing indicator if this is the latest generation.
+      // Otherwise, a newer message is still processing and should keep the indicator on.
+      if (!this.isSuperseded(userPhone, generation)) {
+        await this.connectorManager.setTyping(connectorName, userPhone, false);
+        if (this.mainTypingCallback) try { this.mainTypingCallback(user.id, false); } catch {}
+      }
     }
   }
 
