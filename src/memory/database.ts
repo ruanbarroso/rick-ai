@@ -220,8 +220,14 @@ export function getPgPool(): Pool | null {
  * Adapt a PostgreSQL query to SQLite syntax and execute it.
  */
 function sqliteQuery(text: string, params?: any[]): QueryResult {
-  let sql = adaptSqlForSqlite(text);
-  const adaptedParams = adaptParamsForSqlite(params);
+  const { sql: adaptedSql, paramOrder } = adaptSqlAndParams(text);
+  let sql = adaptedSql;
+  // Expand params: PostgreSQL $N can be referenced multiple times,
+  // but SQLite ? is positional — we must duplicate params accordingly.
+  const expandedParams = paramOrder.length > 0 && params
+    ? paramOrder.map((idx) => params[idx])
+    : params;
+  const adaptedParams = adaptParamsForSqlite(expandedParams);
 
   // Determine if this is a read or write query
   const trimmed = sql.trimStart().toUpperCase();
@@ -267,31 +273,42 @@ function sqliteQuery(text: string, params?: any[]): QueryResult {
 /**
  * Adapt PostgreSQL SQL to SQLite-compatible SQL.
  */
-function adaptSqlForSqlite(sql: string): string {
+/**
+ * Extract $N → ? mapping and adapt SQL for SQLite in one pass.
+ * PostgreSQL allows $1 to appear multiple times (same param reused),
+ * but SQLite anonymous ? is strictly positional — each ? needs its own value.
+ * Returns the adapted SQL and the 0-based param index for each ? placeholder.
+ */
+function adaptSqlAndParams(sql: string): { sql: string; paramOrder: number[] } {
+  const paramOrder: number[] = [];
+  const adapted = adaptSqlForSqlite(sql, paramOrder);
+  return { sql: adapted, paramOrder };
+}
+
+function adaptSqlForSqlite(sql: string, paramOrder?: number[]): string {
   let adapted = sql;
 
   // Replace $N placeholders with ? (anonymous positional), but ONLY outside
   // single-quoted string literals.  The alternation matches a complete
   // single-quoted SQL string first (returned unchanged) so that occurrences of
   // $N inside literals such as DEFAULT '$1_prefix' or CHECK (col LIKE '$1%')
-  // are NOT converted into ? parameter slots.  If they were converted, SQLite
-  // would see extra unquoted '?' placeholders (sqlite3_bind_parameter_count > 0)
-  // while better-sqlite3 has no argument to bind, triggering errors.
+  // are NOT converted into ? parameter slots.
   //
-  // We use anonymous '?' instead of numbered '?N' because better-sqlite3
-  // expects numbered placeholders to be bound by object ({1: val, 2: val}),
-  // whereas all callers pass parameters via positional spread (...params).
-  // Anonymous '?' works correctly with positional spread binding.
-  //
-  // This is safe as long as $1, $2, ... appear in sequential order in every
-  // SQL statement — which is the case throughout this codebase.
+  // PostgreSQL $N is 1-based and can be referenced multiple times (e.g.
+  // WHERE col1 ILIKE $1 OR col2 ILIKE $1). Each occurrence becomes a separate
+  // ? in SQLite, so we record the 0-based param index in paramOrder[] so the
+  // caller can expand the params array accordingly.
   //
   // SQL standard single-quote escaping: '' (two consecutive single-quotes)
   // represents a literal single-quote inside a string — handled by |'' in the
   // character class so the regex does not exit the literal prematurely.
   adapted = adapted.replace(/'(?:[^']|'')*'|\$(\d+)/g, (match, pN) => {
     // pN is defined only when the \$(\d+) branch matched (outside a string).
-    return pN !== undefined ? "?" : match;
+    if (pN !== undefined) {
+      if (paramOrder) paramOrder.push(parseInt(pN, 10) - 1); // $1 → index 0
+      return "?";
+    }
+    return match;
   });
 
   // SERIAL → INTEGER PRIMARY KEY AUTOINCREMENT
