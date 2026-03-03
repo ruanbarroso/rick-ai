@@ -290,12 +290,14 @@ export class SessionManager {
         let userId = "owner";
         let numericUserId: number | null = null;
         let variantName: string | undefined;
+        let taskDescription: string | undefined;
         try {
           const dbRow = await query(
-            `SELECT connector_name, user_external_id, user_id, variant_name FROM sub_agent_sessions WHERE id = $1`,
+            `SELECT task, connector_name, user_external_id, user_id, variant_name FROM sub_agent_sessions WHERE id = $1`,
             [id]
           );
           if (dbRow.rows.length > 0) {
+            taskDescription = dbRow.rows[0].task || undefined;
             connectorName = dbRow.rows[0].connector_name || "web";
             userId = dbRow.rows[0].user_external_id || "owner";
             numericUserId = dbRow.rows[0].user_id ?? null;
@@ -315,7 +317,7 @@ export class SessionManager {
           containerId: containerId.trim(),
           containerName,
           state: "waiting_user",
-          taskDescription: "(sessao recuperada apos reinicio)",
+          taskDescription: taskDescription || "(sessao recuperada apos reinicio)",
           credentials: {},
           connectorName,
           userId,
