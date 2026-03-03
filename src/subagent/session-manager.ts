@@ -895,13 +895,18 @@ export class SessionManager {
       switch (msg.type) {
         case "ready":
           logger.info({ sessionId: session.id, providers: msg.providers, tools: msg.tools?.length }, "Sub-agent ready");
-          // Inject conversation history from DB so the agent has full context
-          // (only for recovered sessions — new sessions get their first message via sendToAgentProcess)
+          // For recovered sessions: inject fresh JWT token and conversation history
+          // (the old token in the container's env may be invalid if JWT_SECRET changed)
           if (session.recovered) {
+            this.injectFreshToken(session);
             this.injectHistory(session).catch((err: any) => {
               logger.warn({ err, sessionId: session.id }, "Failed to inject history into agent");
             });
           }
+          break;
+
+        case "token_updated":
+          logger.info({ sessionId: session.id }, "Agent JWT token updated successfully");
           break;
 
         case "history_loaded":
@@ -1008,6 +1013,23 @@ export class SessionManager {
         this.sendToUser(session, line);
       }
     }
+  }
+
+  /**
+   * Send a fresh JWT token to a recovered session.
+   * The container's original RICK_SESSION_TOKEN may be invalid if JWT_SECRET changed.
+   * The agent will update its env var dynamically when it receives this message.
+   */
+  private injectFreshToken(session: SubAgentSession): void {
+    // Generate a fresh token with the current JWT_SECRET
+    const token = createAgentToken(
+      session.id,
+      session.userId,
+      86400, // 24h TTL
+      session.numericUserId ?? undefined
+    );
+    logger.info({ sessionId: session.id }, "Injecting fresh JWT token into recovered session");
+    this.sendToAgentProcess(session.id, { type: "update_token", token });
   }
 
   /**

@@ -612,6 +612,14 @@ rl.on("line", async (line) => {
     return;
   }
 
+  // Update session token (sent by host after recovery when JWT secret changed).
+  // This allows the agent to continue making API calls with a valid token.
+  if (msg.type === "update_token" && msg.token) {
+    process.env.RICK_SESSION_TOKEN = msg.token;
+    emit({ type: "token_updated" });
+    return;
+  }
+
   // Restore conversation history (sent by host after recovery or process restart).
   // Each entry: { role: "user"|"agent", content: "..." }
   if (msg.type === "history" && Array.isArray(msg.messages)) {

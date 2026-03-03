@@ -2,18 +2,47 @@
  * Minimal JWT (HS256) implementation for sub-agent session tokens.
  *
  * Uses node:crypto only — zero external dependencies.
- * The signing key is generated randomly on process start, which means
- * all tokens are implicitly invalidated if Rick restarts (this is fine
- * because Docker containers die together with the host process).
+ * The signing key is persisted to disk so tokens remain valid across restarts.
+ * This allows recovered sessions to continue using their existing JWTs.
  *
  * Token payload: { sessionId, userPhone, exp }
  */
 
 import { createHmac, randomBytes } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { logger } from "../config/logger.js";
 
-// ── Signing key (generated once per process lifetime) ──────────────────────
-const JWT_SECRET = randomBytes(32);
+// ── Signing key (persisted to disk for cross-restart validity) ─────────────
+
+const SECRET_FILE = join(process.cwd(), "data", ".jwt-secret");
+
+function loadOrCreateSecret(): Buffer {
+  try {
+    if (existsSync(SECRET_FILE)) {
+      const hex = readFileSync(SECRET_FILE, "utf-8").trim();
+      if (hex.length === 64) {
+        logger.info("Agent JWT secret loaded from disk");
+        return Buffer.from(hex, "hex");
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to load JWT secret from disk, generating new one");
+  }
+
+  // Generate new secret and persist
+  const secret = randomBytes(32);
+  try {
+    mkdirSync(dirname(SECRET_FILE), { recursive: true });
+    writeFileSync(SECRET_FILE, secret.toString("hex"), { mode: 0o600 });
+    logger.info("Agent JWT secret generated and persisted");
+  } catch (err) {
+    logger.warn({ err }, "Failed to persist JWT secret — tokens will be invalidated on restart");
+  }
+  return secret;
+}
+
+const JWT_SECRET = loadOrCreateSecret();
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
