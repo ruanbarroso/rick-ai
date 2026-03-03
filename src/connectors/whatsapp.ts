@@ -437,9 +437,35 @@ export class WhatsAppConnector implements Connector {
       // Update activity timestamp
       await this.userService.updateLastActivity(user.id);
 
+      // Download audio early (before the admin-visibility save) so the blob URL
+      // is available for playback in the main-session viewer.
+      let earlyAudioUrl: string | undefined;
+      let earlyAudioBuffer: Buffer | undefined;
+      if (audioInfo) {
+        try {
+          earlyAudioBuffer = await downloadMediaMessage(msg, "buffer", {}) as Buffer;
+          try {
+            const { query: dbQuery } = await import("../memory/db.js");
+            const id = Array.from({ length: 8 }, () =>
+              Math.floor(Math.random() * 256).toString(16).padStart(2, "0")
+            ).join("");
+            await dbQuery(
+              `INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`,
+              [id, earlyAudioBuffer, audioInfo.mimeType]
+            );
+            earlyAudioUrl = `/audio/${id}`;
+          } catch (blobErr) {
+            logger.warn({ err: blobErr }, "Failed to save WhatsApp audio blob");
+          }
+        } catch (err) {
+          logger.error({ err }, "Failed to download audio (early)");
+          // Don't block the save — just won't have playback
+        }
+      }
+
       // Save message to conversation history regardless of status (for admin visibility)
       const messageText = text || (audioInfo ? "[audio]" : "[imagem]");
-      await this.memory.saveMessageByUserId(user.id, "user", messageText, undefined, undefined, undefined, undefined, undefined, undefined, "whatsapp");
+      await this.memory.saveMessageByUserId(user.id, "user", messageText, undefined, undefined, earlyAudioUrl, undefined, undefined, undefined, "whatsapp");
 
       // Notify pending user listeners (for badge updates)
       if (isNewPending) {
@@ -465,22 +491,25 @@ export class WhatsAppConnector implements Connector {
 
       // Download media if present (audio, image, or document/file)
       let media: MediaAttachment | undefined;
+      const audioUrl = earlyAudioUrl; // set earlier for admin-visibility save
       if (audioInfo) {
-        try {
-          const buffer = await downloadMediaMessage(msg, "buffer", {});
-          media = {
-            data: buffer as Buffer,
-            mimeType: audioInfo.mimeType,
-          };
-          logger.info(
-            { from: senderId, type: "audio", seconds: audioInfo.seconds, ptt: audioInfo.ptt },
-            "Audio message received"
-          );
-        } catch (err) {
-          logger.error({ err }, "Failed to download audio");
-          await this.sendTextMessage(chatJid, "Nao consegui baixar o audio. Tenta enviar de novo?");
-          return;
+        if (earlyAudioBuffer) {
+          media = { data: earlyAudioBuffer, mimeType: audioInfo.mimeType };
+        } else {
+          // Early download failed — retry
+          try {
+            const buffer = await downloadMediaMessage(msg, "buffer", {}) as Buffer;
+            media = { data: buffer, mimeType: audioInfo.mimeType };
+          } catch (err) {
+            logger.error({ err }, "Failed to download audio");
+            await this.sendTextMessage(chatJid, "Nao consegui baixar o audio. Tenta enviar de novo?");
+            return;
+          }
         }
+        logger.info(
+          { from: senderId, type: "audio", seconds: audioInfo.seconds, ptt: audioInfo.ptt, audioUrl },
+          "Audio message received"
+        );
       } else if (imageInfo) {
         try {
           const buffer = await downloadMediaMessage(msg, "buffer", {});
@@ -552,6 +581,7 @@ export class WhatsAppConnector implements Connector {
         userName: user.displayName || pushName,
         text: promptText,
         media,
+        audioUrl,
         quotedText: quotedText || undefined,
       };
 
