@@ -411,12 +411,12 @@ export class WebConnector implements Connector {
               if (this.agentBridge) {
                 const interrupted = this.agentBridge.interruptUser(config.ownerPhone);
                 this.send(ws, { type: "interrupt_result", interrupted });
-                // Turn off typing indicator for all clients when interrupted
-                if (interrupted) {
-                  this.broadcastToAuthenticated({ type: "typing", composing: false });
-                  if (this.adminUserId) {
-                    this.broadcastTypingToMainViewers(this.adminUserId, false);
-                  }
+                // Turn off typing indicator immediately when Stop is clicked.
+                // Update currentlyTyping state so reconnecting clients get correct state.
+                this.currentlyTyping = false;
+                this.broadcastToAuthenticated({ type: "typing", composing: false });
+                if (this.adminUserId) {
+                  this.broadcastTypingToMainViewers(this.adminUserId, false);
                 }
                 logger.info({ userId: config.ownerPhone, interrupted }, "Admin interrupt request");
               }
@@ -630,11 +630,11 @@ export class WebConnector implements Connector {
               const userExternalId = userRow.rows[0]?.phone || String(userId);
               const interrupted = this.agentBridge.interruptUser(userExternalId);
               ws.send(JSON.stringify({ type: "interrupt_result", interrupted }));
-              // Turn off typing indicator for all clients when interrupted
-              if (interrupted) {
-                this.broadcastToAuthenticated({ type: "typing", composing: false });
-                this.broadcastTypingToMainViewers(userId, false);
-              }
+              // Turn off typing indicator immediately when Stop is clicked.
+              // Update currentlyTyping state so reconnecting clients get correct state.
+              this.currentlyTyping = false;
+              this.broadcastToAuthenticated({ type: "typing", composing: false });
+              this.broadcastTypingToMainViewers(userId, false);
               logger.info({ userId, userExternalId, interrupted }, "Main viewer interrupt request");
               return;
             }
