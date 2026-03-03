@@ -86,7 +86,30 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  position: relative;
 }
+
+#scroll-bottom-btn {
+  display: none;
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+  z-index: 50;
+  opacity: 0.88;
+  transition: opacity 0.15s, transform 0.15s;
+}
+#scroll-bottom-btn:hover { opacity: 1; transform: translateX(-50%) scale(1.08); }
 
 .message {
   max-width: 85%;
@@ -400,6 +423,10 @@ body {
   </div>
 </div>
 
+<button id="scroll-bottom-btn" onclick="scrollToBottom(true)" title="Ir para o final" aria-label="Ir para o final">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
+</button>
+
 <div class="image-fullscreen-overlay" id="image-overlay" onclick="closeImageFullscreen()">
   <img id="fullscreen-img" src="" alt="">
 </div>
@@ -426,6 +453,33 @@ var pendingUserEcho = false;
 
 document.title = sessionName;
 document.getElementById('header-name').textContent = sessionName;
+
+// ==================== SCROLL TO BOTTOM ====================
+function isAtBottom() {
+  var container = document.getElementById('messages');
+  return container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+}
+
+function scrollToBottom(force) {
+  var container = document.getElementById('messages');
+  if (force || isAtBottom()) {
+    requestAnimationFrame(function() {
+      container.scrollTop = container.scrollHeight;
+      var btn = document.getElementById('scroll-bottom-btn');
+      if (btn) btn.style.display = 'none';
+    });
+  }
+}
+
+(function() {
+  var messagesEl = document.getElementById('messages');
+  var btn = document.getElementById('scroll-bottom-btn');
+  if (messagesEl && btn) {
+    messagesEl.addEventListener('scroll', function() {
+      btn.style.display = isAtBottom() ? 'none' : 'flex';
+    });
+  }
+})();
 
 // ==================== RENDERING ====================
 function escapeHtml(str) {
@@ -587,7 +641,7 @@ function appendToolLine(text, timeStr) {
   line.innerHTML = formatToolLine(text, timeStr);
   body.appendChild(line);
   body.scrollTop = body.scrollHeight;
-  container.scrollTop = container.scrollHeight;
+  scrollToBottom();
 }
 
 // ==================== MESSAGE RENDERING ====================
@@ -618,7 +672,7 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) 
   div.appendChild(time);
 
   container.insertBefore(div, typing);
-  container.scrollTop = container.scrollHeight;
+  scrollToBottom();
 }
 
 function appendHistoryMessage(msg) {
@@ -731,7 +785,7 @@ function connect() {
         for (var i = 0; i < msgs.length; i++) {
           appendHistoryMessage(msgs[i]);
         }
-        container.scrollTop = container.scrollHeight;
+        scrollToBottom(true);
         break;
 
       case 'session_info':
@@ -754,8 +808,7 @@ function connect() {
           typingEl.classList.add('visible');
           statusText.textContent = 'Digitando...';
           // Auto-scroll to show typing indicator
-          var msgsContainer = document.getElementById('messages');
-          msgsContainer.scrollTop = msgsContainer.scrollHeight;
+          scrollToBottom();
         } else {
           typingEl.classList.remove('visible');
           statusText.textContent = 'Online';
