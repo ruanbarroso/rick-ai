@@ -5126,12 +5126,16 @@ function applyAgentIdentity(name, logo) {
   document.title = agentName + ' AI';
   var loginTitle = document.getElementById('login-title');
   if (loginTitle) loginTitle.textContent = agentName + ' AI';
-  var sidebarTitle = document.getElementById('sidebar-title');
-  if (sidebarTitle) sidebarTitle.textContent = agentName + ' AI';
   var loginAvatar = document.getElementById('login-avatar');
   if (loginAvatar) loginAvatar.src = agentAvatar;
-  var sidebarAvatar = document.getElementById('sidebar-avatar');
-  if (sidebarAvatar) sidebarAvatar.src = agentAvatar;
+  // Don't overwrite sidebar avatar/title when edit mode is active —
+  // edit mode sets Evil Morty avatar and "Edit Mode" title which must persist.
+  if (!editModeActive) {
+    var sidebarTitle = document.getElementById('sidebar-title');
+    if (sidebarTitle) sidebarTitle.textContent = agentName + ' AI';
+    var sidebarAvatar = document.getElementById('sidebar-avatar');
+    if (sidebarAvatar) sidebarAvatar.src = agentAvatar;
+  }
   var mainSession = document.getElementById('main-session-name');
   if (mainSession) mainSession.textContent = agentName.toLowerCase() === 'rick' ? 'Rick C-137' : agentName + ' Alpha';
   var logoPreview = document.getElementById('setting-agent-logo-preview');
