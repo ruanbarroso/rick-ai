@@ -464,7 +464,7 @@ export class Agent {
 
   /**
    * Build the env vars for a sub-agent container (LLM credentials only).
-   * DATABASE_URL, PGVECTOR_URL and GITHUB_TOKEN are intentionally omitted —
+   * DATABASE_URL and PGVECTOR_URL are intentionally omitted —
    * subagents access data via the read-only Agent API (/api/agent/*) with JWT auth.
    */
   private async buildSubAgentEnv(userId: number): Promise<Record<string, string>> {
@@ -493,6 +493,9 @@ export class Agent {
 
     // Gemini — always from config
     if (config.gemini?.apiKey) env.GEMINI_API_KEY = config.gemini.apiKey;
+
+    // GitHub — pass GITHUB_TOKEN so sub-agents can clone private repos
+    if (process.env.GITHUB_TOKEN) env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
     return env;
   }
