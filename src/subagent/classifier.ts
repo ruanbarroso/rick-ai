@@ -12,7 +12,7 @@ CATEGORIAS:
 SELF — Rick (assistente) responde diretamente. Use para:
 - Conversa casual, saudacoes, perguntas simples
 - Pedir para lembrar/salvar/esquecer informacoes (memoria)
-- Perguntas sobre o proprio Rick ou seus comandos
+- Perguntas sobre o proprio Rick ou suas capacidades
 - Explicacoes conceituais curtas
 - Opinioes, conselhos, dicas rapidas
 - Quando o usuario fala COM o assistente diretamente

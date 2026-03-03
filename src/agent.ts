@@ -297,11 +297,10 @@ export class Agent {
       }
     }
 
-    // Check for direct commands first (only for text messages)
-    // handleCommand returns null if not a command, or a string (possibly empty) if it is
+    // Check for implicit OAuth code pasting (not a slash command — just pattern detection)
     if (!routingMedia) {
-      const commandResult = await this.handleCommand(userPhone, connectorName, fullText, user.id, userRole);
-      if (commandResult !== null) return commandResult;
+      const oauthResult = await this.handleImplicitOAuth(fullText, user.id);
+      if (oauthResult !== null) return oauthResult;
     }
 
     // If there's a pending delegation waiting for credentials, handle it
@@ -942,9 +941,9 @@ CAPACIDADES:
 - Voce roda no Gemini Flash para conversa direta.
 - Voce tem acesso a memorias estruturadas (chave-valor)${hasSemanticMemory ? " e semanticas (busca por significado)" : ""}
 - Voce pode listar, buscar, ou apagar memorias${userCanDelegate ? `
-- O usuario pode conectar contas com /conectar claude ou /conectar gpt (amplia os modelos disponiveis para o sub-agente)
 - Existe um sub-agente autonomo que pode ser acionado para tarefas complexas (programar, pesquisar na web, acessar contas via browser). O roteamento e automatico e acontece ANTES desta conversa.
-- Credenciais do sub-agente ficam na categoria "credenciais" ou "senhas" da sua memoria` : ""}
+- Credenciais do sub-agente ficam na categoria "credenciais" ou "senhas" da sua memoria
+- Conexoes OAuth (Claude, GPT) sao gerenciadas pelo painel de configuracoes na interface web` : ""}
 
 ${this.buildIntegrationsSection()}
 REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
@@ -990,48 +989,12 @@ IMPORTANTE SOBRE SUB-AGENTE:
     return prompt;
   }
 
-  private async handleCommand(
-    userPhone: string,
-    connectorName: string,
-    text: string,
-    userId: number,
-    userRole: UserRole = "admin"
-  ): Promise<string | null> {
-    const lower = text.trim().toLowerCase();
-
-    // ==================== OAUTH COMMANDS ====================
-
-    // /conectar claude
-    if (lower === "/conectar claude") {
-      return this.cmdConnectClaude(userId);
-    }
-
-    // /conectar gpt
-    if (lower === "/conectar gpt" || lower === "/conectar openai") {
-      return this.cmdConnectGPT(userId);
-    }
-
-    // /conectar (generic)
-    if (lower === "/conectar") {
-      return `Qual provedor conectar?\n\n/conectar claude — Claude Pro/Max\n/conectar gpt — ChatGPT Pro (GPT Codex)`;
-    }
-
-    // /desconectar claude
-    if (lower === "/desconectar claude") {
-      return this.cmdDisconnectClaude(userId);
-    }
-
-    // /desconectar gpt
-    if (lower === "/desconectar gpt" || lower === "/desconectar openai") {
-      return this.cmdDisconnectGPT(userId);
-    }
-
-    // /desconectar (generic)
-    if (lower === "/desconectar") {
-      return `Qual provedor desconectar?\n\n/desconectar claude\n/desconectar gpt`;
-    }
-
-    // Check if user is pasting a Claude OAuth code (contains # and not a command)
+  /**
+   * Detect implicit OAuth code pasting (not slash commands — automatic pattern matching).
+   * Returns a response string if an OAuth code was detected, null otherwise.
+   */
+  private async handleImplicitOAuth(text: string, userId: number): Promise<string | null> {
+    // Check if user is pasting a Claude OAuth code (contains # separator)
     if (this.claudeOAuth.hasPendingAuth() && text.includes("#") && !text.startsWith("/")) {
       const exchangeResult = await this.cmdExchangeClaudeCode(userId, text);
       if (exchangeResult) return exchangeResult;
@@ -1042,96 +1005,10 @@ IMPORTANTE SOBRE SUB-AGENTE:
       return this.cmdExchangeGPTCallback(userId, text);
     }
 
-    // ==================== MEMORY COMMANDS ====================
-
-    if (lower.startsWith("/lembrar ")) {
-      return this.cmdRemember(userPhone, text.slice(9).trim(), userId, userRole);
-    }
-
-    if (lower.startsWith("/esquecer ")) {
-      return this.cmdForget(userPhone, text.slice(10).trim());
-    }
-
-    if (lower === "/esquecer_tudo") {
-      // Use global forgetAll (memories are global in RBAC model)
-      const count = await this.memory.forgetAllGlobal();
-      return `Pronto, esqueci ${count} memorias. Mente limpa!`;
-    }
-
-    if (lower.startsWith("/memorias")) {
-      const category = text.slice(9).trim() || undefined;
-      return this.cmdListMemories(userPhone, category);
-    }
-
-    if (lower.startsWith("/buscar ")) {
-      return this.cmdSearch(userPhone, text.slice(8).trim());
-    }
-
-    // ==================== CONVERSATION COMMANDS ====================
-
-    if (lower === "/limpar") {
-      await this.memory.clearConversationByUserId(userId);
-      return "Historico de conversa limpo! Comecamos do zero.";
-    }
-
-    if (lower.startsWith("/modelo") || lower === "/modelo") {
-      return this.cmdShowModels(userId);
-    }
-
-    if (lower.startsWith("/vsearch ") || lower.startsWith("/vbuscar ")) {
-      const prefix = lower.startsWith("/vsearch ") ? "/vsearch " : "/vbuscar ";
-      return this.cmdVectorSearch(userPhone, text.slice(prefix.length).trim());
-    }
-
-    if (lower === "/matar" || lower === "/kill") {
-      return this.cmdKillSubAgent();
-    }
-
-    // ==================== EDIT MODE ====================
-    // /edit is no longer a text command — edit mode is entered via 3x click on agent logo in the web UI.
-    // /exit is no longer a text command — exit via 3x click on Evil Morty logo in the web UI.
-
-    // /deploy is handled in the edit mode block at top of handleMessage
-    // But if called outside edit mode, give a helpful message
-    if (lower === "/deploy") {
-      return "Voce nao esta no modo de edicao.";
-    }
-
-    if (lower === "/help" || lower === "/ajuda") {
-      return this.cmdHelp(userId);
-    }
-
-    if (lower === "/status") {
-      return this.cmdStatus(userId);
-    }
-
     return null;
   }
 
-  // ==================== CLAUDE OAUTH ====================
-
-  private async cmdConnectClaude(userId: number): Promise<string> {
-    const status = await this.claudeOAuth.isConnected(userId);
-    if (status.connected) {
-      return `Ja conectado ao Claude! (${status.email || "conta conectada"})\n\nPara desconectar: /desconectar claude`;
-    }
-
-    const { authUrl } = this.claudeOAuth.startAuth();
-
-    return `*Conectar Claude Pro/Max*
-
-1. Abra este link no navegador (logado na sua conta Claude):
-
-${authUrl}
-
-2. Autorize o acesso.
-
-3. A pagina vai mostrar um *codigo* no formato \`codigo#state\`.
-
-4. *Copie e cole o codigo inteiro aqui* (com o #).
-
-O link expira em 10 minutos.`;
-  }
+  // ==================== OAUTH CODE EXCHANGE ====================
 
   private async cmdExchangeClaudeCode(
     userId: number,
@@ -1140,7 +1017,7 @@ O link expira em 10 minutos.`;
     const result = await this.claudeOAuth.exchangeCode(userId, rawCode);
 
     if (!result.success) {
-      return result.error || "Erro ao conectar. Tente novamente com /conectar claude.";
+      return result.error || "Erro ao conectar. Tente novamente pelas configuracoes.";
     }
 
     // Set the token in LLM service immediately
@@ -1156,51 +1033,6 @@ Conta: ${result.email || "conectada"}
 O sub-agente agora pode usar o Claude Opus. O token e renovado automaticamente.`;
   }
 
-  private async cmdDisconnectClaude(userId: number): Promise<string> {
-    const status = await this.claudeOAuth.isConnected(userId);
-    if (!status.connected) {
-      return "Nao esta conectado ao Claude. Use /conectar claude.";
-    }
-
-    await this.claudeOAuth.disconnect(userId);
-    this.llm.setAnthropicOAuthToken(null);
-
-    const active = this.llm.getActiveModel();
-    if (active.provider === "anthropic") {
-      this.llm.switchModel("gemini flash");
-      return `Claude desconectado. Modelo trocado para *gemini flash*.`;
-    }
-    return "Claude desconectado.";
-  }
-
-  // ==================== GPT OAUTH (DEVICE AUTH) ====================
-
-  private async cmdConnectGPT(userId: number): Promise<string> {
-    const status = await this.openaiOAuth.isConnected(userId);
-    if (status.connected) {
-      return `Ja conectado ao GPT! (${status.email || "conta conectada"})\n\nPara desconectar: /desconectar gpt`;
-    }
-
-    const { authUrl } = this.openaiOAuth.startAuth();
-
-    return `*Conectar ChatGPT Pro (GPT Codex)*
-
-1. Abra este link no navegador (logado na sua conta OpenAI):
-
-${authUrl}
-
-2. Autorize o acesso e clique *Continuar*.
-
-3. O navegador vai redirecionar para uma pagina que *nao vai carregar* (localhost). Isso e normal!
-
-4. *Copie a URL inteira da barra de enderecos* e cole aqui.
-
-A URL vai ser algo como:
-\`http://localhost:1455/auth/callback?code=...&state=...\`
-
-O link expira em 10 minutos.`;
-  }
-
   private async cmdExchangeGPTCallback(
     userId: number,
     rawUrl: string
@@ -1208,7 +1040,7 @@ O link expira em 10 minutos.`;
     const result = await this.openaiOAuth.exchangeCallback(userId, rawUrl);
 
     if (!result.success) {
-      return result.error || "Erro ao conectar. Tente novamente com /conectar gpt.";
+      return result.error || "Erro ao conectar. Tente novamente pelas configuracoes.";
     }
 
     // Set the token in LLM service immediately
@@ -1222,161 +1054,6 @@ O link expira em 10 minutos.`;
 Conta: ${result.email || "conectada"}
 
 O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado automaticamente.`;
-  }
-
-  private async cmdDisconnectGPT(userId: number): Promise<string> {
-    const status = await this.openaiOAuth.isConnected(userId);
-    if (!status.connected) {
-      return "Nao esta conectado ao GPT. Use /conectar gpt.";
-    }
-
-    await this.openaiOAuth.disconnect(userId);
-    this.llm.setOpenAIOAuthToken(null);
-
-    const active = this.llm.getActiveModel();
-    if (active.provider === "openai") {
-      this.llm.switchModel("gemini flash");
-      return `GPT desconectado. Modelo trocado para *gemini flash*.`;
-    }
-    return "GPT desconectado.";
-  }
-
-  // ==================== MODEL COMMANDS ====================
-
-  private async cmdShowModels(userId: number): Promise<string> {
-    const claudeStatus = await this.claudeOAuth.isConnected(userId);
-    const gptStatus = await this.openaiOAuth.isConnected(userId);
-
-    return `*Modelos do ${config.agentName}:*
-
-*Chat:* Gemini Flash (conversa direta)
-*Sub-agente:* Claude Opus (primario) → GPT Codex → Gemini Pro (fallbacks)
-
-*Conexoes OAuth:*
-- Claude: ${claudeStatus.connected ? `conectado (${claudeStatus.email || ""})` : "/conectar claude"}
-- GPT: ${gptStatus.connected ? `conectado (${gptStatus.email || ""})` : "/conectar gpt"}
-
-_Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa Gemini Flash._`;
-  }
-
-  // ==================== MEMORY COMMANDS ====================
-
-  private async cmdRemember(userPhone: string, input: string, userId: number, userRole: UserRole = "admin"): Promise<string> {
-    const eqIndex = input.indexOf("=");
-    if (eqIndex === -1) {
-      return 'Formato: /lembrar [categoria:]chave = valor\nExemplo: /lembrar senhas:gmail = minha_senha123';
-    }
-
-    let keyPart = input.slice(0, eqIndex).trim();
-    const value = input.slice(eqIndex + 1).trim();
-
-    let category = "general";
-    const colonIndex = keyPart.indexOf(":");
-    if (colonIndex !== -1) {
-      category = keyPart.slice(0, colonIndex).trim();
-      keyPart = keyPart.slice(colonIndex + 1).trim();
-    }
-
-    if (!keyPart || !value) {
-      return 'Formato: /lembrar [categoria:]chave = valor';
-    }
-
-    const result = await this.memory.rememberV2(keyPart, value, category, userId, userRole);
-    if (result.blocked) {
-      return `Nao foi possivel salvar: a memoria *${keyPart}* foi criada por um admin e nao pode ser sobrescrita.`;
-    }
-
-    const sensitiveCategories = ["senhas", "passwords", "secrets", "tokens"];
-    const warning = sensitiveCategories.includes(category.toLowerCase())
-      ? "\n\n_Dica: para dados sensiveis, considere usar um gerenciador de senhas como Bitwarden._"
-      : "";
-
-    return `Lembrei! *${keyPart}* salvo na categoria *${category}*.${warning}`;
-  }
-
-  private async cmdForget(userPhone: string, key: string): Promise<string> {
-    if (!key) {
-      return "Formato: /esquecer <chave>\nExemplo: /esquecer senha do gmail";
-    }
-
-    // Use global forget (memories are global in RBAC model)
-    const count = await this.memory.forgetGlobal(key);
-    if (count > 0) {
-      return `Pronto, esqueci "${key}". (${count} item(s) removido(s))`;
-    }
-    return `Nao encontrei nenhuma memoria com a chave "${key}".`;
-  }
-
-  private async cmdListMemories(userPhone: string, category?: string): Promise<string> {
-    // Use global list (memories are global in RBAC model)
-    const memories = await this.memory.listGlobalMemories(category);
-
-    if (memories.length === 0) {
-      return category
-        ? `Nenhuma memoria na categoria "${category}".`
-        : "Voce nao tem nenhuma memoria salva ainda.";
-    }
-
-    const grouped: Record<string, typeof memories> = {};
-    for (const mem of memories) {
-      if (!grouped[mem.category]) grouped[mem.category] = [];
-      grouped[mem.category].push(mem);
-    }
-
-    let response = `*Suas memorias (${memories.length}):*\n`;
-    for (const [cat, mems] of Object.entries(grouped)) {
-      response += `\n*[${cat}]*\n`;
-      for (const mem of mems) {
-        const isSensitive = ["senhas", "passwords", "secrets", "tokens"].includes(cat.toLowerCase());
-        const displayValue = isSensitive ? mem.value.slice(0, 3) + "***" : mem.value;
-        response += `- ${mem.key}: ${displayValue}\n`;
-      }
-    }
-
-    return response;
-  }
-
-  private async cmdSearch(userPhone: string, term: string): Promise<string> {
-    if (!term) return "Formato: /buscar <termo>";
-
-    // Use global recall (memories are global in RBAC model)
-    const results = await this.memory.recallGlobal(term);
-    if (results.length === 0) return `Nenhum resultado para "${term}".`;
-
-    let response = `*Resultados para "${term}":*\n`;
-    for (const mem of results) {
-      response += `- [${mem.category}] ${mem.key}: ${mem.value}\n`;
-    }
-    return response;
-  }
-
-  private async cmdVectorSearch(userPhone: string, term: string): Promise<string> {
-    if (!term) return "Formato: /vbuscar <termo>\nBusca semantica nas memorias.";
-    if (!this.vectorMemory) return "Memoria semantica nao esta configurada.";
-
-    // Use global vector search (memories are global in RBAC model)
-    const results = await this.vectorMemory.searchGlobal(term, 10, 0.25);
-    if (results.length === 0) return `Nenhum resultado semantico para "${term}".`;
-
-    let response = `*Busca semantica para "${term}":*\n`;
-    for (const mem of results) {
-      const sim = mem.similarity ? ` (${(mem.similarity * 100).toFixed(0)}%)` : "";
-      const preview = mem.content.length > 150 ? mem.content.substring(0, 150) + "..." : mem.content;
-      response += `\n[${mem.category}]${sim}\n${preview}\n`;
-    }
-    return response;
-  }
-
-  // ==================== SUB-AGENT COMMANDS ====================
-
-  private async cmdKillSubAgent(): Promise<string> {
-    const live = this.sessionManager.getLiveSessions();
-    if (live.length === 0) {
-      return "Nenhum sub-agente ativo no momento.";
-    }
-
-    const count = await this.sessionManager.killAll();
-    return `${count} sub-agente(s) encerrado(s) com sucesso!`;
   }
 
   // ==================== EDIT MODE COMMANDS ====================
@@ -1403,9 +1080,7 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
       } else {
         return (
           "Nenhum modelo disponivel para o modo de edicao.\n\n" +
-          "- */conectar claude* — recomendado (Claude Code com edicao autonoma)\n" +
-          "- */conectar gpt* — alternativa (GPT-5.3 Codex com edicao de arquivos)\n" +
-          "- Gemini Pro e usado automaticamente quando configurado no servidor"
+          "Configure um provedor de IA (Claude, GPT ou Gemini) nas configuracoes."
         );
       }
     }
@@ -1629,114 +1304,6 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
     return ""; // Progress messages come from publish pipeline
   }
 
-  // ==================== INFO COMMANDS ====================
-
-  private async cmdHelp(userId: number): Promise<string> {
-    const vectorStatus = this.vectorMemory ? "ativa" : "desativada";
-
-    const claudeStatus = await this.claudeOAuth.isConnected(userId);
-    const gptStatus = await this.openaiOAuth.isConnected(userId);
-
-    const claudeInfo = claudeStatus.connected ? `Conectado (${claudeStatus.email || ""})` : "desconectado";
-    const gptInfo = gptStatus.connected ? `Conectado (${gptStatus.email || ""})` : "desconectado";
-
-    return `*${config.agentName} - Comandos:*
-
-*Memoria:*
-/lembrar [cat:]chave = valor
-/esquecer <chave>
-/esquecer_tudo
-/memorias [categoria]
-/buscar <termo>
-/vbuscar <termo> (semantica, ${vectorStatus})
-
-*Conversa:*
-/limpar - limpa historico
-/modelo - mostra modelos e conexoes
-/matar - encerra sub-agente ativo
-/status - info do sistema
-/ajuda - esta mensagem
-
-*Conexoes OAuth:*
-/conectar claude — ${claudeInfo}
-/conectar gpt — ${gptInfo}
-/desconectar claude | gpt
-
-*Auto-edicao:*
-/deploy - aplica mudancas com pipeline seguro
-/publish [usuario/repo] - deploy + push para GitHub
-
-*Modelos:*
-Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
-
-*Dica:* Voce tambem pode pedir naturalmente:
-"Lembra que meu email e x@y.com"`;
-  }
-
-  private async cmdStatus(userId: number): Promise<string> {
-    // Use global memory list (memories are global in RBAC model)
-    const memories = await this.memory.listGlobalMemories();
-    const history = await this.memory.getConversationHistoryByUserId(userId);
-
-    let vectorInfo = "desativada";
-    let diskInfo = "";
-    if (this.vectorMemory) {
-      try {
-        const totalCount = await this.vectorMemory.countAll();
-        const dbSizeBytes = await this.vectorMemory.getDatabaseSizeBytes();
-        const dbSizeMB = (dbSizeBytes / 1024 / 1024).toFixed(1);
-        const maxGB = config.vectorDbMaxSizeGb;
-        const usagePercent = ((dbSizeBytes / (maxGB * 1024 * 1024 * 1024)) * 100).toFixed(1);
-        vectorInfo = `${totalCount} total`;
-        diskInfo = `\n- Disco pgvector: ${dbSizeMB} MB / ${maxGB} GB (${usagePercent}%)`;
-      } catch {
-        vectorInfo = "erro de conexao";
-      }
-    }
-
-    const claudeStatus = await this.claudeOAuth.isConnected(userId);
-    const gptStatus = await this.openaiOAuth.isConnected(userId);
-
-    const claudeInfo = claudeStatus.connected
-      ? `Conectado (${claudeStatus.email || ""})`
-      : "Desconectado";
-    const gptInfo = gptStatus.connected
-      ? `Conectado (${gptStatus.email || ""})`
-      : "Desconectado";
-
-    // Sub-agent status
-    const liveSessions = this.sessionManager.getLiveSessions();
-    let subAgentInfo = "nenhum";
-    if (liveSessions.length > 0) {
-      subAgentInfo = liveSessions
-        .map((s) => {
-          const elapsed = Math.round((Date.now() - s.createdAt) / 1000);
-          return `sub-agente (${s.state}) ${elapsed}s`;
-        })
-        .join(", ");
-    }
-
-    const editInfo = this.editSession
-      ? `ativo (${this.editSession.getState()})`
-      : "inativo";
-
-    // Connector status
-    const connectors = this.connectorManager.getAll();
-    const connectorInfo = connectors.map((c) => c.name).join(", ") || "nenhum";
-
-    return `*Status do ${config.agentName}:*
-- Chat: Gemini Flash (conversa direta)
-- Sub-agente: Claude Opus → GPT Codex → Gemini Pro (fallbacks)
-- Claude OAuth: ${claudeInfo}
-- GPT OAuth: ${gptInfo}
-- Sub-agentes: ${subAgentInfo}
-- Modo edicao: ${editInfo}
-- Conectores: ${connectorInfo}
-- Memorias: ${memories.length} estruturadas
-- Mem. semanticas: ${vectorInfo}${diskInfo}
-- Historico: ${history.length} msgs (max ${config.conversationHistoryLimit})`;
-  }
-
   // ==================== AUTO-EXTRACTION ====================
 
   private async buildSemanticContext(userId: number, queryText: string, userRole: UserRole = "admin"): Promise<string> {
@@ -1837,7 +1404,7 @@ Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
 
     // NOTE: Auto-forget via regex was removed (was too greedy — matched casual
     // messages like "remove esse erro" and deleted memories). Memory deletion
-    // now only happens through the explicit /esquecer command.
+    // now requires explicit user confirmation or Web UI management.
 
     // LLM-based extraction: if the assistant confirmed saving something,
     // use Gemini to extract structured data and persist to memories table

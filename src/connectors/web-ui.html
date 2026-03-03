@@ -2702,7 +2702,7 @@
         <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
       </div>
       <div class="settings-section-body collapsed">
-        <p class="settings-hint">Repositorio de desenvolvimento — modo /edit</p>
+        <p class="settings-hint">Repositorio de desenvolvimento — modo de edicao</p>
         <span class="settings-label">GitHub Repository URL</span>
         <input type="text" class="settings-input" id="setting-dev-repo-url" placeholder="https://github.com/user/repo">
 
@@ -3428,7 +3428,7 @@ function updateEphemeralSessions(sessions) {
 
 function switchSession(sessionId) {
   if (editModeActive) {
-    showToast('Sessoes bloqueadas durante o modo /edit');
+    showToast('Sessoes bloqueadas durante o modo de edicao');
     return;
   }
   currentSessionId = sessionId;
@@ -3479,7 +3479,7 @@ function confirmClearHistory() {
 
 function startNewSubAgent() {
   if (editModeActive) {
-    showToast('Sessoes bloqueadas durante o modo /edit');
+    showToast('Sessoes bloqueadas durante o modo de edicao');
     return;
   }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -3497,7 +3497,7 @@ function startNewSubAgent() {
 
 function killSession(sessionId) {
   if (editModeActive) {
-    showToast('Sessoes bloqueadas durante o modo /edit');
+    showToast('Sessoes bloqueadas durante o modo de edicao');
     return;
   }
   if (ws && ws.readyState === WebSocket.OPEN) {

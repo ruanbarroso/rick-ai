@@ -168,7 +168,7 @@ export class ClaudeOAuthService {
       } else {
         return {
           success: false,
-          error: "Codigo invalido. O formato deve ser 'codigo#state'. Tente /conectar claude novamente.",
+          error: "Codigo invalido. O formato deve ser 'codigo#state'. Tente novamente pelas configuracoes.",
         };
       }
     }
@@ -177,7 +177,7 @@ export class ClaudeOAuthService {
     if (!pending) {
       return {
         success: false,
-        error: "Sessao de autenticacao expirou. Use /conectar claude para gerar um novo link.",
+        error: "Sessao de autenticacao expirou. Gere um novo link pelas configuracoes.",
       };
     }
 
@@ -204,7 +204,7 @@ export class ClaudeOAuthService {
         );
         return {
           success: false,
-          error: `Erro na troca de tokens (HTTP ${response.status}). Tente /conectar claude novamente.`,
+          error: `Erro na troca de tokens (HTTP ${response.status}). Tente novamente pelas configuracoes.`,
         };
       }
 
@@ -363,7 +363,7 @@ export class ClaudeOAuthService {
   }
 
   /**
-   * Check if there's a pending auth flow (user started /conectar but hasn't pasted code yet).
+   * Check if there's a pending auth flow (user started OAuth connect but hasn't pasted code yet).
    */
   hasPendingAuth(): boolean {
     return this.pendingAuths.size > 0;

@@ -556,11 +556,10 @@ export class EditSession {
       (this.activeProvider === "claude"
         ? `O Claude Code tem acesso completo ao codigo-fonte e edita arquivos de forma autonoma.`
         : `Usando ${providerLabel} — edita arquivos diretamente via ferramentas de leitura/escrita.\n` +
-          `Para autonomia maxima, conecte o Claude: */conectar claude*`) +
+          `Para autonomia maxima, conecte o Claude nas configuracoes.`) +
       `\n\nComandos:\n` +
       `- */deploy* — aplica as mudancas (com verificacao de seguranca)\n` +
-      `- */publish* — deploy + push para o GitHub\n` +
-      `- */exit* — descarta tudo e sai do modo de edicao`;
+      `- */publish* — deploy + push para o GitHub`;
 
     await this.sendMessage(welcomeMsg);
     await this.saveHistory?.(welcomeMsg, "text");
@@ -1133,8 +1132,6 @@ export class EditSession {
       await this.sendMessage(
         "*Publish cancelado:* Nenhum token GitHub encontrado.\n\n" +
         "Configure na Web UI: *Configuracoes → GitHub → Personal Access Token*\n\n" +
-        "Ou salve via memoria:\n" +
-        "`/lembrar credenciais:github_token = ghp_seuTokenAqui`\n\n" +
         "O token precisa ter permissao de escrita (push) no repositorio.",
       );
       this.state = "ready";

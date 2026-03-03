@@ -206,7 +206,7 @@ export class OpenAIOAuthService {
     if (!pending) {
       return {
         success: false,
-        error: "Sessao de autenticacao expirou. Use /conectar gpt para gerar novo link.",
+        error: "Sessao de autenticacao expirou. Gere um novo link pelas configuracoes.",
       };
     }
 
@@ -232,7 +232,7 @@ export class OpenAIOAuthService {
         );
         return {
           success: false,
-          error: `Erro na troca de tokens (HTTP ${response.status}). Tente /conectar gpt novamente.`,
+          error: `Erro na troca de tokens (HTTP ${response.status}). Tente novamente pelas configuracoes.`,
         };
       }
 

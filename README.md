@@ -171,27 +171,21 @@ Sub-agent sessions have a lifecycle: `starting` → `running` → `waiting_user`
 - Context is preserved across follow-ups: original task description + previous output + credentials are passed to the sub-agent
 - Multiple close commands recognized: "ok", "pronto", "encerrar", "pode encerrar", "encerrar tudo"
 
-### Commands
+### Interaction
+
+There are no slash commands — all interaction is via natural language. The agent understands requests in Portuguese and English:
+
+- **Memories**: "Lembra que meu email é x@y.com", "O que voce sabe sobre mim?"
+- **Sub-agents**: Complex tasks (coding, web research, email) are automatically delegated to sub-agents
+- **OAuth/Settings**: Managed via the web UI settings panel
+- **Edit mode**: Enter/exit via triple-click on the agent avatar (easter egg)
+
+**Edit mode only commands** (used inside edit mode, not in normal conversation):
 
 | Command | Description |
 |---------|-------------|
 | `/deploy` | Deploy staged changes (build + smoke test + swap + watchdog) |
 | `/publish [user/repo]` | Deploy + push to GitHub (default: `ruanbarroso/rick-ai`) |
-| `/status` | Show active sessions, memory stats, connected providers |
-| `/help` or `/ajuda` | Show all available commands |
-| `/modelo` | Show configured models and OAuth connection status |
-| `/conectar claude` | Start Claude OAuth flow |
-| `/conectar gpt` | Start GPT OAuth flow (alias: `/conectar openai`) |
-| `/desconectar claude` | Disconnect Claude |
-| `/desconectar gpt` | Disconnect GPT (alias: `/desconectar openai`) |
-| `/lembrar [cat:]key = value` | Save a memory |
-| `/esquecer key` | Delete a memory |
-| `/esquecer_tudo` | Delete ALL memories |
-| `/memorias [category]` | List memories |
-| `/buscar <term>` | Search structured memories by term |
-| `/vsearch <query>` or `/vbuscar <query>` | Semantic (vector) memory search |
-| `/limpar` | Clear conversation history |
-| `/matar` or `/kill` | Kill all active sub-agents |
 
 ### HTTP Endpoints
 
@@ -475,7 +469,7 @@ docker compose logs -f agent
 - **User isolation** — Each user has isolated conversation history. Pending/blocked user messages are saved for admin visibility but never processed by the LLM.
 - **LLM call timeouts** — All LLM providers (Gemini, Anthropic, OpenAI) have 60-second timeouts to prevent indefinite hangs.
 - **Automatic table pruning** — Conversation history and message logs are capped to prevent unbounded database growth.
-- **Memory deletion protection** — Memories can only be deleted via the explicit `/esquecer` command, never through casual conversation patterns.
+- **Memory deletion protection** — Memories can only be deleted via the web UI settings panel, never through casual conversation patterns.
 
 ## Tech Stack
 
