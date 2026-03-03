@@ -44,6 +44,9 @@ fi
 if [[ -f "$ENV_FILE" ]]; then
   info ".env already exists — skipping generation"
   info "Edit ${ENV_FILE} to change settings"
+  # Load existing values for the summary at the end
+  WEB_PASSWORD=$(grep -oP '^WEB_AUTH_PASSWORD=\K.+' "$ENV_FILE" 2>/dev/null || echo "")
+  WEB_PORT=$(grep -oP '^WEB_PORT=\K.+' "$ENV_FILE" 2>/dev/null || echo "80")
 else
   info "Generating .env configuration..."
   echo ""
@@ -225,7 +228,10 @@ echo "  ╚═══════════════════════
 echo ""
 echo "  Next steps:"
 echo "    1. Pair WhatsApp:  docker compose logs -f agent  (scan QR code)"
-[[ -n "${WEB_PASSWORD:-}" ]] && echo "    2. Open Web UI:     http://localhost:${WEB_PORT}"
+if [[ -n "${WEB_PASSWORD:-}" ]]; then
+  echo "    2. Open Web UI:     http://localhost:${WEB_PORT}"
+  echo "       Password:        ${WEB_PASSWORD}"
+fi
 echo ""
 echo "  Useful commands:"
 echo "    docker compose logs -f agent     # follow logs"
