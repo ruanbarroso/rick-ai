@@ -3147,19 +3147,19 @@ function handleServerMessage(msg) {
       break;
 
     case 'settings_saved':
-      if (pendingDbSave) {
-        var saveResultEl = pendingDbSave === 'database'
+      if (pendingDbSaveConfirm) {
+        var saveResultEl = pendingDbSaveConfirm === 'database'
           ? document.getElementById('database-test-result')
           : document.getElementById('vector-test-result');
         if (saveResultEl) {
           if (msg.success) {
             var restartHint = msg.needsRestart ? ' Reinicie para aplicar.' : '';
-            saveResultEl.innerHTML = '<span style="color:var(--success);">Salvo!' + restartHint + '</span>';
+            saveResultEl.innerHTML = '<span style="color:var(--success);">Conexao OK. Salvo!' + restartHint + '</span>';
           } else {
-            saveResultEl.innerHTML = '<span style="color:var(--danger);">Erro ao salvar: ' + escapeHtml(msg.error || 'desconhecido') + '</span>';
+            saveResultEl.innerHTML = '<span style="color:var(--danger);">Conexao OK, mas erro ao salvar: ' + escapeHtml(msg.error || 'desconhecido') + '</span>';
           }
         }
-        pendingDbSave = null;
+        pendingDbSaveConfirm = null;
       } else if (!msg.success) {
         showToast('Erro ao salvar: ' + (msg.error || 'desconhecido'));
       }
@@ -3171,8 +3171,20 @@ function handleServerMessage(msg) {
         : document.getElementById('vector-test-result');
       if (testResultEl) {
         if (msg.success) {
-          testResultEl.innerHTML = '<span style="color:var(--success);">' + escapeHtml(msg.message || 'Conectado!') + '</span>';
+          // If triggered by "Conectar" button, auto-save after successful test
+          if (pendingDbSave && pendingDbSave.which === msg.which) {
+            testResultEl.innerHTML = '<span style="color:var(--text-muted);">Conexao OK. Salvando...</span>';
+            var settings = {};
+            settings[pendingDbSave.settingKey] = pendingDbSave.url;
+            pendingDbSaveConfirm = pendingDbSave.which;
+            pendingDbSave = null;
+            sendSaveSettings(settings);
+          } else {
+            // Triggered by "Testar Conexao" — just show result
+            testResultEl.innerHTML = '<span style="color:var(--success);">' + escapeHtml(msg.message || 'Conectado!') + '</span>';
+          }
         } else {
+          pendingDbSave = null;
           testResultEl.innerHTML = '<span style="color:var(--danger);">' + escapeHtml(msg.error || 'Falha na conexao') + '</span>';
         }
       }
@@ -5657,9 +5669,11 @@ function saveDatabase() {
     return;
   }
   var resultEl = document.getElementById('database-test-result');
-  resultEl.innerHTML = '<span style="color:var(--text-muted);">Salvando...</span>';
-  pendingDbSave = 'database';
-  sendSaveSettings({ databaseUrl: url });
+  resultEl.innerHTML = '<span style="color:var(--text-muted);">Testando conexao...</span>';
+  pendingDbSave = { which: 'database', settingKey: 'databaseUrl', url: url };
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'test_database', which: 'database', url: url }));
+  }
 }
 
 function saveVectorDatabase() {
@@ -5669,12 +5683,17 @@ function saveVectorDatabase() {
     return;
   }
   var resultEl = document.getElementById('vector-test-result');
-  resultEl.innerHTML = '<span style="color:var(--text-muted);">Salvando...</span>';
-  pendingDbSave = 'vector';
-  sendSaveSettings({ vectorDatabaseUrl: url });
+  resultEl.innerHTML = '<span style="color:var(--text-muted);">Testando conexao...</span>';
+  pendingDbSave = { which: 'vector', settingKey: 'vectorDatabaseUrl', url: url };
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'test_database', which: 'vector', url: url }));
+  }
 }
 
+// When set, test_database_result will auto-save on success
 var pendingDbSave = null;
+// When set, settings_saved will show combined "Conexao OK. Salvo!" feedback
+var pendingDbSaveConfirm = null;
 
 function saveDevRepo() {
   var url = document.getElementById('setting-dev-repo-url').value.trim();
