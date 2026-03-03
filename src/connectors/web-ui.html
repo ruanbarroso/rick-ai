@@ -3054,24 +3054,67 @@ function handleServerMessage(msg) {
       // Reopen settings modal after OTA reload (flag set before reload)
       if (sessionStorage.getItem('rick_ota_reopen_settings')) {
         sessionStorage.removeItem('rick_ota_reopen_settings');
+        var otaExpected = sessionStorage.getItem('rick_ota_expected_version');
+        var otaOld = sessionStorage.getItem('rick_ota_old_version');
+        sessionStorage.removeItem('rick_ota_expected_version');
+        sessionStorage.removeItem('rick_ota_old_version');
         setTimeout(function() {
           openSettings();
-          // Show "Atualizado" badge immediately — no need to re-check GitHub
+          // Verify the version actually changed before showing "Atualizado"
           setTimeout(function() {
-            loadVersionInfo();
-            var badge = document.getElementById('version-badge');
-            var updateInline = document.getElementById('update-inline');
-            if (badge) {
-              badge.style.display = 'inline-block';
-              badge.style.background = 'rgba(74,222,128,0.15)';
-              badge.style.color = '#4ade80';
-              badge.textContent = 'Atualizado';
-            }
-            if (updateInline) updateInline.style.display = 'none';
-            var refreshBtn = document.getElementById('version-refresh-btn');
-            if (refreshBtn) refreshBtn.style.display = 'none';
-            versionPrimaryAction = 'check';
-            applyVersionPrimaryButtonState();
+            var vToken = getAuthToken();
+            fetch('/api/version?token=' + encodeURIComponent(vToken), { signal: AbortSignal.timeout(5000) })
+              .then(function(r) { return r.ok ? r.json() : null; })
+              .then(function(data) {
+                if (!data) return;
+                var installedSha = data.current && data.current.sha;
+                var badge = document.getElementById('version-badge');
+                var updateInline = document.getElementById('update-inline');
+                var currentEl = document.getElementById('version-current');
+
+                // Update version display
+                if (installedSha && installedSha !== 'unknown') {
+                  var d = new Date(data.current.date);
+                  var dateStr = isNaN(d.getTime()) ? data.current.date : d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                  if (currentEl) currentEl.textContent = installedSha + ' (' + dateStr + ')';
+                }
+
+                // Check if the update actually landed
+                var updateLanded = false;
+                if (otaExpected && installedSha) {
+                  updateLanded = installedSha.indexOf(otaExpected) === 0 || otaExpected.indexOf(installedSha) === 0;
+                } else if (otaOld && installedSha) {
+                  updateLanded = installedSha !== otaOld && installedSha.indexOf(otaOld) !== 0 && otaOld.indexOf(installedSha) !== 0;
+                } else {
+                  updateLanded = true; // can't verify, assume success
+                }
+
+                if (updateLanded) {
+                  if (badge) {
+                    badge.style.display = 'inline-block';
+                    badge.style.background = 'rgba(74,222,128,0.15)';
+                    badge.style.color = '#4ade80';
+                    badge.textContent = 'Atualizado';
+                  }
+                  if (updateInline) updateInline.style.display = 'none';
+                  var refreshBtn = document.getElementById('version-refresh-btn');
+                  if (refreshBtn) refreshBtn.style.display = 'none';
+                  versionPrimaryAction = 'check';
+                } else {
+                  // Version didn't change — still on old version, keep polling
+                  if (badge) {
+                    badge.style.display = 'inline-block';
+                    badge.style.background = 'rgba(250,176,5,0.15)';
+                    badge.style.color = '#fab005';
+                    badge.textContent = 'Atualizacao pendente';
+                  }
+                  versionPrimaryAction = 'check';
+                  // Auto-retry: wait and reload again
+                  setTimeout(function() { location.reload(); }, 5000);
+                }
+                applyVersionPrimaryButtonState();
+              })
+              .catch(function() { loadVersionInfo(); });
           }, 500);
         }, 300);
       }
@@ -5939,11 +5982,20 @@ function waitForRestart(expectedVersion) {
   var done = false;
   var attempts = 0;
   var maxAttempts = 80; // 80 * 3s = 4 minutes max
+  var sawHealthFailure = false; // true once we see health fail (proves restart happened)
+
+  // Recover old version from sessionStorage (saved before starting update)
+  var oldVersion = sessionStorage.getItem('rick_ota_old_version') || null;
 
   // Signal the WebSocket auth_ok handler to auto-reload on reconnect.
   // This is the primary recovery path when the container swaps and the WS
   // reconnects before the health poll succeeds.
   deployInProgress = true;
+
+  // Save expected version so the post-reload handler can verify it
+  if (expectedVersion) {
+    sessionStorage.setItem('rick_ota_expected_version', expectedVersion);
+  }
 
   var interval = setInterval(function() {
     if (done) return;
@@ -5973,42 +6025,46 @@ function waitForRestart(expectedVersion) {
         // WhatsApp/pgvector are optional and do NOT gate health status.
         if (data.status !== 'ok') return;
 
-        // If we know the expected version, verify the new container is actually
-        // running that version before reloading. The .rick-version file may not
-        // be written yet even though /health already returns OK.
-        if (expectedVersion) {
-          var vToken = getAuthToken();
-          fetch('/api/version?token=' + encodeURIComponent(vToken), { signal: AbortSignal.timeout(3000) })
-            .then(function(vr) { return vr.json(); })
-            .then(function(vData) {
-              if (done) return;
-              var installedSha = vData && vData.current && vData.current.sha;
-              if (!installedSha || installedSha === 'unknown') return; // not ready yet
-              // expectedVersion may be a short SHA prefix — compare with startsWith
-              if (installedSha.indexOf(expectedVersion) === 0 || expectedVersion.indexOf(installedSha) === 0) {
-                done = true;
-                deployInProgress = false;
-                clearInterval(interval);
-                codeOpStatus('Atualizacao instalada! Recarregando...', { success: true, progress: 100 });
-                sessionStorage.setItem('rick_ota_reopen_settings', '1');
-                setTimeout(function() { location.reload(); }, 1500);
-              }
-              // else: version doesn't match yet, keep polling
-            })
-            .catch(function() { /* version endpoint not ready yet, keep polling */ });
-          return;
-        }
+        // Always check the version to ensure we reload to the NEW container,
+        // not the OLD one that's still responding during the swap window.
+        var vToken = getAuthToken();
+        fetch('/api/version?token=' + encodeURIComponent(vToken), { signal: AbortSignal.timeout(3000) })
+          .then(function(vr) { return vr.json(); })
+          .then(function(vData) {
+            if (done) return;
+            var installedSha = vData && vData.current && vData.current.sha;
+            if (!installedSha || installedSha === 'unknown') return; // not ready yet
 
-        // No expected version — reload as soon as health is OK
-        done = true;
-        deployInProgress = false;
-        clearInterval(interval);
-        codeOpStatus('Atualizacao instalada! Recarregando...', { success: true, progress: 100 });
-        // Remember to reopen settings after reload
-        sessionStorage.setItem('rick_ota_reopen_settings', '1');
-        setTimeout(function() { location.reload(); }, 1500);
+            var versionMatches = false;
+            if (expectedVersion) {
+              // We know the target version — check it matches
+              versionMatches = installedSha.indexOf(expectedVersion) === 0 || expectedVersion.indexOf(installedSha) === 0;
+            } else if (oldVersion) {
+              // We don't know the target, but we know the old version.
+              // Accept any version that is DIFFERENT from the old one.
+              versionMatches = installedSha !== oldVersion && installedSha.indexOf(oldVersion) !== 0 && oldVersion.indexOf(installedSha) !== 0;
+            } else {
+              // Last resort: we don't know old or new version.
+              // Only proceed if we saw at least one health failure (proves the server restarted).
+              versionMatches = sawHealthFailure;
+            }
+
+            if (versionMatches) {
+              done = true;
+              deployInProgress = false;
+              clearInterval(interval);
+              codeOpStatus('Atualizacao instalada! Recarregando...', { success: true, progress: 100 });
+              sessionStorage.setItem('rick_ota_reopen_settings', '1');
+              setTimeout(function() { location.reload(); }, 1500);
+            }
+            // else: version doesn't match yet (old container still responding), keep polling
+          })
+          .catch(function() { /* version endpoint not ready yet, keep polling */ });
       })
-      .catch(function() { /* server still down, keep polling */ });
+      .catch(function() {
+        // Server is down — this proves the restart is happening
+        sawHealthFailure = true;
+      });
   }, 3000);
 }
 
@@ -6039,6 +6095,14 @@ function startInstallUpdate() {
   if (refreshBtn) refreshBtn.disabled = true;
   btn.textContent = 'Instalando...';
   codeOpStatus('Baixando do GitHub...', { spinning: true, progress: 10 });
+
+  // Remember the current version so we can detect a change even if the XHR fails
+  var currentEl = document.getElementById('version-current');
+  var currentVersionText = currentEl ? currentEl.textContent : '';
+  var currentShaMatch = currentVersionText.match(/^([a-f0-9]{7,})/);
+  if (currentShaMatch) {
+    sessionStorage.setItem('rick_ota_old_version', currentShaMatch[1]);
+  }
 
   var token = getAuthToken();
   var xhr = new XMLHttpRequest();
