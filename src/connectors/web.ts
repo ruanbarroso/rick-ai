@@ -1093,6 +1093,26 @@ export class WebConnector implements Connector {
         ? await this.openaiOAuth.isConnected(this.adminUserId)
         : { connected: false };
 
+      // Check edit mode access: GitHub token with write access + at least one AI provider
+      let editAccessOk = false;
+      if (githubToken) {
+        const hasProvider = !!(anthropicConn.connected || openaiConn.connected || anthropicKey || openaiKey || geminiKey);
+        if (hasProvider) {
+          try {
+            const targetRepo = devRepo || "ruanbarroso/rick-ai";
+            const ghResp = await fetch(`https://api.github.com/repos/${targetRepo}`, {
+              headers: { Authorization: `token ${githubToken}`, "User-Agent": "Rick-AI-Agent/1.0", Accept: "application/vnd.github.v3+json" },
+              signal: AbortSignal.timeout(8000),
+            });
+            if (ghResp.ok) {
+              const repoInfo = (await ghResp.json()) as Record<string, unknown>;
+              const perms = repoInfo.permissions as { push?: boolean; admin?: boolean } | undefined;
+              editAccessOk = !!(perms?.push || perms?.admin);
+            }
+          } catch { /* network error — assume no access */ }
+        }
+      }
+
       this.send(ws, {
         type: "settings",
         settings: {
@@ -1116,6 +1136,7 @@ export class WebConnector implements Connector {
           webBaseUrl: config.webBaseUrl,
           whatsappConnected: this.whatsappConnector?.isConnected() || false,
           editModeActive: this.agentBridge?.isEditModeActive() || false,
+          editAccessOk,
           dbBackend: isPostgres() ? "postgresql" : "sqlite",
         },
       });

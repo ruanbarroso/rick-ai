@@ -2854,8 +2854,9 @@ sidebarAvatarEl.addEventListener('mouseleave', function() {
   }
 });
 sidebarAvatarEl.addEventListener('click', function() {
-  // No client-side gate — server validates GitHub token write access and
-  // provider availability in cmdStartEdit, returning a clear error message.
+  // Silently ignore if edit access not available (no token, no write access, no provider).
+  // editAccessOk is pre-validated server-side and sent with the settings response.
+  if (!editAccessOk && !editModeActive) return;
   if (!avatarHovering) return;
   avatarClickCount++;
   if (avatarClickTimer) clearTimeout(avatarClickTimer);
@@ -2910,6 +2911,7 @@ var devRepoConfigured = false;
 var oauthConnected = false;
 var providerConnectedForEdit = false;
 var githubTokenConfigured = false;
+var editAccessOk = false;
 var whatsappConnected = false;
 var currentSettings = {};
 var pendingUserCount = 0;
@@ -5231,6 +5233,7 @@ function populateSettings(settings) {
   }
   var ghTokenSet = !!settings.githubTokenSet;
   githubTokenConfigured = ghTokenSet;
+  editAccessOk = !!settings.editAccessOk;
   setStatusBadge('github-token-status', ghTokenSet);
   setApiKeyInputState('setting-github-token', ghTokenSet);
 
@@ -6371,8 +6374,9 @@ function toggleEditModeDirect() {
     showLoadingModal('Desativando...');
     stopEditMode();
   } else {
-    editModeActive = true;
-    applyEditModeVisuals(true);
+    // Don't switch UI yet — wait for server confirmation via edit_mode message.
+    // If validation fails (no token, no write access, no provider), the server
+    // returns an error without sending edit_mode, so the UI stays unchanged.
     showLoadingModal('Ativando...');
     startEditMode();
   }
