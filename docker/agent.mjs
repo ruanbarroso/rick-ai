@@ -196,6 +196,7 @@ async function callGemini(contents) {
   const res = await fetch(`${BASE}:generateContent?key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
       contents,
       tools: geminiTools,
@@ -279,6 +280,7 @@ async function runOpenAILoop(userText) {
   for (let iter = 0; iter < MAX_ITER; iter++) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
+      signal: AbortSignal.timeout(120_000),
       headers: {
         "Content-Type": "application/json",
         Authorization: authHeader,
@@ -344,6 +346,7 @@ async function runClaudeLoop(userText) {
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
+      signal: AbortSignal.timeout(120_000),
       headers,
       body: JSON.stringify({
         model: "claude-opus-4-6",
