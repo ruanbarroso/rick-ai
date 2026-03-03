@@ -1,6 +1,6 @@
 import { execFile, spawn, ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +42,32 @@ function hashString(str: string): number {
 export function getSessionRickName(sessionId: string): string {
   const suffix = VARIANT_SUFFIXES[hashString(sessionId) % VARIANT_SUFFIXES.length];
   return `${config.agentName} ${suffix}`;
+}
+
+/**
+ * Generate a deterministic public token for a user's sessions dashboard.
+ * Token = first 16 hex chars of SHA-256("rick-sessions-" + userId).
+ * No DB storage needed — token can be recomputed from user ID at any time.
+ */
+export function getUserSessionsToken(userId: number): string {
+  return createHash("sha256").update("rick-sessions-" + userId).digest("hex").substring(0, 16);
+}
+
+/**
+ * Resolve a sessions dashboard token back to a user ID.
+ * Brute-forces user IDs 1..maxId since the token space is small and deterministic.
+ * Returns null if no matching user found.
+ */
+export async function resolveSessionsToken(token: string): Promise<number | null> {
+  // Query all distinct user IDs that have sessions, then check token match
+  const result = await query(
+    `SELECT DISTINCT user_id FROM sub_agent_sessions ORDER BY user_id`,
+  );
+  for (const row of result.rows) {
+    const uid = row.user_id as number;
+    if (getUserSessionsToken(uid) === token) return uid;
+  }
+  return null;
 }
 
 /** Callback for broadcasting messages to public session subscribers (WebSocket viewers). */

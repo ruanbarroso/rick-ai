@@ -9,6 +9,7 @@ import { config } from "./config/env.js";
 import { configGet } from "./memory/config-store.js";
 import { verifyAgentToken, type AgentTokenPayload } from "./subagent/agent-token.js";
 import { isSensitiveCategory } from "./memory/crypto.js";
+import { resolveSessionsToken } from "./subagent/session-manager.js";
 import type { MemoryService } from "./memory/memory-service.js";
 import type { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
@@ -58,6 +59,7 @@ export function isHealthy(): boolean {
 /** Cached HTML files (loaded once at first request) */
 let cachedHtml: string | null = null;
 let cachedSessionHtml: string | null = null;
+let cachedSessionsListHtml: string | null = null;
 
 async function loadHtml(filename: string): Promise<string | null> {
   const paths = [
@@ -94,6 +96,16 @@ async function getSessionViewerHtml(): Promise<string> {
     return "<html><body><h1>Session viewer not found</h1></body></html>";
   }
   return cachedSessionHtml;
+}
+
+async function getSessionsListHtml(): Promise<string> {
+  if (cachedSessionsListHtml) return cachedSessionsListHtml;
+  cachedSessionsListHtml = await loadHtml("sessions-list.html");
+  if (!cachedSessionsListHtml) {
+    logger.error("sessions-list.html not found");
+    return "<html><body><h1>Sessions list not found</h1></body></html>";
+  }
+  return cachedSessionsListHtml;
 }
 
 /**
@@ -161,6 +173,24 @@ export function startHealthServer(port: number): void {
         "Cache-Control": "no-cache",
       });
       res.end(html);
+      return;
+    }
+
+    // Public sessions dashboard: /u/:token
+    if (req.url?.startsWith("/u/") && req.method === "GET") {
+      const html = await getSessionsListHtml();
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
+      });
+      res.end(html);
+      return;
+    }
+
+    // Public sessions API: /api/sessions/:token
+    const sessionsApiMatch = req.url?.match(/^\/api\/sessions\/([a-f0-9]{16})$/);
+    if (sessionsApiMatch && req.method === "GET") {
+      await handlePublicSessionsApi(sessionsApiMatch[1], res);
       return;
     }
 
@@ -604,6 +634,62 @@ async function handleAgentApiPost(
     jsonResponse(res, 404, { error: "Endpoint nao encontrado" });
   } catch (err) {
     logger.error({ err, path, sessionId: session.sessionId }, "Agent API POST request failed");
+    jsonResponse(res, 500, { error: "Erro interno" });
+  }
+}
+
+// ==================== PUBLIC SESSIONS DASHBOARD API ====================
+
+/**
+ * GET /api/sessions/:token — Public API for sessions dashboard.
+ * Resolves the deterministic token to a user_id, then returns all sessions
+ * with their last user-message timestamp for ordering.
+ */
+async function handlePublicSessionsApi(token: string, res: ServerResponse): Promise<void> {
+  try {
+    const userId = await resolveSessionsToken(token);
+    if (!userId) {
+      jsonResponse(res, 404, { error: "Token invalido" });
+      return;
+    }
+
+    const result = await query(
+      `SELECT
+         s.id,
+         s.task,
+         s.status,
+         s.started_at,
+         s.ended_at,
+         s.connector_name,
+         MAX(CASE WHEN m.role = 'user' THEN m.created_at END) AS last_user_message,
+         MAX(m.created_at) AS last_message_at
+       FROM sub_agent_sessions s
+       LEFT JOIN session_messages m ON m.session_id = s.id
+       WHERE s.user_id = $1
+       GROUP BY s.id, s.task, s.status, s.started_at, s.ended_at, s.connector_name
+       ORDER BY COALESCE(MAX(m.created_at), s.started_at) DESC
+       LIMIT 100`,
+      [userId],
+    );
+
+    const sessions = result.rows.map((r: any) => ({
+      id: r.id,
+      task: r.task,
+      status: r.status,
+      startedAt: r.started_at,
+      endedAt: r.ended_at,
+      connectorName: r.connector_name,
+      lastUserMessage: r.last_user_message,
+      lastMessageAt: r.last_message_at,
+    }));
+
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-cache",
+    });
+    res.end(JSON.stringify({ agentName: config.agentName, sessions }));
+  } catch (err) {
+    logger.error({ err, token }, "Failed to serve public sessions API");
     jsonResponse(res, 500, { error: "Erro interno" });
   }
 }

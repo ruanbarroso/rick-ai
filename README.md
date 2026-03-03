@@ -150,6 +150,7 @@ The Web UI (`https://rick.barroso.tec.br`) provides a full browser-based interfa
 - **User management**: View pending/active/blocked users, assign roles (dev/business), block/unblock, view user profiles, conversation history, and sub-agent sessions. Pending user badge with real-time count updates.
 - **Sub-agent sessions**: View active sessions, send follow-up messages, kill sessions, view session history
 - **Public session viewer**: Shareable link (`/s/:sessionId`) for real-time sub-agent output
+- **Public sessions dashboard**: Per-user sessions list (`/u/:token`) with all sessions ordered by last activity, linking to individual session viewers
 - **Settings panel**: View/edit API keys, database URLs, agent config — all persisted via config store
 - **OAuth management**: Connect/disconnect Claude and GPT directly from the web
 - **WhatsApp management**: View QR code, disconnect/reconnect WhatsApp
@@ -201,6 +202,8 @@ Sub-agent sessions have a lifecycle: `starting` → `running` → `waiting_user`
 | `/health` | GET | None | Health check (JSON: status, uptime, WhatsApp/Postgres/pgvector) |
 | `/` | GET | None | Web UI (single HTML page) |
 | `/s/:sessionId` | GET | None | Public sub-agent session viewer |
+| `/u/:token` | GET | None | Public sessions dashboard (per-user, deterministic token) |
+| `/api/sessions/:token` | GET | None | Sessions list API (returns JSON with user's sessions) |
 | `/audio/:id` | GET | None | Serve stored audio blob |
 | `/img/:id` | GET | None | Serve stored image blob |
 | `/api/version` | GET | Token | Current version vs GitHub latest |
@@ -256,7 +259,8 @@ rick-ai/
 │   │   ├── whatsapp.ts                # WhatsApp connector (Baileys v7, self-chat, polls, media)
 │   │   ├── web.ts                     # Web UI connector (WebSocket, settings, sessions, OAuth)
 │   │   ├── web-ui.html                # Web UI frontend (single HTML file)
-│   │   └── session-viewer.html        # Public sub-agent session viewer page
+│   │   ├── session-viewer.html        # Public sub-agent session viewer page
+│   │   └── sessions-list.html        # Public sessions dashboard (per-user)
 │   ├── llm/
 │   │   ├── llm-service.ts             # Provider abstraction + model switching
 │   │   ├── types.ts                   # Model registry + shared types
@@ -395,7 +399,8 @@ audio_blobs (id, data BYTEA, mime_type, created_at)
   -- Stores both audio and image binary data
 session_messages (id, session_id, user_id, role, content, created_at)
   -- Sub-agent conversation history (preserved after kill for admin audit)
-sub_agent_sessions (id, user_id, task, status, started_at, ended_at)
+sub_agent_sessions (id, user_id, task, status, started_at, ended_at,
+                    connector_name, user_external_id)
   -- Persisted session audit trail
 config_store (key, value, updated_at)
   -- Runtime config persistence (API keys, settings from Web UI)

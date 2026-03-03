@@ -7,7 +7,7 @@ import { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { ClaudeOAuthService } from "./auth/claude-oauth.js";
 import { OpenAIOAuthService } from "./auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
-import { SessionManager, getSessionRickName } from "./subagent/session-manager.js";
+import { SessionManager, getSessionRickName, getUserSessionsToken } from "./subagent/session-manager.js";
 import { EditSession, AuthExpiredCallback, GetFreshTokenCallback, SaveHistoryFn } from "./subagent/edit-session.js";
 import { classifyTask } from "./subagent/classifier.js";
 import { PendingDelegation } from "./subagent/types.js";
@@ -574,8 +574,9 @@ export class Agent {
     const rickName = getSessionRickName(session.id);
     const baseUrl = config.webBaseUrl;
     let ack: string;
-    if (baseUrl) {
-      const sessionUrl = `${baseUrl}/s/${session.id}`;
+    if (baseUrl && userId) {
+      const userToken = getUserSessionsToken(userId);
+      const sessionUrl = `${baseUrl}/u/${userToken}#${session.id}`;
       ack = `O *${rickName}* vai cuidar disso pra voce, pode acompanhar aqui:\n${sessionUrl}`;
     } else {
       ack = `O *${rickName}* vai cuidar disso pra voce. Aguarde o resultado.`;
@@ -2138,8 +2139,9 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         const rickName = getSessionRickName(session.id);
         const baseUrl = config.webBaseUrl;
         let ack: string;
-        if (baseUrl) {
-          const sessionUrl = `${baseUrl}/s/${session.id}`;
+        if (baseUrl && numUserId) {
+          const userToken = getUserSessionsToken(numUserId);
+          const sessionUrl = `${baseUrl}/u/${userToken}#${session.id}`;
           ack = `Sessao *${rickName}* aberta e aguardando sua primeira tarefa:\n${sessionUrl}`;
         } else {
           ack = `Sessao *${rickName}* aberta e aguardando sua primeira tarefa.`;
