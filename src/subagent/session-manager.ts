@@ -226,16 +226,32 @@ export class SessionManager {
       "inspect", "--format",
       "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}",
       hostname,
-    ]).then(({ stdout }) => {
+    ]).then(async ({ stdout }) => {
       const net = stdout.trim();
       if (net && net !== "bridge" && net !== "host") {
         this.resolvedNetwork = net;
-        this.resolvedApiHost = hostname;
-        logger.info({ network: net, apiHost: hostname }, "Sub-agents will use main container's Docker network");
+        let apiHost = hostname;
+        try {
+          const { stdout: nameOut } = await execFileAsync("docker", [
+            "inspect", "--format", "{{.Name}}", hostname,
+          ]);
+          const containerName = nameOut.trim().replace(/^\//, "");
+          if (containerName) apiHost = containerName;
+        } catch {
+          // Fallback to hostname (container id) when name lookup fails.
+        }
+
+        this.resolvedApiHost = apiHost;
+        logger.info({ network: net, apiHost }, "Sub-agents will use main container's Docker network");
       }
     }).catch(() => {
       // Not running in Docker or inspect failed — sub-agents will use default bridge
     });
+  }
+
+  private getCurrentApiUrl(): string {
+    const apiHost = this.resolvedApiHost ?? "host.docker.internal";
+    return `http://${apiHost}:${config.webPort}`;
   }
 
   setSessionMessageCallback(cb: SessionMessageCallback): void {
@@ -804,8 +820,7 @@ export class SessionManager {
     const token = createAgentToken(session.id, session.userId, 86400, session.numericUserId ?? undefined); // 24h TTL matches container lifetime
     // When running inside Docker on a custom network, use the container hostname
     // so sub-agents on the same network can reach us. Fall back to host.docker.internal.
-    const apiHost = this.resolvedApiHost ?? "host.docker.internal";
-    const apiUrl = `http://${apiHost}:${config.webPort}`;
+    const apiUrl = this.getCurrentApiUrl();
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
 
@@ -1047,8 +1062,9 @@ export class SessionManager {
       86400, // 24h TTL
       session.numericUserId ?? undefined
     );
-    logger.info({ sessionId: session.id }, "Injecting fresh JWT token into recovered session");
-    this.sendToAgentProcess(session.id, { type: "update_token", token });
+    const apiUrl = this.getCurrentApiUrl();
+    logger.info({ sessionId: session.id, apiUrl }, "Injecting fresh JWT token into recovered session");
+    this.sendToAgentProcess(session.id, { type: "update_token", token, apiUrl });
   }
 
   /**

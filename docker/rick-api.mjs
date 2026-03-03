@@ -25,14 +25,17 @@ export const MAX_TIMEOUT_RETRIES = 1;
 // ── Rick API client ─────────────────────────────────────────────────────────
 
 /**
- * Get the current session token. Reads from process.env every time because
- * it can be updated at runtime via the update_token message (recovered sessions).
+ * Get current auth/runtime values from process.env.
+ * They are read per request because recovered sessions can receive update_token
+ * messages that refresh token and API URL at runtime.
  */
 function getRickSessionToken() {
   return process.env.RICK_SESSION_TOKEN || "";
 }
 
-const RICK_API_URL = process.env.RICK_API_URL || "";
+function getRickApiUrl() {
+  return process.env.RICK_API_URL || "";
+}
 
 /**
  * HTTP GET to the Rick host API.
@@ -43,12 +46,13 @@ const RICK_API_URL = process.env.RICK_API_URL || "";
  */
 export async function rickApiGet(path, { silent = false, emitStatus } = {}) {
   const token = getRickSessionToken();
-  if (!RICK_API_URL || !token) {
+  const apiUrl = getRickApiUrl();
+  if (!apiUrl || !token) {
     if (!silent && emitStatus) emitStatus("rick_memory/rick_search indisponivel: RICK_API_URL ou RICK_SESSION_TOKEN nao configurado");
     return null;
   }
   try {
-    const res = await fetch(`${RICK_API_URL}${path}`, {
+    const res = await fetch(`${apiUrl}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(RICK_API_TIMEOUT_MS),
     });
@@ -70,11 +74,12 @@ export async function rickApiGet(path, { silent = false, emitStatus } = {}) {
  */
 export async function rickApiPost(path, body) {
   const token = getRickSessionToken();
-  if (!RICK_API_URL || !token) {
+  const apiUrl = getRickApiUrl();
+  if (!apiUrl || !token) {
     return { error: "RICK_API_URL ou RICK_SESSION_TOKEN nao configurado" };
   }
   try {
-    const res = await fetch(`${RICK_API_URL}${path}`, {
+    const res = await fetch(`${apiUrl}${path}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
