@@ -27,6 +27,8 @@ RUN npm run build
 # Copy non-TS assets into dist (tsc only compiles .ts files)
 RUN cp src/connectors/web-ui.html dist/connectors/web-ui.html
 RUN cp src/connectors/session-viewer.html dist/connectors/session-viewer.html
+RUN cp src/connectors/sessions-list.html dist/connectors/sessions-list.html
+RUN cp src/connectors/main-session-viewer.html dist/connectors/main-session-viewer.html
 RUN cp -r src/connectors/static dist/connectors/static
 
 # Cleanup dev deps
