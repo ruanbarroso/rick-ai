@@ -54,6 +54,15 @@ export class Agent {
 
   /** Reference to web bridge for sending transcription events etc. */
   private webBridge: WebAgentBridge | null = null;
+  /** Callback for broadcasting main-session messages to public viewers */
+  private mainSessionCallback: ((userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void) | null = null;
+
+  /** Notify main session viewers of a new message (fire-and-forget). */
+  private notifyMainViewers(userId: number, role: string, text: string, messageType?: string, connectorName?: string): void {
+    if (this.mainSessionCallback) {
+      try { this.mainSessionCallback(userId, role, text, messageType, connectorName); } catch {}
+    }
+  }
 
   constructor(
     llm: LLMService,
@@ -381,7 +390,7 @@ export class Agent {
       } else if (!routingMedia && imageMedias && imageMedias.length > 0) {
         allMedia = imageMedias.length === 1 ? imageMedias[0] : imageMedias;
       }
-      return this.handleSimpleChat(userPhone, user.displayName, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, user.id);
+      return this.handleSimpleChat(userPhone, user.displayName, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, user.id, connectorName);
     } finally {
       await this.connectorManager.setTyping(connectorName, userPhone, false);
     }
@@ -399,7 +408,8 @@ export class Agent {
     imageUrls?: string[],
     fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
     userRole: UserRole = "admin",
-    userId?: number
+    userId?: number,
+    connectorName?: string
   ): Promise<string> {
     // RBAC: Use global memory context with role-based filtering
     const memoryContext = await this.memory.buildGlobalMemoryContext(userRole);
@@ -422,7 +432,8 @@ export class Agent {
     ];
 
     // Save user message BEFORE the LLM call so it persists even if the call fails/crashes
-    await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
+    this.notifyMainViewers(userId!, "user", text, "text", connectorName);
 
     let response;
     try {
@@ -432,7 +443,8 @@ export class Agent {
       return `Erro no Gemini: ${err.message?.substring(0, 200) || "erro desconhecido"}.\nTente novamente em alguns segundos.`;
     }
 
-    await this.memory.saveMessageByUserId(userId!, "assistant", response.content, response.model, response.tokensUsed);
+    await this.memory.saveMessageByUserId(userId!, "assistant", response.content, response.model, response.tokensUsed, undefined, undefined, undefined, undefined, connectorName);
+    this.notifyMainViewers(userId!, "agent", response.content, "text", connectorName);
 
     // RBAC: Only extract memories and embed if user role allows learning
     if (canLearn(userRole)) {
@@ -566,7 +578,8 @@ export class Agent {
       };
 
       const missingList = missing.map((m) => `*${m}*`).join(", ");
-      await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+      await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
+      this.notifyMainViewers(userId!, "user", userMessage, "text", connectorName);
       return `Vou precisar de credenciais para ${missingList} pra fazer isso.\n\nMe manda as credenciais de *${missing[0]}* (usuario, senha, token, o que for necessario).`;
     }
 
@@ -574,7 +587,8 @@ export class Agent {
       logger.info({ missing, resolved: Object.keys(resolved) }, "Proceeding with partial credentials");
     }
 
-    await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
+    this.notifyMainViewers(userId!, "user", userMessage, "text", connectorName);
 
     // Start the sub-agent container
     let session;
@@ -599,7 +613,8 @@ export class Agent {
       ack = `O *${variantName}* vai cuidar disso pra voce. Aguarde o resultado.`;
     }
 
-    await this.memory.saveMessageByUserId(userId!, "assistant", ack);
+    await this.memory.saveMessageByUserId(userId!, "assistant", ack, undefined, undefined, undefined, undefined, undefined, undefined, connectorName);
+    this.notifyMainViewers(userId!, "agent", ack, "text", connectorName);
 
     return ack;
   }
@@ -828,7 +843,8 @@ export class Agent {
     }
 
     // CASE 2: Continuation — relay to the most recent done session
-    await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
+    this.notifyMainViewers(userId!, "user", text, "text", connectorName);
 
     this.sessionManager.sendToSession(mostRecent.id, text, imageMedias, audioUrl, imageUrls, fileInfos).catch(async (err) => {
       logger.error({ err }, "Sub-agent relay failed");
@@ -2164,8 +2180,29 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         } else {
           ack = `Sessao *${variantName}* aberta e aguardando sua primeira tarefa.`;
         }
-        await this.memory.saveMessageByUserId(numUserId, "assistant", ack);
+        await this.memory.saveMessageByUserId(numUserId, "assistant", ack, undefined, undefined, undefined, undefined, undefined, undefined, "web");
         return ack;
+      },
+
+      getConversationHistoryByUserId: async (userId: number, limit?: number) => {
+        return this.memory.getConversationHistoryByUserId(userId, limit);
+      },
+
+      handleMainViewerMessage: async (numericUserId: number, userExternalId: string, text: string) => {
+        const incoming: IncomingMessage = {
+          connectorName: "main-viewer",
+          userId: userExternalId,
+          numericUserId,
+          text,
+          userRole: "admin",
+          userStatus: "active",
+          skipSubAgentRelay: true,
+        };
+        return this.handleMessage(incoming);
+      },
+
+      setMainSessionCallback: (cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void) => {
+        this.mainSessionCallback = cb;
       },
     };
 

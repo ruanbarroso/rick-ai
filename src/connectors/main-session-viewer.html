@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sessao Principal</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0f1923;
+  --surface: #1a2332;
+  --surface2: #243447;
+  --text: #e1e8ed;
+  --text2: #8899a6;
+  --accent: #1da1f2;
+  --agent: #1e3a4f;
+  --user: #1da1f2;
+  --border: #2d3f50;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+.header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+}
+
+.header-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  background: var(--accent);
+  color: white;
+}
+
+.header-info { flex: 1; min-width: 0; }
+.header-name { font-weight: 600; font-size: 16px; }
+.header-status {
+  font-size: 13px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-dot.running { background: #4ade80; animation: pulse 2s infinite; }
+.status-dot.offline { background: #6b7280; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Messages */
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.message {
+  max-width: 85%;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  word-wrap: break-word;
+  position: relative;
+}
+
+.message.agent {
+  align-self: flex-start;
+  background: var(--agent);
+  border-bottom-left-radius: 4px;
+}
+
+.message.user {
+  align-self: flex-end;
+  background: var(--user);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.message.error {
+  align-self: flex-start;
+  background: rgba(220, 38, 38, 0.15);
+  border: 1px solid rgba(220, 38, 38, 0.4);
+  color: #fca5a5;
+  border-bottom-left-radius: 4px;
+}
+
+.message .time {
+  font-size: 11px;
+  color: rgba(255,255,255,0.45);
+  text-align: right;
+  margin-top: 4px;
+}
+
+.message .connector-tag {
+  font-size: 10px;
+  color: rgba(255,255,255,0.35);
+  margin-top: 2px;
+}
+
+.message code {
+  background: rgba(0,0,0,0.3);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.message pre {
+  background: rgba(0,0,0,0.3);
+  padding: 8px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+/* Compose bar */
+.compose-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.input-area {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.input-area textarea {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-family: inherit;
+  resize: none;
+  outline: none;
+  max-height: 120px;
+  min-height: 42px;
+  line-height: 1.4;
+  transition: border-color 0.2s;
+}
+.input-area textarea:focus { border-color: var(--accent); }
+.input-area textarea::placeholder { color: var(--text2); }
+
+.input-area button {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s, transform 0.1s;
+}
+.input-area button:hover { background: #2563eb; }
+.input-area button:active { transform: scale(0.95); }
+.input-area button svg { width: 20px; height: 20px; fill: currentColor; }
+
+/* Typing indicator */
+.typing-indicator {
+  display: none;
+  align-self: flex-start;
+  padding: 8px 14px;
+  background: var(--agent);
+  border-radius: 12px;
+  border-bottom-left-radius: 4px;
+}
+
+.typing-indicator.visible { display: flex; gap: 4px; }
+
+.typing-indicator span {
+  width: 6px;
+  height: 6px;
+  background: var(--text2);
+  border-radius: 50%;
+  animation: typingBounce 1.4s infinite;
+}
+
+.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+/* Connection banner */
+.connection-bar {
+  display: none;
+  text-align: center;
+  padding: 6px;
+  font-size: 12px;
+  background: #b91c1c;
+  color: white;
+}
+
+.connection-bar.visible { display: block; }
+
+/* Empty state */
+.empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text2);
+  font-size: 15px;
+  text-align: center;
+  padding: 40px;
+}
+
+.empty-state.hidden { display: none; }
+/* Tool-use terminal block — loaded from /static/tool-blocks.css */
+</style>
+<link rel="stylesheet" href="/static/tool-blocks.css">
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon" id="header-icon">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
+  </div>
+  <div class="header-info">
+    <div class="header-name" id="header-name">Carregando...</div>
+    <div class="header-status">
+      <span class="status-dot offline" id="status-dot"></span>
+      <span id="status-text">Conectando...</span>
+    </div>
+  </div>
+</div>
+
+<div class="connection-bar" id="connection-bar">Reconectando...</div>
+
+<div class="messages" id="messages">
+  <div class="empty-state" id="empty-state">Nenhuma mensagem ainda</div>
+  <div class="typing-indicator" id="typing-indicator">
+    <span></span><span></span><span></span>
+  </div>
+</div>
+
+<div class="compose-bar">
+  <div class="input-area" id="input-area">
+    <textarea id="msg-input" rows="1" placeholder="Digite..."
+      onkeydown="handleKeyDown(event)" oninput="autoResize(this)"></textarea>
+    <button id="send-btn" onclick="sendMessage()" title="Enviar">
+      <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+    </button>
+  </div>
+</div>
+
+<script src="/static/tool-blocks.js"></script>
+<script>
+// ==================== STATE ====================
+var token = location.pathname.replace(/^\/m\//, '');
+var ws = null;
+var reconnectAttempts = 0;
+var reconnectTimer = null;
+var sessionName = 'Sessao Principal';
+var pendingUserEcho = false;
+
+document.title = sessionName;
+document.getElementById('header-name').textContent = sessionName;
+
+// ==================== RENDERING ====================
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderText(text) {
+  var s = escapeHtml(text);
+  // Code blocks
+  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+    return '<pre><code>' + code.trim() + '</code></pre>';
+  });
+  // Inline code
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  s = s.replace(/\*([^*]+)\*/g, '<strong>$1</strong>');
+  // Italic
+  s = s.replace(/_([^_]+)_/g, '<em>$1</em>');
+  // Links
+  s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" style="color:#60a5fa">$1</a>');
+  // Newlines
+  s = s.replace(/\n/g, '<br>');
+  return s;
+}
+
+// formatToolLine() and makeToolUseBlock() are loaded from /static/tool-blocks.js
+
+function appendToolLine(text, timeStr) {
+  var empty = document.getElementById('empty-state');
+  if (empty) empty.classList.add('hidden');
+  var container = document.getElementById('messages');
+  var typing = document.getElementById('typing-indicator');
+  var prevEl = typing.previousElementSibling;
+  var block;
+  if (prevEl && prevEl.classList.contains('tool-use-block')) {
+    block = prevEl;
+  } else {
+    block = makeToolUseBlock();
+    container.insertBefore(block, typing);
+  }
+  var body = block.querySelector('.terminal-body');
+  var line = document.createElement('div');
+  line.className = 'terminal-line';
+  line.innerHTML = formatToolLine(text, timeStr);
+  body.appendChild(line);
+  body.scrollTop = body.scrollHeight;
+  container.scrollTop = container.scrollHeight;
+}
+
+// ==================== MESSAGE RENDERING ====================
+
+function appendMessage(text, role, messageType) {
+  if (role === 'system' || messageType === 'system') return;
+
+  if (messageType === 'tool_use') {
+    var ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    appendToolLine(text, ts);
+    return;
+  }
+
+  var empty = document.getElementById('empty-state');
+  if (empty) empty.classList.add('hidden');
+
+  var container = document.getElementById('messages');
+  var typing = document.getElementById('typing-indicator');
+
+  var div = document.createElement('div');
+  var cssClass = messageType === 'error' ? 'error' : (role === 'user' ? 'user' : 'agent');
+  div.className = 'message ' + cssClass;
+  div.innerHTML = renderText(text);
+
+  var time = document.createElement('div');
+  time.className = 'time';
+  time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  div.appendChild(time);
+
+  container.insertBefore(div, typing);
+  container.scrollTop = container.scrollHeight;
+}
+
+function appendHistoryMessage(text, role, timestamp, messageType, connectorName) {
+  if (role === 'system' || messageType === 'system') return;
+
+  var timeStr = (timestamp ? new Date(timestamp) : new Date())
+    .toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  if (messageType === 'tool_use') {
+    appendToolLine(text, timeStr);
+    return;
+  }
+
+  var empty = document.getElementById('empty-state');
+  if (empty) empty.classList.add('hidden');
+
+  var container = document.getElementById('messages');
+  var typing = document.getElementById('typing-indicator');
+
+  var div = document.createElement('div');
+  var cssClass = messageType === 'error' ? 'error' : (role === 'user' ? 'user' : 'agent');
+  div.className = 'message ' + cssClass;
+  div.innerHTML = renderText(text);
+
+  var time = document.createElement('div');
+  time.className = 'time';
+  time.textContent = timeStr;
+  div.appendChild(time);
+
+  // Show connector origin for user messages (whatsapp, web, main-viewer)
+  if (role === 'user' && connectorName && connectorName !== 'main-viewer') {
+    var tag = document.createElement('div');
+    tag.className = 'connector-tag';
+    tag.textContent = 'via ' + connectorName;
+    div.appendChild(tag);
+  }
+
+  container.insertBefore(div, typing);
+}
+
+function setConnected(connected) {
+  var dot = document.getElementById('status-dot');
+  var text = document.getElementById('status-text');
+  dot.className = 'status-dot ' + (connected ? 'running' : 'offline');
+  text.textContent = connected ? 'Online' : 'Conectando...';
+}
+
+// ==================== WEBSOCKET ====================
+function connect() {
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var url = proto + '//' + location.host + '/ws/main?t=' + encodeURIComponent(token);
+
+  ws = new WebSocket(url);
+
+  ws.onopen = function() {
+    reconnectAttempts = 0;
+    document.getElementById('connection-bar').classList.remove('visible');
+    setConnected(true);
+  };
+
+  ws.onmessage = function(event) {
+    var msg = JSON.parse(event.data);
+
+    switch (msg.type) {
+      case 'message':
+        // Skip echo for user messages already shown locally by sendMessage()
+        if (msg.role === 'user' && pendingUserEcho) {
+          pendingUserEcho = false;
+          break;
+        }
+        appendMessage(msg.text, msg.role, msg.messageType);
+        break;
+
+      case 'session_history':
+        // Clear existing messages to avoid duplicates on reconnect
+        var container = document.getElementById('messages');
+        var typing = document.getElementById('typing-indicator');
+        while (container.firstChild && container.firstChild !== typing) {
+          container.removeChild(container.firstChild);
+        }
+        var existingTools = document.querySelectorAll('.tool-block');
+        for (var t = 0; t < existingTools.length; t++) {
+          existingTools[t].parentNode.removeChild(existingTools[t]);
+        }
+        var empty = document.getElementById('empty-state');
+        if (empty) empty.classList.remove('hidden');
+
+        var msgs = msg.messages || [];
+        for (var i = 0; i < msgs.length; i++) {
+          appendHistoryMessage(
+            msgs[i].content, msgs[i].role, msgs[i].created_at,
+            msgs[i].message_type, msgs[i].connector_name
+          );
+        }
+        container.scrollTop = container.scrollHeight;
+        break;
+
+      case 'session_info':
+        if (msg.session) {
+          if (msg.session.variantName) {
+            sessionName = msg.session.variantName;
+          } else if (msg.session.agentName) {
+            sessionName = msg.session.agentName;
+          }
+          document.getElementById('header-name').textContent = sessionName;
+          document.title = sessionName;
+          setConnected(true);
+        }
+        break;
+
+      case 'error':
+        appendMessage(msg.text || 'Erro desconhecido', 'agent', 'error');
+        break;
+    }
+  };
+
+  ws.onclose = function() {
+    setConnected(false);
+    scheduleReconnect();
+  };
+
+  ws.onerror = function() {};
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectAttempts++;
+  var delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+  document.getElementById('connection-bar').classList.add('visible');
+  document.getElementById('connection-bar').textContent = 'Reconectando...';
+  reconnectTimer = setTimeout(function() {
+    reconnectTimer = null;
+    connect();
+  }, delay);
+}
+
+// ==================== INPUT ====================
+
+function handleKeyDown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function sendMessage() {
+  var input = document.getElementById('msg-input');
+  var text = input.value.trim();
+
+  if (!text) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  pendingUserEcho = true;
+  appendMessage(text, 'user');
+
+  ws.send(JSON.stringify({ type: 'message', text: text }));
+
+  input.value = '';
+  autoResize(input);
+  input.focus();
+}
+
+// ==================== INIT ====================
+connect();
+</script>
+</body>
+</html>

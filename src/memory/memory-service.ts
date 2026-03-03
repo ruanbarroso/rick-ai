@@ -42,6 +42,7 @@ export interface ConversationMessage {
   audio_url?: string;
   image_urls?: string[];
   file_infos?: FileInfo[];
+  connector_name?: string;
 }
 
 export class MemoryService {
@@ -290,14 +291,15 @@ export class MemoryService {
     audioUrl?: string,
     imageUrls?: string[],
     messageType?: "text" | "tool_use",
-    fileInfos?: FileInfo[]
+    fileInfos?: FileInfo[],
+    connectorName?: string
   ): Promise<void> {
     const imageUrlValue = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
     const fileInfosValue = fileInfos && fileInfos.length > 0 ? JSON.stringify(fileInfos) : null;
     await query(
-      `INSERT INTO conversations (user_id, role, content, model_used, tokens_used, audio_url, image_url, message_type, file_infos)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [userId, role, content, modelUsed || null, tokensUsed || null, audioUrl || null, imageUrlValue, messageType || "text", fileInfosValue]
+      `INSERT INTO conversations (user_id, role, content, model_used, tokens_used, audio_url, image_url, message_type, file_infos, connector_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [userId, role, content, modelUsed || null, tokensUsed || null, audioUrl || null, imageUrlValue, messageType || "text", fileInfosValue, connectorName || null]
     );
 
     this.saveCounter++;
@@ -329,7 +331,7 @@ export class MemoryService {
   ): Promise<ConversationMessage[]> {
     const maxMessages = limit || config.conversationHistoryLimit;
     const result = await query(
-      `SELECT role, content, created_at, audio_url, image_url, message_type, file_infos FROM conversations
+      `SELECT role, content, created_at, audio_url, image_url, message_type, file_infos, connector_name FROM conversations
        WHERE user_id = $1
        ORDER BY created_at DESC
        LIMIT $2`,
@@ -338,6 +340,7 @@ export class MemoryService {
     return result.rows.reverse().map((row: any) => {
       const msg: ConversationMessage = { role: row.role, content: row.content };
       if (row.created_at) msg.created_at = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
+      if (row.connector_name) msg.connector_name = row.connector_name;
       if (row.message_type) msg.message_type = row.message_type;
       if (row.audio_url) msg.audio_url = row.audio_url;
       if (row.image_url) {

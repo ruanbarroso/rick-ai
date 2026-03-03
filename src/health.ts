@@ -60,6 +60,7 @@ export function isHealthy(): boolean {
 let cachedHtml: string | null = null;
 let cachedSessionHtml: string | null = null;
 let cachedSessionsListHtml: string | null = null;
+let cachedMainSessionHtml: string | null = null;
 
 async function loadHtml(filename: string): Promise<string | null> {
   const paths = [
@@ -106,6 +107,16 @@ async function getSessionsListHtml(): Promise<string> {
     return "<html><body><h1>Sessions list not found</h1></body></html>";
   }
   return cachedSessionsListHtml;
+}
+
+async function getMainSessionViewerHtml(): Promise<string> {
+  if (cachedMainSessionHtml) return cachedMainSessionHtml;
+  cachedMainSessionHtml = await loadHtml("main-session-viewer.html");
+  if (!cachedMainSessionHtml) {
+    logger.error("main-session-viewer.html not found");
+    return "<html><body><h1>Main session viewer not found</h1></body></html>";
+  }
+  return cachedMainSessionHtml;
 }
 
 /**
@@ -188,6 +199,17 @@ export function startHealthServer(port: number): void {
     // Public sessions dashboard: /u/:token
     if (req.url?.startsWith("/u/") && req.method === "GET") {
       const html = await getSessionsListHtml();
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
+      });
+      res.end(html);
+      return;
+    }
+
+    // Public main session viewer: /m/:token
+    if (req.url?.startsWith("/m/") && req.method === "GET") {
+      const html = await getMainSessionViewerHtml();
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-cache",

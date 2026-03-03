@@ -283,6 +283,16 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE sub_agent_sessions ADD COLUMN IF NOT EXISTS variant_name VARCHAR(255)`,
     ],
   },
+
+  {
+    name: "015_conversation_connector_name",
+    statements: [
+      // Track which connector (whatsapp, web, main-viewer) each message came from.
+      // Used for routing: if last user message was from WhatsApp, agent response
+      // is also sent to WhatsApp; if from web, response stays web-only.
+      `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS connector_name VARCHAR(50)`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {

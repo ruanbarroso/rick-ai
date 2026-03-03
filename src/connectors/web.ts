@@ -16,6 +16,7 @@ import { ClaudeOAuthService } from "../auth/claude-oauth.js";
 import { OpenAIOAuthService } from "../auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "../auth/oauth-singleton.js";
 import { GeminiProvider } from "../llm/providers/gemini.js";
+import { resolveSessionsToken, getMainSessionName } from "../subagent/session-manager.js";
 
 /**
  * Web UI connector using WebSocket on the shared HTTP server.
@@ -70,6 +71,12 @@ export interface WebAgentBridge {
   clearConversation(userPhone: string, numericUserId?: number): Promise<void>;
   /** Create a blank sub-agent session (no initial task) and return the ack message */
   createBlankSubAgentSession(connectorName: string, userId: string): Promise<string>;
+  /** Get conversation history for a user by numeric ID (for main session viewer) */
+  getConversationHistoryByUserId(userId: number, limit?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string; connector_name?: string }>>;
+  /** Handle an incoming message from the main session viewer */
+  handleMainViewerMessage(numericUserId: number, userExternalId: string, text: string): Promise<string>;
+  /** Register callback for broadcasting main-session messages to public viewers */
+  setMainSessionCallback(cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void): void;
 }
 
 export class WebConnector implements Connector {
@@ -85,8 +92,12 @@ export class WebConnector implements Connector {
   private wss: WebSocketServer | null = null;
   /** Public session WebSocket server (no auth, for /s/:id viewers) */
   private sessionWss: WebSocketServer | null = null;
+  /** Public main-session WebSocket server (token-auth, for /m/:token viewers) */
+  private mainWss: WebSocketServer | null = null;
   /** Public session WebSocket subscribers: sessionId → Set<WebSocket> */
   private sessionSubscribers = new Map<string, Set<WebSocket>>();
+  /** Main session viewer subscribers: userId → Set<WebSocket> */
+  private mainViewerSubscribers = new Map<number, Set<WebSocket>>();
   private clients = new Map<WebSocket, AuthenticatedClient>();
   private whatsappConnector: WhatsAppConnector | null = null;
   private agentBridge: WebAgentBridge | null = null;
@@ -133,6 +144,10 @@ export class WebConnector implements Connector {
    */
   setAgentBridge(bridge: WebAgentBridge): void {
     this.agentBridge = bridge;
+    // Register callback so main-session viewers get real-time updates
+    bridge.setMainSessionCallback((userId, role, text, messageType, connectorName) => {
+      this.broadcastToMainViewers(userId, role, text, messageType);
+    });
   }
 
   /**
@@ -179,6 +194,7 @@ export class WebConnector implements Connector {
 
     this.wss = new WebSocketServer({ noServer: true });
     this.sessionWss = new WebSocketServer({ noServer: true });
+    this.mainWss = new WebSocketServer({ noServer: true });
 
     httpServer.on("upgrade", (request: IncomingMessage, socket, head) => {
       if (request.url === "/ws") {
@@ -191,6 +207,13 @@ export class WebConnector implements Connector {
       if (request.url?.startsWith("/ws/session")) {
         this.sessionWss!.handleUpgrade(request, socket, head, (ws) => {
           this.sessionWss!.emit("connection", ws, request);
+        });
+        return;
+      }
+      // Public main session WebSocket: /ws/main?t=<token>
+      if (request.url?.startsWith("/ws/main")) {
+        this.mainWss!.handleUpgrade(request, socket, head, (ws) => {
+          this.mainWss!.emit("connection", ws, request);
         });
         return;
       }
@@ -491,6 +514,105 @@ export class WebConnector implements Connector {
           subs.delete(ws);
           if (subs.size === 0) this.sessionSubscribers.delete(sessionId);
         }
+      });
+    });
+
+    // ==================== Public main session WebSocket ====================
+    this.mainWss.on("connection", (ws: WebSocket, request: IncomingMessage) => {
+      const url = new URL(request.url || "", "http://localhost");
+      const token = url.searchParams.get("t") || "";
+
+      if (!token) {
+        ws.close(4000, "Missing token");
+        return;
+      }
+
+      // Resolve token → userId asynchronously
+      resolveSessionsToken(token).then(async (userId) => {
+        if (!userId) {
+          ws.send(JSON.stringify({ type: "error", text: "Token invalido" }));
+          ws.close(4001, "Invalid token");
+          return;
+        }
+
+        // Subscribe this WebSocket to the user's main session
+        if (!this.mainViewerSubscribers.has(userId)) {
+          this.mainViewerSubscribers.set(userId, new Set());
+        }
+        this.mainViewerSubscribers.get(userId)!.add(ws);
+
+        logger.info({ userId, subscribers: this.mainViewerSubscribers.get(userId)!.size }, "Main session viewer connected");
+
+        // Send session info
+        const mainName = getMainSessionName();
+        ws.send(JSON.stringify({ type: "session_info", session: { id: "main", state: "running", variantName: mainName, agentName: config.agentName } }));
+
+        // Send conversation history
+        if (this.agentBridge) {
+          try {
+            const history = await this.agentBridge.getConversationHistoryByUserId(userId, 200);
+            ws.send(JSON.stringify({ type: "session_history", messages: history }));
+          } catch (err) {
+            logger.warn({ err, userId }, "Failed to load main session history");
+          }
+        }
+
+        // Handle messages from main session viewer
+        ws.on("message", async (data: Buffer | string) => {
+          try {
+            const raw = typeof data === "string" ? data : data.toString("utf-8");
+            const msg = JSON.parse(raw);
+
+            if (msg.type === "message" && this.agentBridge && msg.text) {
+              // Process message through the agent.
+              // The agent's notifyMainViewers callback handles broadcasting
+              // both the user echo and agent response to all viewers.
+              try {
+                // Get user's external ID for routing
+                const userRow = await query(`SELECT phone FROM users WHERE id = $1`, [userId]);
+                const userExternalId = userRow.rows[0]?.phone || String(userId);
+
+                const response = await this.agentBridge.handleMainViewerMessage(userId, userExternalId, msg.text);
+
+                // If last user message (before this one) was from WhatsApp,
+                // also relay the agent response to WhatsApp
+                if (response) {
+                  const lastUserMsg = await this.getLastUserMessageConnector(userId);
+                  if (lastUserMsg === "whatsapp") {
+                    this.manager.sendMessage("whatsapp", userExternalId, response).catch((err) => {
+                      logger.warn({ err, userId }, "Failed to relay main-viewer response to WhatsApp");
+                    });
+                  }
+                }
+              } catch (err) {
+                logger.error({ err, userId }, "Failed to handle main viewer message");
+                this.broadcastToMainViewers(userId, "agent", `Erro: ${(err as Error).message}`);
+              }
+            }
+          } catch (err) {
+            logger.warn({ err, userId }, "Error processing main viewer message");
+          }
+        });
+
+        ws.on("close", () => {
+          const subs = this.mainViewerSubscribers.get(userId);
+          if (subs) {
+            subs.delete(ws);
+            if (subs.size === 0) this.mainViewerSubscribers.delete(userId);
+          }
+          logger.info({ userId }, "Main session viewer disconnected");
+        });
+
+        ws.on("error", () => {
+          const subs = this.mainViewerSubscribers.get(userId);
+          if (subs) {
+            subs.delete(ws);
+            if (subs.size === 0) this.mainViewerSubscribers.delete(userId);
+          }
+        });
+      }).catch((err) => {
+        logger.warn({ err }, "Failed to resolve main session token");
+        ws.close(4002, "Token resolution failed");
       });
     });
 
@@ -1102,6 +1224,41 @@ export class WebConnector implements Connector {
    */
   broadcastToSessionSubscribers(sessionId: string, role: string, text: string, messageType?: string): void {
     const subs = this.sessionSubscribers.get(sessionId);
+    if (!subs || subs.size === 0) return;
+
+    const payload = JSON.stringify({ type: "message", role, text, messageType: messageType || "text", time: new Date().toISOString() });
+    for (const ws of subs) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(payload);
+      }
+    }
+  }
+
+  /**
+   * Get the connector_name of the last user message before the current one.
+   * Used to decide whether to relay the agent response to WhatsApp.
+   */
+  private async getLastUserMessageConnector(userId: number): Promise<string | null> {
+    try {
+      // Get the second-to-last user message (the one BEFORE the main-viewer message we just sent)
+      const result = await query(
+        `SELECT connector_name FROM conversations
+         WHERE user_id = $1 AND role = 'user' AND connector_name IS NOT NULL AND connector_name != 'main-viewer'
+         ORDER BY created_at DESC LIMIT 1`,
+        [userId]
+      );
+      return result.rows[0]?.connector_name || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Broadcast a message to all main session viewers for a given user.
+   * Called when a message is sent/received in the main session (from any connector).
+   */
+  broadcastToMainViewers(userId: number, role: string, text: string, messageType?: string): void {
+    const subs = this.mainViewerSubscribers.get(userId);
     if (!subs || subs.size === 0) return;
 
     const payload = JSON.stringify({ type: "message", role, text, messageType: messageType || "text", time: new Date().toISOString() });

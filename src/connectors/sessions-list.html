@@ -362,8 +362,9 @@ function renderSessions(agentName, agentLogo, mainSessionName, sessions) {
   var container = document.getElementById('container');
   container.innerHTML = '';
 
-  // Main session card — always first, always active, no kill button
-  var mainCard = document.createElement('div');
+  // Main session card — always first, always active, links to /m/:token
+  var mainCard = document.createElement('a');
+  mainCard.href = '/m/' + token;
   mainCard.className = 'session-card main-session';
   mainCard.innerHTML =
     '<div class="card-top">' +

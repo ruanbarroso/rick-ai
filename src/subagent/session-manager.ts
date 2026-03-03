@@ -168,12 +168,13 @@ export function getUserSessionsToken(userId: number): string {
  * Returns null if no matching user found.
  */
 export async function resolveSessionsToken(token: string): Promise<number | null> {
-  // Query all distinct user IDs that have sessions, then check token match
+  // Check all users (not just those with sub-agent sessions)
+  // so the main session viewer works for users who never used sub-agents.
   const result = await query(
-    `SELECT DISTINCT user_id FROM sub_agent_sessions ORDER BY user_id`,
+    `SELECT id FROM users ORDER BY id`,
   );
   for (const row of result.rows) {
-    const uid = row.user_id as number;
+    const uid = row.id as number;
     if (getUserSessionsToken(uid) === token) return uid;
   }
   return null;

@@ -439,7 +439,7 @@ export class WhatsAppConnector implements Connector {
 
       // Save message to conversation history regardless of status (for admin visibility)
       const messageText = text || (audioInfo ? "[audio]" : "[imagem]");
-      await this.memory.saveMessageByUserId(user.id, "user", messageText);
+      await this.memory.saveMessageByUserId(user.id, "user", messageText, undefined, undefined, undefined, undefined, undefined, undefined, "whatsapp");
 
       // Notify pending user listeners (for badge updates)
       if (isNewPending) {
