@@ -229,7 +229,6 @@ FERRAMENTAS DISPONÍVEIS: ${toolNames.join(", ")}`;
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const MAX_ITER = 30; // Safety limit — prevent runaway API loops
 const FALLBACK_RESULT = "Tarefa concluída.";
 
 // ── Gemini adapter ──────────────────────────────────────────────────────────
@@ -279,7 +278,7 @@ async function runGeminiLoop(userText) {
   geminiHistory.push({ role: "user", parts: [{ text: userText }] });
   let contents = geminiHistory;
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
+  while (true) {
     const { texts, toolCalls, modelParts } = await callGemini(contents);
     contents.push({ role: "model", parts: modelParts });
 
@@ -324,7 +323,7 @@ async function runOpenAILoop(userText) {
   openaiHistory.push({ role: "user", content: userText });
   let messages = openaiHistory;
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
+  while (true) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       signal: AbortSignal.timeout(120_000),
@@ -380,7 +379,7 @@ async function runClaudeLoop(userText) {
   claudeHistory.push({ role: "user", content: userText });
   let messages = claudeHistory;
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
+  while (true) {
     const headers = {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",

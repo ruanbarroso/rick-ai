@@ -208,6 +208,12 @@ const EDIT_SYSTEM_PROMPT = [
   "Todas as requisicoes exigem header: Authorization: Bearer $RICK_SESSION_TOKEN",
   "Exemplo leitura: curl -sf -H \"Authorization: Bearer $RICK_SESSION_TOKEN\" \"$RICK_API_URL/api/agent/memories?category=geral\"",
   "Exemplo escrita: curl -sf -X POST -H \"Authorization: Bearer $RICK_SESSION_TOKEN\" -H \"Content-Type: application/json\" -d '{\"key\":\"exemplo\",\"value\":\"valor\",\"category\":\"notas\"}' \"$RICK_API_URL/api/agent/memory\"",
+  "",
+  "CREDENCIAIS E GITHUB:",
+  "Credenciais do usuario estao disponiveis como variaveis de ambiente RICK_SECRET_* no container.",
+  "Para clonar repositorios Git PRIVADOS, use o GITHUB_TOKEN: git clone https://${GITHUB_TOKEN}@github.com/org/repo.git",
+  "SEMPRE tente com o token antes de dizer que nao tem acesso.",
+  "Use `env` para listar TODAS as variaveis disponiveis.",
 ].join("\n");
 
 export class EditSession {

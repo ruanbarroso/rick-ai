@@ -27,10 +27,11 @@ import { WORKSPACE, listWorkspace, executeTool } from "./tools.mjs";
 import { coreToolDeclarations } from "./tool-declarations.mjs";
 
 // ── Provider detection (priority order) ─────────────────────────────────────
+// Claude Code CLI requires OAuth token or API key — ANTHROPIC_API_KEY alone
+// is not enough (it's for the API, not the CLI).
 const hasClaude = !!(
   process.env.CLAUDE_CODE_OAUTH_TOKEN ||
-  process.env.CLAUDE_CODE_API_KEY ||
-  process.env.ANTHROPIC_API_KEY
+  process.env.CLAUDE_CODE_API_KEY
 );
 const hasOpenAI = !!(
   process.env.OPENAI_API_KEY ||
@@ -121,6 +122,15 @@ async function editToolHandler(name, input) {
       if (data.error) return `Erro ao salvar memória: ${data.error}`;
       return `Memória salva: [${data.category}] ${data.key}`;
     }
+    case "web_fetch": {
+      try {
+        const res = await fetch(input.url, { signal: AbortSignal.timeout(15000) });
+        const text = await res.text();
+        return text.length > 20000 ? text.substring(0, 20000) + "\n...(truncado)" : text;
+      } catch (e) {
+        return `Erro ao acessar ${input.url}: ${e.message}`;
+      }
+    }
     default:
       return undefined;
   }
@@ -201,12 +211,20 @@ const toolDeclarations = [
       required: ["key", "value"],
     },
   },
+  {
+    name: "web_fetch",
+    description: "Faz uma requisição HTTP GET e retorna o conteúdo da página",
+    parameters: {
+      type: "object",
+      properties: { url: { type: "string", description: "URL para acessar" } },
+      required: ["url"],
+    },
+  },
 ];
 
 // ── Generic agentic loop (Strategy pattern) ──────────────────────────────────
 /**
- * Runs a provider-agnostic agentic loop until the model stops calling tools
- * or MAX_ITER is reached.
+ * Runs a provider-agnostic agentic loop until the model stops calling tools.
  *
  * Each adapter implements:
  *   call(state)              → Promise<{ texts, toolCalls, done, nextState }>
@@ -217,10 +235,9 @@ const toolDeclarations = [
  * results items:   { name, input, id?, result }
  */
 async function agenticLoop(adapter) {
-  const MAX_ITER = 20;
   let state = adapter.init();
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
+  while (true) {
     const { texts, toolCalls, done, nextState } = await adapter.call(state);
     state = nextState;
 
@@ -272,6 +289,7 @@ function makeOpenAIAdapter(history, userContent) {
             : {}),
         },
         body: JSON.stringify({ model: "gpt-5.3-codex", messages, tools: openaiTools }),
+        signal: AbortSignal.timeout(120_000),
       });
 
       if (!res.ok) {
@@ -338,6 +356,7 @@ function makeGeminiAdapter(history, userContent) {
           tools: geminiTools,
           ...(systemInstruction ? { systemInstruction } : {}),
         }),
+        signal: AbortSignal.timeout(120_000),
       });
 
       if (!res.ok) {

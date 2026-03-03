@@ -497,6 +497,9 @@ export class Agent {
     // GitHub — pass GITHUB_TOKEN so sub-agents can clone private repos
     if (process.env.GITHUB_TOKEN) env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
+    // Agent name — so sub-agents use the correct name in messages
+    env.AGENT_NAME = config.agentName;
+
     return env;
   }
 
@@ -1537,6 +1540,12 @@ _Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa 
     } else if (config.openai?.apiKey) {
       env.OPENAI_API_KEY = config.openai.apiKey;
     }
+
+    // GitHub — pass token so edit mode can clone private repos
+    if (process.env.GITHUB_TOKEN) env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+
+    // Agent name — so edit mode uses the correct name
+    env.AGENT_NAME = config.agentName;
 
     // Set this.editSession BEFORE start() so that saveHistoryCb (which reads
     // this.editSession?.id) can persist the welcome message to session_messages.
