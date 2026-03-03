@@ -481,8 +481,14 @@
     flex-direction: column;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.2s ease, transform 0.2s ease;
+    transition: opacity 0.2s ease, transform 0.2s ease, width 0.25s ease, height 0.25s ease, max-height 0.25s ease;
     box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
+  }
+
+  .users-panel.detail-open {
+    width: min(90vw, 1100px);
+    height: 92vh;
+    max-height: 92vh;
   }
 
   .users-panel.visible {
@@ -531,6 +537,13 @@
     overflow-y: auto;
     padding: 12px 20px;
     border-radius: 0 0 16px 16px;
+    min-height: 0;
+  }
+
+  .detail-open .users-body {
+    overflow-y: hidden;
+    display: flex;
+    flex-direction: column;
   }
 
   /* User list */
@@ -630,7 +643,9 @@
   }
 
   .user-detail.visible {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
   }
 
   .user-detail-back {
@@ -645,6 +660,7 @@
     padding: 6px 0;
     margin-bottom: 12px;
     transition: color 0.15s;
+    flex-shrink: 0;
   }
 
   .user-detail-back:hover { color: var(--text); }
@@ -654,6 +670,7 @@
     align-items: center;
     gap: 16px;
     margin-bottom: 20px;
+    flex-shrink: 0;
   }
 
   .user-detail-avatar {
@@ -691,6 +708,7 @@
     gap: 8px;
     margin-bottom: 20px;
     flex-wrap: wrap;
+    flex-shrink: 0;
   }
 
   .user-detail-actions select {
@@ -732,6 +750,13 @@
 
   .user-detail-actions button.success:hover {
     background: #002d00;
+  }
+
+  #user-detail-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
   }
 
   .user-detail-sessions-iframe {
@@ -4691,12 +4716,14 @@ function openUsers() {
 function closeUsers() {
   document.getElementById('users-overlay').classList.remove('visible');
   document.getElementById('users-panel').classList.remove('visible');
+  document.getElementById('users-panel').classList.remove('detail-open');
   selectedUserId = null;
 }
 
 function showUsersList() {
   document.getElementById('users-list-view').style.display = 'block';
   document.getElementById('user-detail-view').classList.remove('visible');
+  document.getElementById('users-panel').classList.remove('detail-open');
   selectedUserId = null;
 }
 
@@ -4824,6 +4851,7 @@ function openUserDetail(userId) {
   selectedUserId = userId;
   document.getElementById('users-list-view').style.display = 'none';
   document.getElementById('user-detail-view').classList.add('visible');
+  document.getElementById('users-panel').classList.add('detail-open');
   // Request full user detail
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'get_user_detail', userId: userId }));
