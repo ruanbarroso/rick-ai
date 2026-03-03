@@ -682,6 +682,9 @@ function setConnected(connected) {
   var text = document.getElementById('status-text');
   dot.className = 'status-dot ' + (connected ? 'running' : 'offline');
   text.textContent = connected ? 'Online' : 'Conectando...';
+  if (!connected) {
+    document.getElementById('typing-indicator').classList.remove('visible');
+  }
 }
 
 // ==================== WEBSOCKET ====================
@@ -744,6 +747,21 @@ function connect() {
         }
         break;
 
+      case 'typing':
+        var typingEl = document.getElementById('typing-indicator');
+        var statusText = document.getElementById('status-text');
+        if (msg.composing) {
+          typingEl.classList.add('visible');
+          statusText.textContent = 'Digitando...';
+          // Auto-scroll to show typing indicator
+          var msgsContainer = document.getElementById('messages');
+          msgsContainer.scrollTop = msgsContainer.scrollHeight;
+        } else {
+          typingEl.classList.remove('visible');
+          statusText.textContent = 'Online';
+        }
+        break;
+
       case 'error':
         appendMessage(msg.text || 'Erro desconhecido', 'agent', 'error');
         break;
@@ -795,6 +813,10 @@ function sendMessage() {
   appendMessage(text, 'user');
 
   ws.send(JSON.stringify({ type: 'message', text: text }));
+
+  // Show typing indicator immediately (optimistic)
+  document.getElementById('typing-indicator').classList.add('visible');
+  document.getElementById('status-text').textContent = 'Digitando...';
 
   input.value = '';
   autoResize(input);

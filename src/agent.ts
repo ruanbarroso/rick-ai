@@ -56,6 +56,8 @@ export class Agent {
   private webBridge: WebAgentBridge | null = null;
   /** Callback for broadcasting main-session messages to public viewers */
   private mainSessionCallback: ((userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void) | null = null;
+  /** Callback for broadcasting typing state to public main-session viewers */
+  private mainTypingCallback: ((userId: number, composing: boolean) => void) | null = null;
 
   /** Notify main session viewers of a new message (fire-and-forget). */
   private notifyMainViewers(userId: number, role: string, text: string, messageType?: string, connectorName?: string): void {
@@ -311,6 +313,7 @@ export class Agent {
 
     // Show typing indicator while processing (classification + LLM call can take several seconds)
     await this.connectorManager.setTyping(connectorName, userPhone, true);
+    if (this.mainTypingCallback) try { this.mainTypingCallback(user.id, true); } catch {}
     try {
       // Keep OAuth tokens fresh — needed for sub-agent LLM fallback
       await this.ensureOAuthTokens(user.id);
@@ -393,6 +396,7 @@ export class Agent {
       return this.handleSimpleChat(userPhone, user.displayName, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, user.id, connectorName);
     } finally {
       await this.connectorManager.setTyping(connectorName, userPhone, false);
+      if (this.mainTypingCallback) try { this.mainTypingCallback(user.id, false); } catch {}
     }
   }
 
@@ -2206,6 +2210,10 @@ Retorne APENAS as linhas de extracao, nada mais.`;
 
       setMainSessionCallback: (cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void) => {
         this.mainSessionCallback = cb;
+      },
+
+      setMainTypingCallback: (cb: (userId: number, composing: boolean) => void) => {
+        this.mainTypingCallback = cb;
       },
     };
 

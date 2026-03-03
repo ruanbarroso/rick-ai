@@ -78,6 +78,8 @@ export interface WebAgentBridge {
   handleMainViewerMessage(numericUserId: number, userExternalId: string, text: string): Promise<string>;
   /** Register callback for broadcasting main-session messages to public viewers */
   setMainSessionCallback(cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void): void;
+  /** Register callback for broadcasting typing state to public main-session viewers */
+  setMainTypingCallback(cb: (userId: number, composing: boolean) => void): void;
 }
 
 export class WebConnector implements Connector {
@@ -148,6 +150,10 @@ export class WebConnector implements Connector {
     // Register callback so main-session viewers get real-time updates
     bridge.setMainSessionCallback((userId, role, text, messageType, connectorName) => {
       this.broadcastToMainViewers(userId, role, text, messageType);
+    });
+    // Register typing callback so main-session viewers see "Digitando..."
+    bridge.setMainTypingCallback((userId, composing) => {
+      this.broadcastTypingToMainViewers(userId, composing);
     });
   }
 
@@ -559,6 +565,11 @@ export class WebConnector implements Connector {
           } catch (err) {
             logger.warn({ err, userId }, "Failed to load main session history");
           }
+        }
+
+        // Send current typing state so viewer shows "Digitando..." if agent is already processing
+        if (this.currentlyTyping) {
+          ws.send(JSON.stringify({ type: "typing", composing: true }));
         }
 
         // Handle messages from main session viewer
@@ -1307,6 +1318,21 @@ export class WebConnector implements Connector {
     if (!subs || subs.size === 0) return;
 
     const payload = JSON.stringify({ type: "message", role, text, messageType: messageType || "text", time: new Date().toISOString() });
+    for (const ws of subs) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(payload);
+      }
+    }
+  }
+
+  /**
+   * Broadcast typing state to all main session viewers for a given user.
+   */
+  broadcastTypingToMainViewers(userId: number, composing: boolean): void {
+    const subs = this.mainViewerSubscribers.get(userId);
+    if (!subs || subs.size === 0) return;
+
+    const payload = JSON.stringify({ type: "typing", composing });
     for (const ws of subs) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(payload);
