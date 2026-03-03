@@ -255,14 +255,26 @@ export class Agent {
     // Everything else goes directly to Claude Code.
     // Audio is pre-transcribed via Gemini; images are passed via --image flag.
     if (this.editSession) {
+      // Helper: clear typing indicator before returning quick responses.
+      // The client enables typing locally when sending a message, but the normal
+      // typing:false lives in the finally block below which edit-mode early returns
+      // never reach. Without this, the typing indicator stays stuck forever.
+      const editReturn = async (text: string) => {
+        if (text) {
+          await this.connectorManager.setTyping(connectorName, userPhone, false);
+          if (this.mainTypingCallback) try { this.mainTypingCallback(user.id, false); } catch {}
+        }
+        return text;
+      };
+
       const lower = fullText.trim().toLowerCase();
 
       if (lower === "/deploy") {
-        return this.cmdDeploy();
+        return editReturn(await this.cmdDeploy());
       }
       if (lower === "/publish" || lower.startsWith("/publish ")) {
         const repoArg = fullText.trim().substring("/publish".length).trim() || undefined;
-        return this.cmdPublish(repoArg);
+        return editReturn(await this.cmdPublish(repoArg));
       }
 
       // If auth expired, check if user is pasting an OAuth code
@@ -288,18 +300,18 @@ export class Agent {
               return ""; // refreshCredentials will send its own message and retry
             }
           }
-          return result || "Erro ao trocar codigo OAuth.";
+          return editReturn(result || "Erro ao trocar codigo OAuth.");
         }
 
-        return "Token do Claude expirou. Cole o codigo OAuth para continuar.";
+        return editReturn("Token do Claude expirou. Cole o codigo OAuth para continuar.");
       }
 
       // Proxy everything else to Claude Code
       if (this.editSession.getState() === "deploying") {
-        return "Deploy em andamento... Aguarde.";
+        return editReturn("Deploy em andamento... Aguarde.");
       }
       if (this.editSession.getState() !== "ready") {
-        return "Aguarde, o Claude Code ainda esta processando...";
+        return editReturn("Aguarde, o Claude Code ainda esta processando...");
       }
 
       // Audio: pre-transcribe with Gemini and fold into text
