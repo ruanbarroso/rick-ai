@@ -1202,9 +1202,36 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
       return "Voce ja esta no modo de edicao.";
     }
 
-    // Require GITHUB_TOKEN — needed for git push to deploy changes
-    if (!process.env.GITHUB_TOKEN) {
+    // Require GITHUB_TOKEN with write access — needed for publish/deploy
+    const githubToken = process.env.GITHUB_TOKEN;
+    if (!githubToken) {
       return "Configure o GitHub Token nas configuracoes antes de entrar no modo de edicao.";
+    }
+
+    // Validate write access before spinning up a container
+    const targetRepo = process.env.DEV_REPO_URL || "ruanbarroso/rick-ai";
+    try {
+      const ghResp = await fetch(`https://api.github.com/repos/${targetRepo}`, {
+        headers: {
+          Authorization: `token ${githubToken}`,
+          "User-Agent": "Rick-AI-Agent/1.0",
+          Accept: "application/vnd.github.v3+json",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!ghResp.ok) {
+        const body = (await ghResp.json().catch(() => ({}))) as Record<string, unknown>;
+        const msg = typeof body.message === "string" ? body.message : ghResp.statusText;
+        return `GitHub Token invalido ou sem acesso ao repositorio *${targetRepo}* (HTTP ${ghResp.status}: ${msg}).\n\nVerifique o token nas configuracoes.`;
+      }
+      const repoInfo = (await ghResp.json()) as Record<string, unknown>;
+      const perms = repoInfo.permissions as { push?: boolean; admin?: boolean } | undefined;
+      if (!perms?.push && !perms?.admin) {
+        return `O GitHub Token nao tem permissao de escrita no repositorio *${targetRepo}*.\n\nO token precisa de "Contents: Read and Write".`;
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `Falha ao validar GitHub Token: ${msg}`;
     }
 
     // Provider priority: Claude → OpenAI → Gemini Pro
