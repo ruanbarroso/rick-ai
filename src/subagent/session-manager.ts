@@ -401,12 +401,12 @@ export class SessionManager {
 
   getLiveSessions(): SubAgentSession[] {
     return Array.from(this.sessions.values()).filter(
-      (s) => s.state === "starting" || s.state === "running" || s.state === "waiting_user" || s.state === "done"
+      (s) => s.state === "starting" || s.state === "running" || s.state === "waiting_user" || s.state === "done" || s.state === "failed"
     );
   }
 
   getDoneSessions(): SubAgentSession[] {
-    return Array.from(this.sessions.values()).filter((s) => s.state === "done");
+    return Array.from(this.sessions.values()).filter((s) => s.state === "done" || s.state === "failed");
   }
 
   /** Get done sessions belonging to a specific user (by phone/userId). */
@@ -879,17 +879,19 @@ export class SessionManager {
       
       this.processes.delete(session.id);
       if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
+        const crashed = code !== 0 && code !== null;
         // Notify user if process exited abnormally (crash, OOM, etc.)
-        if (code !== 0 && code !== null) {
+        if (crashed) {
           this.sendToUser(session, `Erro: o sub-agente encerrou inesperadamente (codigo ${code}).`, "error");
         }
-        session.state = "done";
+        const newState = crashed ? "failed" : "done";
+        session.state = newState;
         session.updatedAt = Date.now();
         // Notify session viewers of state change
         if (this.onSessionMessage) {
-          this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
+          this.onSessionMessage(session.id, "system", JSON.stringify({ state: newState }), "system");
         }
-        this.updateSessionStatus(session.id, "done").catch(() => {});
+        this.updateSessionStatus(session.id, newState).catch(() => {});
 
         // Kill the container immediately — no reason to keep it running after process exits
         execFileAsync("docker", ["rm", "-f", session.containerName]).catch(() => {});

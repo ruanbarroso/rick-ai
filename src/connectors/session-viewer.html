@@ -814,6 +814,14 @@ function updateSessionState(state) {
     composeBar.style.display = 'none';
     attachPreview.classList.remove('visible');
     typing.classList.remove('visible');
+  } else if (state === 'failed') {
+    dot.classList.add('offline');
+    text.textContent = 'Encerrado';
+    banner.textContent = 'Sessao encerrada — somente leitura';
+    banner.classList.add('visible');
+    composeBar.style.display = 'none';
+    attachPreview.classList.remove('visible');
+    typing.classList.remove('visible');
   } else if (state === 'killed') {
     dot.classList.add('offline');
     text.textContent = 'Encerrado';

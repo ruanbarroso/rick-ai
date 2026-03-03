@@ -35,6 +35,7 @@ export type SessionState =
   | "running"      // Sub-agent is working on task
   | "waiting_user" // Sub-agent asked a question, waiting for user reply
   | "done"         // Task complete, showing output, waiting for user OK
+  | "failed"       // Sub-agent crashed (non-zero exit code)
   | "killed";      // Container destroyed
 
 /**

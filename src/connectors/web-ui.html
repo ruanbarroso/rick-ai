@@ -5077,7 +5077,7 @@ function renderUserSessions(userId, sessions) {
     var task = s.task || '(sem descricao)';
     if (task.length > 60) task = task.substring(0, 60) + '...';
     var statusClass = s.status || 'active';
-    var statusLabel = s.status === 'active' ? 'Ativo' : s.status === 'done' ? 'Concluido' : 'Encerrado';
+    var statusLabel = s.status === 'active' ? 'Ativo' : s.status === 'done' ? 'Concluido' : s.status === 'failed' ? 'Erro' : 'Encerrado';
     html += '<div class="user-session-item" onclick="openSessionFromDetail(\'' + s.id + '\')">';
     html += '<div class="user-session-task">' + escapeHtml(task) + '</div>';
     html += '<span class="user-session-status ' + statusClass + '">' + statusLabel + '</span>';
