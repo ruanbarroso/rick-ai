@@ -112,6 +112,14 @@ body {
   border-bottom-right-radius: 4px;
 }
 
+.message.error {
+  align-self: flex-start;
+  background: rgba(220, 38, 38, 0.15);
+  border: 1px solid rgba(220, 38, 38, 0.4);
+  color: #fca5a5;
+  border-bottom-left-radius: 4px;
+}
+
 .message .time {
   font-size: 11px;
   color: rgba(255,255,255,0.45);
@@ -557,7 +565,8 @@ function appendMessage(text, role, messageType) {
   var typing = document.getElementById('typing-indicator');
 
   var div = document.createElement('div');
-  div.className = 'message ' + (role === 'user' ? 'user' : 'agent');
+  var cssClass = messageType === 'error' ? 'error' : (role === 'user' ? 'user' : 'agent');
+  div.className = 'message ' + cssClass;
   div.innerHTML = renderText(text);
 
   var time = document.createElement('div');
@@ -592,7 +601,8 @@ function appendHistoryMessage(text, role, timestamp, messageType) {
   var typing = document.getElementById('typing-indicator');
 
   var div = document.createElement('div');
-  div.className = 'message ' + (role === 'user' ? 'user' : 'agent');
+  var cssClass = messageType === 'error' ? 'error' : (role === 'user' ? 'user' : 'agent');
+  div.className = 'message ' + cssClass;
   div.innerHTML = renderText(text);
 
   var time = document.createElement('div');

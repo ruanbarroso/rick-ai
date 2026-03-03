@@ -601,6 +601,10 @@ export class SessionManager {
       logger.info({ sessionId: session.id, exitCode: code }, "Sub-agent process exited");
       this.processes.delete(session.id);
       if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
+        // Notify user if process exited abnormally (crash, OOM, etc.)
+        if (code !== 0 && code !== null) {
+          this.sendToUser(session, `Erro: o sub-agente encerrou inesperadamente (codigo ${code}).`, "error");
+        }
         session.state = "done";
         session.updatedAt = Date.now();
         // Notify session viewers of state change
@@ -617,6 +621,8 @@ export class SessionManager {
     proc.on("error", (err) => {
       logger.error({ err, sessionId: session.id }, "Sub-agent process error");
       this.processes.delete(session.id);
+      // Notify user about process spawn failure
+      this.sendToUser(session, `Erro: falha ao iniciar o sub-agente: ${err.message}`, "error");
     });
   }
 
@@ -716,7 +722,7 @@ export class SessionManager {
         case "error":
           logger.error({ sessionId: session.id, error: msg.message }, "Sub-agent error");
           if (msg.message) {
-            this.sendToUser(session, `Erro: ${msg.message}`);
+            this.sendToUser(session, `Erro: ${msg.message}`, "error");
           }
           break;
 
