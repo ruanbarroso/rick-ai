@@ -23,7 +23,7 @@
 
 import { spawn } from "child_process";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { WORKSPACE, listWorkspace, executeTool } from "./tools.mjs";
+import { WORKSPACE, listWorkspace, executeTool, redactSecrets } from "./tools.mjs";
 import { coreToolDeclarations } from "./tool-declarations.mjs";
 import {
   agentToolHandler as sharedAgentToolHandler,
@@ -70,7 +70,7 @@ const agentName = process.env.AGENT_NAME || "Rick";
 // ── NDJSON helpers ───────────────────────────────────────────────────────────
 function emitText(text) {
   process.stdout.write(
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } }) + "\n"
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: redactSecrets(text) }] } }) + "\n"
   );
 }
 
@@ -82,13 +82,13 @@ function emitToolUse(name, input) {
 
 function emitResult(text) {
   process.stdout.write(
-    JSON.stringify({ type: "result", result: [{ type: "text", text }] }) + "\n"
+    JSON.stringify({ type: "result", result: [{ type: "text", text: redactSecrets(text) }] }) + "\n"
   );
 }
 
 function emitError(message) {
   process.stdout.write(
-    JSON.stringify({ type: "error", error: { type: "configuration_error", message } }) + "\n"
+    JSON.stringify({ type: "error", error: { type: "configuration_error", message: redactSecrets(message) } }) + "\n"
   );
 }
 

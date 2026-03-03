@@ -18,6 +18,48 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
+// ── Secret redaction ────────────────────────────────────────────────────────
+// Collect env vars that look like secrets and build a redaction function.
+// Applied to all tool output before it reaches the LLM or the session viewer,
+// preventing the LLM from ever seeing raw credentials (so it can't parrot them).
+
+const SECRET_ENV_PREFIXES = [
+  "ANTHROPIC_API_KEY", "ANTHROPIC_ACCESS_TOKEN",
+  "OPENAI_API_KEY", "OPENAI_ACCESS_TOKEN",
+  "GEMINI_API_KEY",
+  "GITHUB_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY", "CLAUDE_REFRESH_TOKEN",
+  "RICK_SESSION_TOKEN",
+];
+
+/** Env var names whose values must never appear in tool output. */
+const SECRET_PATTERNS = [];
+for (const key of Object.keys(process.env)) {
+  // Match known prefixes or any var containing SECRET/TOKEN/PASSWORD/KEY
+  const isSecret = SECRET_ENV_PREFIXES.includes(key)
+    || /SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE.KEY/i.test(key);
+  const val = process.env[key];
+  if (isSecret && val && val.length >= 8) {
+    SECRET_PATTERNS.push({ key, val });
+  }
+}
+
+/**
+ * Redact known secret values from a string.
+ * Replaces each secret occurrence with [REDACTED:<ENV_VAR_NAME>].
+ */
+export function redactSecrets(text) {
+  if (!text || SECRET_PATTERNS.length === 0) return text;
+  let result = text;
+  for (const { key, val } of SECRET_PATTERNS) {
+    // Use split+join instead of regex to avoid special chars in secret values
+    if (result.includes(val)) {
+      result = result.split(val).join(`[REDACTED:${key}]`);
+    }
+  }
+  return result;
+}
+
 // ── Workspace helpers ───────────────────────────────────────────────────────
 
 export const WORKSPACE = "/workspace";
@@ -69,7 +111,7 @@ export async function executeTool(name, input, extraHandler) {
   switch (name) {
     case "read_file": {
       const fp = resolvePath(input.path);
-      try { return readFileSync(fp, "utf-8"); }
+      try { return redactSecrets(readFileSync(fp, "utf-8")); }
       catch (e) { return `Erro ao ler arquivo: ${e.message}`; }
     }
     case "write_file": {
@@ -105,9 +147,11 @@ export async function executeTool(name, input, extraHandler) {
           input.args ?? [],
           { cwd: WORKSPACE, timeout: COMMAND_TIMEOUT }
         );
-        return (stdout || "") + (stderr ? `\nSTDERR: ${stderr}` : "");
+        const raw = (stdout || "") + (stderr ? `\nSTDERR: ${stderr}` : "");
+        return redactSecrets(raw);
       } catch (e) {
-        return `Saída ${e.code ?? 1}:\n${e.stdout ?? ""}\n${e.stderr ?? ""}`.trim();
+        const raw = `Saída ${e.code ?? 1}:\n${e.stdout ?? ""}\n${e.stderr ?? ""}`.trim();
+        return redactSecrets(raw);
       }
     }
     default: {

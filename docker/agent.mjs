@@ -26,6 +26,7 @@ import {
   buildAgentToolDeclarations,
   LLM_TIMEOUT_MS, MAX_TIMEOUT_RETRIES,
 } from "./rick-api.mjs";
+import { redactSecrets } from "./tools.mjs";
 
 // ── NDJSON helpers ──────────────────────────────────────────────────────────
 
@@ -49,13 +50,13 @@ function isCurrentSuperseded() {
 function emitMessage(text) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
-  emit({ type: "message", text });
+  emit({ type: "message", text: redactSecrets(text) });
 }
 
 function emitStatus(message) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
-  emit({ type: "status", message });
+  emit({ type: "status", message: redactSecrets(message) });
 }
 
 function emitDone(result) {
@@ -73,7 +74,7 @@ function emitWaitingUser(result) {
 function emitError(message) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
-  emit({ type: "error", message });
+  emit({ type: "error", message: redactSecrets(message) });
 }
 
 // ── Provider detection (dynamic — re-evaluated per turn) ────────────────────
@@ -186,7 +187,7 @@ REGRAS:
 4. Se precisar de informações adicionais, PERGUNTE DIRETAMENTE ao usuário (ex: "Qual a URL do repositório?") — você receberá a resposta na próxima mensagem. Fale sempre em segunda pessoa, direto com o usuário.
 5. Se precisar de informações que o usuário já ensinou ao ${agentName} (credenciais, links de repositórios, preferências), use rick_memory (sem categoria para ver TUDO) ou rick_search (busca por significado).
 6. SEMPRE consulte rick_memory antes de pedir informações ao usuário — a resposta pode já estar lá.
-7. Credenciais estão disponíveis como variáveis de ambiente RICK_SECRET_* e GITHUB_TOKEN no container. Use \`run_command env\` para listar TODAS as variáveis disponíveis.
+7. Credenciais estão disponíveis como variáveis de ambiente RICK_SECRET_* e GITHUB_TOKEN no container. Use \`run_command env\` para ver quais variáveis existem. Os valores de tokens/secrets são redatados por segurança — use a variável de ambiente diretamente nos comandos (ex: \`$GITHUB_TOKEN\`) em vez de tentar copiar o valor.
 8. Para clonar repositórios Git PRIVADOS, use o GITHUB_TOKEN: \`git clone https://\${GITHUB_TOKEN}@github.com/org/repo.git\`. SEMPRE tente com o token antes de dizer que não tem acesso.
 9. Para tarefas de código: clone o repositório, faça as alterações, rode testes se possível.
 10. Para pesquisa web: use web_fetch para acessar URLs e extrair informações.
