@@ -85,6 +85,30 @@ async function rickApiGet(path) {
   }
 }
 
+async function rickApiPost(path, body) {
+  if (!RICK_API_URL || !RICK_SESSION_TOKEN) {
+    return { error: "RICK_API_URL ou RICK_SESSION_TOKEN não configurado" };
+  }
+  try {
+    const res = await fetch(`${RICK_API_URL}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RICK_SESSION_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { error: data.error || `HTTP ${res.status}` };
+    }
+    return data;
+  } catch (err) {
+    return { error: err.message || "timeout/rede" };
+  }
+}
+
 // ── Agent-specific tool handler (web_fetch, rick_memory, rick_search) ────────
 
 async function agentToolHandler(name, input) {
@@ -107,6 +131,15 @@ async function agentToolHandler(name, input) {
       const data = await rickApiGet(`/api/agent/search?q=${encodeURIComponent(input.query)}&limit=${input.limit || 5}`);
       if (!data) return "Busca semântica não disponível no assistente.";
       return JSON.stringify(data.results || [], null, 2);
+    }
+    case "rick_save_memory": {
+      const data = await rickApiPost("/api/agent/memory", {
+        key: input.key,
+        value: input.value,
+        category: input.category || "geral",
+      });
+      if (data.error) return `Erro ao salvar memória: ${data.error}`;
+      return `Memória salva: [${data.category}] ${data.key}`;
     }
     default:
       return undefined; // fall through to "unknown tool"
@@ -154,6 +187,19 @@ const toolDeclarations = [
       required: ["query"],
     },
   },
+  {
+    name: "rick_save_memory",
+    description: `Salva uma informação na memória persistente do ${agentName}. Use quando o usuário ensinar algo útil (URLs de repositórios, preferências, nomes de projetos, padrões, etc.) para que outros agentes futuros possam consultar. NÃO use para credenciais/senhas — essas são protegidas.`,
+    parameters: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Identificador curto da memória (ex: 'github_org_zydon', 'preferencia_linguagem')" },
+        value: { type: "string", description: "Valor a salvar (ex: 'https://github.com/zydontecnologia', 'TypeScript com NestJS')" },
+        category: { type: "string", description: "Categoria: geral, notas, preferencias, projetos, links. Padrão: geral. NÃO use: credenciais, tokens, senhas." },
+      },
+      required: ["key", "value"],
+    },
+  },
 ];
 
 const toolNames = toolDeclarations.map((t) => t.name);
@@ -177,6 +223,7 @@ REGRAS:
 10. Para pesquisa web: use web_fetch para acessar URLs e extrair informações.
 11. Seja conciso nas mensagens intermediárias, detalhado no resultado final.
 12. Quando o usuário mencionar um projeto ou repositório por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
+13. Quando o usuário ENSINAR algo útil (URLs, nomes de org, preferências, padrões de projeto), use rick_save_memory para salvar para futuros agentes. Exemplos: URL de organização GitHub, stack tecnológica preferida, convenções de código.
 
 FERRAMENTAS DISPONÍVEIS: ${toolNames.join(", ")}`;
 
