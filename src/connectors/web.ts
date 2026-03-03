@@ -407,8 +407,9 @@ export class WebConnector implements Connector {
               break;
             case "interrupt":
               // Interrupt main session (user's LLM request)
+              // IMPORTANT: Use config.ownerPhone as the userId, matching what's used in handleUserMessage()
               if (this.agentBridge) {
-                const interrupted = this.agentBridge.interruptUser(String(this.adminUserId));
+                const interrupted = this.agentBridge.interruptUser(config.ownerPhone);
                 this.send(ws, { type: "interrupt_result", interrupted });
                 // Turn off typing indicator for all clients when interrupted
                 if (interrupted) {
@@ -417,7 +418,7 @@ export class WebConnector implements Connector {
                     this.broadcastTypingToMainViewers(this.adminUserId, false);
                   }
                 }
-                logger.info({ userId: this.adminUserId, interrupted }, "Admin interrupt request");
+                logger.info({ userId: config.ownerPhone, interrupted }, "Admin interrupt request");
               }
               break;
             case "interrupt_session":
