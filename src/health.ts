@@ -9,7 +9,7 @@ import { config } from "./config/env.js";
 import { configGet } from "./memory/config-store.js";
 import { verifyAgentToken, type AgentTokenPayload } from "./subagent/agent-token.js";
 import { isSensitiveCategory } from "./memory/crypto.js";
-import { resolveSessionsToken, getSessionVariantName } from "./subagent/session-manager.js";
+import { resolveSessionsToken, getSessionVariantName, getMainSessionName } from "./subagent/session-manager.js";
 import type { MemoryService } from "./memory/memory-service.js";
 import type { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
@@ -707,7 +707,8 @@ async function handlePublicSessionsApi(token: string, res: ServerResponse): Prom
       "Content-Type": "application/json",
       "Cache-Control": "no-cache",
     });
-    res.end(JSON.stringify({ agentName: config.agentName, agentLogo, sessions }));
+    const mainSessionName = getMainSessionName();
+    res.end(JSON.stringify({ agentName: config.agentName, agentLogo, mainSessionName, sessions }));
   } catch (err) {
     logger.error({ err, token }, "Failed to serve public sessions API");
     jsonResponse(res, 500, { error: "Erro interno" });

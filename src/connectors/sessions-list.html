@@ -222,6 +222,18 @@ body {
   cursor: not-allowed;
 }
 
+/* Main session card */
+.session-card.main-session {
+  border-color: var(--accent);
+  background: linear-gradient(135deg, var(--surface) 0%, var(--agent) 100%);
+}
+
+.session-card.main-session .card-avatar {
+  background: var(--accent);
+}
+
+.session-card.main-session .card-avatar svg { fill: #fff; }
+
 /* Responsive */
 @media (max-width: 480px) {
   .container { padding: 10px; }
@@ -334,10 +346,12 @@ function killSession(sessionId, btn) {
 var token = location.pathname.replace(/^\/u\//, '');
 var highlightId = location.hash ? location.hash.substring(1) : null;
 
-function renderSessions(agentName, agentLogo, sessions) {
+function renderSessions(agentName, agentLogo, mainSessionName, sessions) {
   document.title = agentName + ' - Sessoes';
   document.getElementById('header-name').textContent = agentName;
-  document.getElementById('header-subtitle').textContent = sessions.length + ' sessao' + (sessions.length !== 1 ? 'es' : '');
+  // +1 for the main session
+  var totalCount = sessions.length + 1;
+  document.getElementById('header-subtitle').textContent = totalCount + ' sessao' + (totalCount !== 1 ? 'es' : '');
 
   // Set logo if available
   if (agentLogo && agentLogo.length > 10) {
@@ -348,10 +362,17 @@ function renderSessions(agentName, agentLogo, sessions) {
   var container = document.getElementById('container');
   container.innerHTML = '';
 
-  if (sessions.length === 0) {
-    container.innerHTML = '<div class="state-message">Nenhuma sessao encontrada.</div>';
-    return;
-  }
+  // Main session card — always first, always active, no kill button
+  var mainCard = document.createElement('div');
+  mainCard.className = 'session-card main-session';
+  mainCard.innerHTML =
+    '<div class="card-top">' +
+      '<div class="card-avatar"><svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg></div>' +
+      '<span class="card-name">' + escapeHtml(mainSessionName) + '</span>' +
+      '<span class="card-status active">Ativo</span>' +
+    '</div>' +
+    '<div class="card-task">Sessao principal</div>';
+  container.appendChild(mainCard);
 
   var highlightEl = null;
 
@@ -424,7 +445,8 @@ fetch('/api/sessions/' + token)
     return resp.json();
   })
   .then(function(data) {
-    renderSessions(data.agentName || 'Sub-agente', data.agentLogo || '', data.sessions || []);
+    var mainName = data.mainSessionName || (data.agentName || 'Agent') + ' Alpha';
+    renderSessions(data.agentName || 'Sub-agente', data.agentLogo || '', mainName, data.sessions || []);
   })
   .catch(function(err) {
     showError(err.message || 'Erro desconhecido');
