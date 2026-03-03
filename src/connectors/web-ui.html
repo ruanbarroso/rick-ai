@@ -2854,14 +2854,8 @@ sidebarAvatarEl.addEventListener('mouseleave', function() {
   }
 });
 sidebarAvatarEl.addEventListener('click', function() {
-  if (!githubTokenConfigured) {
-    showToast('Configure o GitHub Token para habilitar o modo de edicao');
-    return;
-  }
-  if (!providerConnectedForEdit) {
-    showToast('Configure um provedor de IA para habilitar o modo de edicao');
-    return;
-  }
+  // No client-side gate — server validates GitHub token write access and
+  // provider availability in cmdStartEdit, returning a clear error message.
   if (!avatarHovering) return;
   avatarClickCount++;
   if (avatarClickTimer) clearTimeout(avatarClickTimer);
@@ -2880,11 +2874,8 @@ sidebarAvatarEl.addEventListener('click', function() {
 });
 
 function updateAvatarInteractivity() {
-  if (providerConnectedForEdit && githubTokenConfigured) {
-    sidebarAvatarEl.classList.remove('avatar-disabled');
-  } else {
-    sidebarAvatarEl.classList.add('avatar-disabled');
-  }
+  // Avatar is always interactive — server validates permissions on start_edit.
+  sidebarAvatarEl.classList.remove('avatar-disabled');
   sidebarAvatarEl.title = '';
 }
 
