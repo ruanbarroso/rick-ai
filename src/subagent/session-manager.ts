@@ -621,6 +621,37 @@ export class SessionManager {
     return live.length;
   }
 
+  /**
+   * Interrupt a running session without killing it.
+   * Sends an interrupt signal to the agent process, which will abort the current LLM call
+   * and return to waiting_user state.
+   * Returns true if there was a session to interrupt.
+   */
+  interruptSession(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+
+    // Only interrupt if the session is actually running
+    if (session.state !== "running" && session.state !== "starting") {
+      return false;
+    }
+
+    // Send interrupt message to the agent process
+    this.sendToAgentProcess(sessionId, { type: "interrupt" });
+    
+    logger.info({ sessionId }, "Sent interrupt signal to sub-agent");
+    return true;
+  }
+
+  /**
+   * Check if a session is currently processing (running or starting).
+   */
+  isSessionProcessing(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    return session.state === "running" || session.state === "starting";
+  }
+
   async getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>> {
     try {
       const result = await query(

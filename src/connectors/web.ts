@@ -80,6 +80,14 @@ export interface WebAgentBridge {
   setMainSessionCallback(cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string, mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }) => void): void;
   /** Register callback for broadcasting typing state to public main-session viewers */
   setMainTypingCallback(cb: (userId: number, composing: boolean) => void): void;
+  /** Interrupt any in-flight processing for a user. Returns true if there was something to interrupt. */
+  interruptUser(userId: string): boolean;
+  /** Check if a user currently has processing in flight. */
+  isUserProcessing(userId: string): boolean;
+  /** Interrupt a running sub-agent session. Returns true if there was a session to interrupt. */
+  interruptSession(sessionId: string): boolean;
+  /** Check if a sub-agent session is currently processing. */
+  isSessionProcessing(sessionId: string): boolean;
 }
 
 export class WebConnector implements Connector {
@@ -397,6 +405,22 @@ export class WebConnector implements Connector {
             case "test_database":
               await this.handleTestDatabase(ws, msg.which, msg.url);
               break;
+            case "interrupt":
+              // Interrupt main session (user's LLM request)
+              if (this.agentBridge) {
+                const interrupted = this.agentBridge.interruptUser(String(this.adminUserId));
+                this.send(ws, { type: "interrupt_result", interrupted });
+                logger.info({ userId: this.adminUserId, interrupted }, "Admin interrupt request");
+              }
+              break;
+            case "interrupt_session":
+              // Interrupt a specific sub-agent session
+              if (this.agentBridge && msg.sessionId) {
+                const interrupted = this.agentBridge.interruptSession(msg.sessionId);
+                this.send(ws, { type: "interrupt_result", sessionId: msg.sessionId, interrupted });
+                logger.info({ sessionId: msg.sessionId, interrupted }, "Session interrupt request");
+              }
+              break;
             default:
               logger.warn({ type: msg.type }, "Unknown WebSocket message type");
           }
@@ -478,6 +502,14 @@ export class WebConnector implements Connector {
         try {
           const raw = typeof data === "string" ? data : data.toString("utf-8");
           const msg = JSON.parse(raw);
+
+          if (msg.type === "interrupt" && this.agentBridge) {
+            // Interrupt the sub-agent session
+            const interrupted = this.agentBridge.interruptSession(sessionId);
+            ws.send(JSON.stringify({ type: "interrupt_result", sessionId, interrupted }));
+            logger.info({ sessionId, interrupted }, "Session viewer interrupt request");
+            return;
+          }
 
           if (msg.type === "message" && this.agentBridge) {
             let text = msg.text || "";
@@ -582,6 +614,17 @@ export class WebConnector implements Connector {
           try {
             const raw = typeof data === "string" ? data : data.toString("utf-8");
             const msg = JSON.parse(raw);
+
+            if (msg.type === "interrupt" && this.agentBridge) {
+              // Interrupt the main session (user's LLM request)
+              // Use the user's external ID (phone) as the userId for interrupt
+              const userRow = await query(`SELECT phone FROM users WHERE id = $1`, [userId]);
+              const userExternalId = userRow.rows[0]?.phone || String(userId);
+              const interrupted = this.agentBridge.interruptUser(userExternalId);
+              ws.send(JSON.stringify({ type: "interrupt_result", interrupted }));
+              logger.info({ userId, userExternalId, interrupted }, "Main viewer interrupt request");
+              return;
+            }
 
             if (msg.type === "message" && this.agentBridge) {
               try {

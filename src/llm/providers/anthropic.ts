@@ -68,7 +68,8 @@ export class AnthropicProvider implements LLMProvider {
   async chat(
     messages: LLMMessage[],
     systemPrompt?: string,
-    modelOverride?: string
+    modelOverride?: string,
+    signal?: AbortSignal
   ): Promise<LLMResponse> {
     const modelId = modelOverride || config.anthropic.model;
 
@@ -96,7 +97,7 @@ export class AnthropicProvider implements LLMProvider {
         max_tokens: 4096,
         system: systemPrompt || undefined,
         messages: anthropicMessages,
-      }, { timeout: 60_000 }); // 60s timeout
+      }, { timeout: 60_000, signal }); // 60s timeout + abort signal
 
       const text =
         response.content[0].type === "text" ? response.content[0].text : "";
@@ -132,12 +133,13 @@ export class AnthropicProvider implements LLMProvider {
     token: string,
     messages: LLMMessage[],
     systemPrompt?: string,
-    modelOverride?: string
+    modelOverride?: string,
+    signal?: AbortSignal
   ): Promise<LLMResponse> {
     const previousToken = this.oauthToken;
     this.oauthToken = token;
     try {
-      return await this.chat(messages, systemPrompt, modelOverride);
+      return await this.chat(messages, systemPrompt, modelOverride, signal);
     } finally {
       this.oauthToken = previousToken;
     }

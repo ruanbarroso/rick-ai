@@ -294,16 +294,22 @@ const FALLBACK_RESULT = "Tarefa concluída.";
 
 // ── Gemini adapter ──────────────────────────────────────────────────────────
 
-async function callGemini(contents) {
+async function callGemini(contents, signal) {
   const apiKey = process.env.GEMINI_API_KEY;
   const MODEL = "gemini-3.1-pro-preview";
   const BASE = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}`;
   const geminiTools = [{ functionDeclarations: toolDeclarations }];
 
+  // Combine timeout with external abort signal
+  const timeoutSignal = AbortSignal.timeout(120_000);
+  const combinedSignal = signal
+    ? AbortSignal.any([timeoutSignal, signal])
+    : timeoutSignal;
+
   const res = await fetch(`${BASE}:generateContent?key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(120_000),
+    signal: combinedSignal,
     body: JSON.stringify({
       contents,
       tools: geminiTools,
@@ -335,12 +341,21 @@ let geminiHistory = [];
 let openaiHistory = null; // initialized on first use
 let claudeHistory = [];
 
-async function runGeminiLoop(userText) {
+// Interrupt handling — allows cancelling the current LLM request
+let currentAbortController = null;
+let interruptRequested = false;
+
+async function runGeminiLoop(userText, signal) {
   geminiHistory.push({ role: "user", parts: [{ text: userText }] });
   let contents = geminiHistory;
 
   while (true) {
-    const { texts, toolCalls, modelParts } = await callGemini(contents);
+    // Check for interrupt before making LLM call
+    if (signal?.aborted || interruptRequested) {
+      throw new Error("Interrupted");
+    }
+
+    const { texts, toolCalls, modelParts } = await callGemini(contents, signal);
     contents.push({ role: "model", parts: modelParts });
 
     for (const text of texts) {
@@ -353,6 +368,9 @@ async function runGeminiLoop(userText) {
 
     const toolResults = [];
     for (const tc of toolCalls) {
+      if (signal?.aborted || interruptRequested) {
+        throw new Error("Interrupted");
+      }
       emitStatus(toolStatusLabel(tc.name, tc.input));
       const result = await runTool(tc.name, tc.input);
       toolResults.push({ name: tc.name, result: String(result) });
@@ -369,7 +387,7 @@ async function runGeminiLoop(userText) {
 
 // ── OpenAI adapter ──────────────────────────────────────────────────────────
 
-async function runOpenAILoop(userText) {
+async function runOpenAILoop(userText, signal) {
   const apiKey = process.env.OPENAI_API_KEY ?? "";
   // Prefer static OAuth token, fall back to dynamically cached token
   const oauthToken = process.env.OPENAI_ACCESS_TOKEN || cachedOpenAIToken || "";
@@ -390,9 +408,20 @@ async function runOpenAILoop(userText) {
   let messages = openaiHistory;
 
   while (true) {
+    // Check for interrupt before making LLM call
+    if (signal?.aborted || interruptRequested) {
+      throw new Error("Interrupted");
+    }
+
+    // Combine timeout with external abort signal
+    const timeoutSignal = AbortSignal.timeout(120_000);
+    const combinedSignal = signal
+      ? AbortSignal.any([timeoutSignal, signal])
+      : timeoutSignal;
+
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      signal: AbortSignal.timeout(120_000),
+      signal: combinedSignal,
       headers: {
         "Content-Type": "application/json",
         Authorization: authHeader,
@@ -424,6 +453,9 @@ async function runOpenAILoop(userText) {
     }
 
     for (const tc of toolCalls) {
+      if (signal?.aborted || interruptRequested) {
+        throw new Error("Interrupted");
+      }
       emitStatus(toolStatusLabel(tc.name, tc.input));
       const result = await runTool(tc.name, tc.input);
       messages.push({ role: "tool", tool_call_id: tc.id, content: String(result) });
@@ -433,7 +465,7 @@ async function runOpenAILoop(userText) {
 
 // ── Claude API adapter ──────────────────────────────────────────────────────
 
-async function runClaudeLoop(userText) {
+async function runClaudeLoop(userText, signal) {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
   // Prefer static OAuth token, fall back to dynamically cached token
   const oauthToken = process.env.ANTHROPIC_ACCESS_TOKEN || cachedClaudeToken || "";
@@ -447,6 +479,11 @@ async function runClaudeLoop(userText) {
   let messages = claudeHistory;
 
   while (true) {
+    // Check for interrupt before making LLM call
+    if (signal?.aborted || interruptRequested) {
+      throw new Error("Interrupted");
+    }
+
     const headers = {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",
@@ -459,9 +496,15 @@ async function runClaudeLoop(userText) {
       throw new Error("Claude: nenhum token disponível");
     }
 
+    // Combine timeout with external abort signal
+    const timeoutSignal = AbortSignal.timeout(120_000);
+    const combinedSignal = signal
+      ? AbortSignal.any([timeoutSignal, signal])
+      : timeoutSignal;
+
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      signal: AbortSignal.timeout(120_000),
+      signal: combinedSignal,
       headers,
       body: JSON.stringify({
         model: "claude-opus-4-6",
@@ -493,6 +536,9 @@ async function runClaudeLoop(userText) {
 
     const toolResults = [];
     for (const tb of toolBlocks) {
+      if (signal?.aborted || interruptRequested) {
+        throw new Error("Interrupted");
+      }
       emitStatus(toolStatusLabel(tb.name, tb.input));
       const result = await runTool(tb.name, tb.input);
       toolResults.push({ type: "tool_result", tool_use_id: tb.id, content: String(result) });
@@ -528,6 +574,17 @@ rl.on("line", async (line) => {
     return;
   }
 
+  // Handle interrupt message — abort the current LLM request
+  if (msg.type === "interrupt") {
+    if (currentAbortController) {
+      interruptRequested = true;
+      currentAbortController.abort();
+      currentAbortController = null;
+      emitStatus("Operação interrompida pelo usuário");
+    }
+    return;
+  }
+
   // Restore conversation history (sent by host after recovery or process restart).
   // Each entry: { role: "user"|"agent", content: "..." }
   if (msg.type === "history" && Array.isArray(msg.messages)) {
@@ -555,6 +612,11 @@ rl.on("line", async (line) => {
 
   const userText = msg.text;
 
+  // Reset interrupt state for new message
+  interruptRequested = false;
+  currentAbortController = new AbortController();
+  const signal = currentAbortController.signal;
+
   // Refresh LLM tokens from host API — detects providers connected after session start.
   // This is async but runs quickly (parallel fetches with 5s timeout).
   await refreshLLMTokens();
@@ -569,6 +631,7 @@ rl.on("line", async (line) => {
 
   if (cascade.length === 0) {
     emitError("Nenhum provedor de LLM disponível. Conecte Claude, OpenAI ou Gemini no painel de configurações.");
+    currentAbortController = null;
     return;
   }
 
@@ -576,14 +639,23 @@ rl.on("line", async (line) => {
   let lastErr;
   for (const provider of cascade) {
     try {
-      result = await provider.fn(userText);
+      result = await provider.fn(userText, signal);
       lastErr = null;
       break;
     } catch (err) {
+      // Check if this was an interrupt (not a provider failure)
+      if (err.message === "Interrupted" || signal.aborted || interruptRequested) {
+        // Interrupted by user — emit waiting_user so UI shows compose bar
+        currentAbortController = null;
+        emitWaitingUser("(processamento interrompido)");
+        return;
+      }
       lastErr = err;
       process.stderr.write(`Provedor ${provider.name} falhou: ${err.message}\n`);
     }
   }
+
+  currentAbortController = null;
 
   if (lastErr) {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");

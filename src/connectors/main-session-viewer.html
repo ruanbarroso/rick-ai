@@ -17,6 +17,9 @@
   --agent: #1e3a4f;
   --user: #1da1f2;
   --border: #2d3f50;
+  --danger: #ef4444;
+  --amber: #f59e0b;
+  --amber-hover: #fbbf24;
 }
 
 body {
@@ -244,6 +247,10 @@ body {
 .input-area button:disabled { opacity: 0.4; cursor: not-allowed; }
 .input-area button.send-btn { background: var(--accent); color: white; }
 .input-area button.send-btn:hover { background: #2563eb; }
+.input-area button.send-btn.stop-mode { background: var(--danger); }
+.input-area button.send-btn.stop-mode:hover { background: #dc2626; }
+.input-area button.send-btn.interrupt-mode { background: var(--amber); }
+.input-area button.send-btn.interrupt-mode:hover { background: var(--amber-hover); }
 .input-area button.recording { background: #ef4444; color: white; animation: recPulse 1.5s infinite; }
 .input-area button svg { width: 20px; height: 20px; fill: currentColor; }
 
@@ -608,6 +615,7 @@ var pendingAudioEcho = false;
 var pendingImageEcho = false;
 var pendingFileEcho = false;
 var sendInFlight = false;
+var isProcessing = false; // true when Rick is processing (typing indicator visible)
 
 // Audio recording state
 var mediaRecorder = null;
@@ -976,6 +984,7 @@ function connect() {
       case 'typing':
         var typingEl = document.getElementById('typing-indicator');
         var statusText = document.getElementById('status-text');
+        isProcessing = msg.composing;
         if (msg.composing) {
           typingEl.classList.add('visible');
           statusText.textContent = 'Digitando...';
@@ -985,6 +994,7 @@ function connect() {
           typingEl.classList.remove('visible');
           statusText.textContent = 'Online';
         }
+        updateSendButton();
         break;
 
       case 'error':
@@ -1025,6 +1035,50 @@ function handleKeyDown(e) {
 function autoResize(el) {
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  updateSendButton();
+}
+
+// SVG icons for send button states
+var sendIconSvg = '<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
+var stopIconSvg = '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
+// Update send button appearance based on processing state and textarea content
+function updateSendButton() {
+  var btn = document.getElementById('send-btn');
+  if (!btn) return;
+  var input = document.getElementById('msg-input');
+  var hasText = input && input.value.trim().length > 0;
+
+  btn.classList.remove('stop-mode', 'interrupt-mode');
+
+  if (isProcessing) {
+    if (hasText) {
+      // Amber: interrupt + send new message
+      btn.classList.add('interrupt-mode');
+      btn.innerHTML = sendIconSvg;
+      btn.title = 'Interromper e enviar';
+    } else {
+      // Red: stop processing
+      btn.classList.add('stop-mode');
+      btn.innerHTML = stopIconSvg;
+      btn.title = 'Parar';
+    }
+  } else {
+    // Blue: normal send
+    btn.innerHTML = sendIconSvg;
+    btn.title = 'Enviar';
+  }
+}
+
+// Send interrupt signal to stop current processing
+function sendInterrupt() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'interrupt' }));
+  // Optimistically update UI
+  isProcessing = false;
+  document.getElementById('typing-indicator').classList.remove('visible');
+  document.getElementById('status-text').textContent = 'Online';
+  updateSendButton();
 }
 
 function showInputArea() {
@@ -1293,6 +1347,17 @@ async function sendMessage() {
   try {
     var input = document.getElementById('msg-input');
     var text = input.value.trim();
+
+    // Handle stop/interrupt when processing
+    if (isProcessing) {
+      if (!text) {
+        // Stop button: just interrupt, no new message
+        sendInterrupt();
+        return;
+      }
+      // Amber button: interrupt first, then send new message
+      sendInterrupt();
+    }
 
     if (isRecording) return;
 

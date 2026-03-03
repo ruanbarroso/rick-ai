@@ -116,10 +116,13 @@ export class LLMService {
    * Chat via the active model — NO fallback.
    * Rick main chat always uses Gemini Flash. Errors propagate to the caller
    * so agent.ts can show them directly to the user.
+   *
+   * @param signal - Optional AbortSignal to cancel the request.
    */
   async chat(
     messages: LLMMessage[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    signal?: AbortSignal
   ): Promise<LLMResponse> {
     const activeModel = this.getActiveModel();
     const provider = this.providers[activeModel.provider];
@@ -128,24 +131,27 @@ export class LLMService {
       throw new Error(`Provider "${activeModel.provider}" nao disponivel.`);
     }
 
-    return await provider.chat(messages, systemPrompt, activeModel.modelId);
+    return await provider.chat(messages, systemPrompt, activeModel.modelId, signal);
   }
 
   /**
    * Chat with a specific provider by name — used for GPT Codex fallback.
    * Bypasses active model selection entirely.
+   *
+   * @param signal - Optional AbortSignal to cancel the request.
    */
   async chatWithProvider(
     providerName: string,
     messages: LLMMessage[],
     systemPrompt?: string,
-    modelId?: string
+    modelId?: string,
+    signal?: AbortSignal
   ): Promise<LLMResponse> {
     const provider = this.providers[providerName];
     if (!provider) {
       throw new Error(`Provider "${providerName}" nao disponivel.`);
     }
     const model = modelId || AVAILABLE_MODELS.find((m) => m.provider === providerName)?.modelId;
-    return await provider.chat(messages, systemPrompt, model);
+    return await provider.chat(messages, systemPrompt, model, signal);
   }
 }

@@ -18,6 +18,8 @@
     --bubble-user: #3730a3;
     --danger: #ef4444;
     --success: #22c55e;
+    --amber: #f59e0b;
+    --amber-hover: #fbbf24;
     --sidebar-bg: #0d1117;
     --sidebar-hover: #161b25;
   }
@@ -1275,6 +1277,18 @@
   }
 
   .input-area button.send-btn:hover { background: var(--accent-hover); }
+
+  /* Stop button (red) - shown when processing and textarea is empty */
+  .input-area button.send-btn.stop-mode {
+    background: var(--danger);
+  }
+  .input-area button.send-btn.stop-mode:hover { background: #dc2626; }
+
+  /* Interrupt+Send button (amber) - shown when processing and textarea has text */
+  .input-area button.send-btn.interrupt-mode {
+    background: var(--amber);
+  }
+  .input-area button.send-btn.interrupt-mode:hover { background: var(--amber-hover); }
 
   .input-area button.recording {
     background: var(--danger);
@@ -2924,6 +2938,7 @@ var oauthPopup = null;
 var oauthPopupTimer = null;
 var sendInFlight = false;
 var deployInProgress = false;
+var isProcessing = false; // true when Rick is processing a message (typing indicator visible)
 
 // ==================== LOGIN ====================
 function doLogout() {
@@ -3982,6 +3997,7 @@ function renderText(text) {
 function showTyping(composing) {
   var el = document.getElementById('typing-indicator');
   var statusEl = document.getElementById('header-status');
+  isProcessing = composing;
   if (composing) {
     el.classList.add('visible');
     statusEl.textContent = 'Digitando...';
@@ -3991,7 +4007,40 @@ function showTyping(composing) {
     statusEl.textContent = 'Online';
     statusEl.className = 'sidebar-subtitle online';
   }
+  updateSendButton();
   scrollToBottom();
+}
+
+// SVG icons for send button states
+var sendIconSvg = '<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
+var stopIconSvg = '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
+// Update send button appearance based on processing state and textarea content
+function updateSendButton() {
+  var btn = document.getElementById('send-btn');
+  if (!btn) return;
+  var input = document.getElementById('msg-input');
+  var hasText = input && input.value.trim().length > 0;
+
+  btn.classList.remove('stop-mode', 'interrupt-mode');
+
+  if (isProcessing) {
+    if (hasText) {
+      // Amber: interrupt + send new message
+      btn.classList.add('interrupt-mode');
+      btn.innerHTML = sendIconSvg;
+      btn.title = 'Interromper e enviar';
+    } else {
+      // Red: stop processing
+      btn.classList.add('stop-mode');
+      btn.innerHTML = stopIconSvg;
+      btn.title = 'Parar';
+    }
+  } else {
+    // Blue: normal send
+    btn.innerHTML = sendIconSvg;
+    btn.title = 'Enviar';
+  }
 }
 
 // Stores the latest QR code data so it can be shown when the user opens settings.
@@ -4052,6 +4101,17 @@ async function sendMessage() {
   try {
   var input = document.getElementById('msg-input');
   var text = input.value.trim();
+
+  // Handle stop/interrupt when processing
+  if (isProcessing) {
+    if (!text) {
+      // Stop button: just interrupt, no new message
+      sendInterrupt();
+      return;
+    }
+    // Amber button: interrupt first, then send new message
+    sendInterrupt();
+  }
 
   if (isRecording) {
     showToast('Finalize ou cancele a gravacao antes de enviar');
@@ -4161,6 +4221,15 @@ async function sendMessage() {
   }
 }
 
+// Send interrupt signal to stop current processing
+function sendInterrupt() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  var sessionId = currentSessionId || 'main';
+  ws.send(JSON.stringify({ type: 'interrupt', sessionId: sessionId }));
+  // Optimistically update UI
+  showTyping(false);
+}
+
 function handleKeyDown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -4171,6 +4240,8 @@ function handleKeyDown(e) {
 function autoResize(el) {
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  // Update button state when user types
+  updateSendButton();
 }
 
 // ==================== AUDIO RECORDING ====================

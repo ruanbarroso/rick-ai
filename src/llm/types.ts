@@ -24,7 +24,8 @@ export interface LLMProvider {
   chat(
     messages: LLMMessage[],
     systemPrompt?: string,
-    modelOverride?: string
+    modelOverride?: string,
+    signal?: AbortSignal
   ): Promise<LLMResponse>;
 }
 

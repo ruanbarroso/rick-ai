@@ -240,6 +240,8 @@ export class EditSession {
   private activeProvider: EditProvider = "claude";
   /** Stored env from start() so we can recreate the container if it dies. */
   private startEnv: Record<string, string> | null = null;
+  /** Current running child process (for interrupt support). */
+  private currentProcess: ReturnType<typeof spawn> | null = null;
 
   constructor(
     connectorManager: ConnectorManager,
@@ -352,6 +354,21 @@ export class EditSession {
 
   getState(): EditState {
     return this.state;
+  }
+
+  /**
+   * Interrupt the currently running Claude Code process via SIGINT.
+   * Returns true if there was a process to interrupt.
+   */
+  interrupt(): boolean {
+    if (this.currentProcess) {
+      logger.info({ sessionId: this.id }, "Interrupting edit session process");
+      this.currentProcess.kill("SIGINT");
+      this.currentProcess = null;
+      this.stopTyping();
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -600,6 +617,7 @@ export class EditSession {
         "exec", "-w", "/workspace", this.containerName,
         ...args,
       ]);
+      this.currentProcess = child;
 
       const queue = new StreamQueue(this.sendMessage, 3500);
       let ndjsonBuffer = "";
@@ -707,6 +725,9 @@ export class EditSession {
       });
 
       child.on("close", async (code) => {
+        // Clear process reference
+        this.currentProcess = null;
+        
         // Process any remaining partial line in the buffer
         if (ndjsonBuffer.trim()) {
           try {

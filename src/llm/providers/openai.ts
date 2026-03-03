@@ -51,16 +51,17 @@ export class OpenAIProvider implements LLMProvider {
   async chat(
     messages: LLMMessage[],
     systemPrompt?: string,
-    modelOverride?: string
+    modelOverride?: string,
+    signal?: AbortSignal
   ): Promise<LLMResponse> {
     const modelId = modelOverride || config.openai.model;
 
     // Choose auth mode: OAuth (Codex) takes priority
     if (this.oauthToken) {
-      return this.chatWithCodex(messages, systemPrompt, modelId);
+      return this.chatWithCodex(messages, systemPrompt, modelId, signal);
     }
 
-    return this.chatWithApiKey(messages, systemPrompt, modelId);
+    return this.chatWithApiKey(messages, systemPrompt, modelId, signal);
   }
 
   /**
@@ -69,7 +70,8 @@ export class OpenAIProvider implements LLMProvider {
   private async chatWithApiKey(
     messages: LLMMessage[],
     systemPrompt?: string,
-    modelId?: string
+    modelId?: string,
+    signal?: AbortSignal
   ): Promise<LLMResponse> {
     const client = this.getApiKeyClient();
     if (!client) throw new Error("OpenAI: no API key available");
@@ -92,7 +94,7 @@ export class OpenAIProvider implements LLMProvider {
       model,
       messages: openaiMessages,
       max_tokens: 4096,
-    }, { timeout: 60_000 }); // 60s timeout
+    }, { timeout: 60_000, signal }); // 60s timeout + abort signal
 
     const text = response.choices[0]?.message?.content || "";
     const tokensUsed = response.usage?.total_tokens;
@@ -114,7 +116,8 @@ export class OpenAIProvider implements LLMProvider {
   private async chatWithCodex(
     messages: LLMMessage[],
     systemPrompt?: string,
-    modelId?: string
+    modelId?: string,
+    signal?: AbortSignal
   ): Promise<LLMResponse> {
     if (!this.oauthToken) throw new Error("OpenAI: no OAuth token available");
 
@@ -160,21 +163,18 @@ export class OpenAIProvider implements LLMProvider {
       headers["ChatGPT-Account-Id"] = this.oauthAccountId;
     }
 
-    // 60s timeout for Codex API
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60_000);
+    // 60s timeout for Codex API, combined with external abort signal
+    const timeoutSignal = AbortSignal.timeout(60_000);
+    const combinedSignal = signal
+      ? AbortSignal.any([timeoutSignal, signal])
+      : timeoutSignal;
 
-    let response: Response;
-    try {
-      response = await fetch(CODEX_API_ENDPOINT, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    const response = await fetch(CODEX_API_ENDPOINT, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: combinedSignal,
+    });
 
     if (!response.ok) {
       const errorBody = await response.text();

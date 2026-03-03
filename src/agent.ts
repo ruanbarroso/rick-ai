@@ -52,6 +52,20 @@ export class Agent {
    */
   private messageQueue = new Map<string, Promise<string>>();
 
+  /**
+   * Per-user AbortController for cancelling in-flight LLM requests.
+   * Key: userPhone, Value: { controller, generation }
+   * The generation counter prevents race conditions when a new message arrives
+   * while the previous one is being cancelled.
+   */
+  private userAbortControllers = new Map<string, { controller: AbortController; generation: number }>();
+
+  /**
+   * Monotonically increasing generation counter per user.
+   * Incremented each time a new message arrives for a user.
+   */
+  private userGenerations = new Map<string, number>();
+
   /** Reference to web bridge for sending transcription events etc. */
   private webBridge: WebAgentBridge | null = null;
   /** Callback for broadcasting main-session messages to public viewers */
@@ -79,6 +93,29 @@ export class Agent {
     this.claudeOAuth = claudeOAuthService;
     this.openaiOAuth = openaiOAuthService;
     this.sessionManager = new SessionManager(connectorManager, memory);
+  }
+
+  /**
+   * Interrupt any in-flight processing for a specific user.
+   * Called when user sends a new message while processing, or clicks Stop button.
+   * Returns true if there was something to interrupt.
+   */
+  interruptUser(userId: string): boolean {
+    const state = this.userAbortControllers.get(userId);
+    if (state) {
+      logger.info({ userId }, "Interrupting user processing");
+      state.controller.abort();
+      this.userAbortControllers.delete(userId);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Check if a user currently has processing in flight.
+   */
+  isUserProcessing(userId: string): boolean {
+    return this.userAbortControllers.has(userId);
   }
 
   /**
@@ -152,6 +189,24 @@ export class Agent {
     // Web UI always sends messages as the admin user (the only Web UI user).
     // For connectors (WhatsApp), userRole comes from resolveUser() and can be null (pending).
     const userRole: UserRole = msg.userRole !== undefined ? msg.userRole : "admin";
+
+    // Increment generation counter and create new AbortController for this request.
+    // This allows us to cancel in-flight LLM requests when a new message arrives.
+    const prevGeneration = this.userGenerations.get(userPhone) ?? 0;
+    const generation = prevGeneration + 1;
+    this.userGenerations.set(userPhone, generation);
+
+    // Abort any previous in-flight request for this user
+    const prevState = this.userAbortControllers.get(userPhone);
+    if (prevState) {
+      logger.info({ userPhone, prevGeneration: prevState.generation, newGeneration: generation }, "Auto-cancelling previous request");
+      prevState.controller.abort();
+    }
+
+    // Create new AbortController for this request
+    const abortController = new AbortController();
+    this.userAbortControllers.set(userPhone, { controller: abortController, generation });
+    const signal = abortController.signal;
 
     // Get or create user — always yields a numeric user.id for DB operations.
     // When RBAC is active (numericUserId available), the user was already resolved by the connector.
@@ -337,7 +392,7 @@ export class Agent {
       const userHasDoneSessions = this.sessionManager.hasDoneSessionsForUser(userPhone);
       if (userHasDoneSessions && !msg.skipSubAgentRelay) {
         logger.info({ userPhone, userRole, doneSessions: this.sessionManager.getDoneSessionsForUser(userPhone).length }, "Routing to sub-agent relay (user has done sessions)");
-        const relayResult = await this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos, user.id);
+        const relayResult = await this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos, user.id, signal);
         // null means the message is a SELF task that doesn't relate to the session — fall through to normal chat
         if (relayResult !== null) return relayResult;
         logger.info({ userPhone }, "Sub-agent relay returned null — falling through to normal classification");
@@ -346,7 +401,7 @@ export class Agent {
       // Classify the task — does it need a sub-agent?
       // Skip classification for roles that cannot invoke sub-agents (business)
       const canDelegate = canInvokeSubAgent(userRole);
-      const classification = canDelegate ? await classifyTask(fullText) : null;
+      const classification = canDelegate ? await classifyTask(fullText, signal) : null;
       logger.info(
         { userPhone, userRole, canDelegate, classified: classification ? "DELEGATE" : "SELF", text: fullText.substring(0, 80) },
         "Task classification result"
@@ -390,8 +445,13 @@ export class Agent {
       } else if (!routingMedia && imageMedias && imageMedias.length > 0) {
         allMedia = imageMedias.length === 1 ? imageMedias[0] : imageMedias;
       }
-      return this.handleSimpleChat(userPhone, user.displayName, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, user.id, connectorName);
+      return this.handleSimpleChat(userPhone, user.displayName, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, user.id, connectorName, signal);
     } finally {
+      // Clean up abort controller for this generation (only if it's still the current one)
+      const currentState = this.userAbortControllers.get(userPhone);
+      if (currentState && currentState.generation === generation) {
+        this.userAbortControllers.delete(userPhone);
+      }
       await this.connectorManager.setTyping(connectorName, userPhone, false);
       if (this.mainTypingCallback) try { this.mainTypingCallback(user.id, false); } catch {}
     }
@@ -410,7 +470,8 @@ export class Agent {
     fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
     userRole: UserRole = "admin",
     userId?: number,
-    connectorName?: string
+    connectorName?: string,
+    signal?: AbortSignal
   ): Promise<string> {
     // RBAC: Use global memory context with role-based filtering
     const memoryContext = await this.memory.buildGlobalMemoryContext(userRole);
@@ -440,8 +501,13 @@ export class Agent {
 
     let response;
     try {
-      response = await this.llm.chat(messages, systemPrompt);
+      response = await this.llm.chat(messages, systemPrompt, signal);
     } catch (err: any) {
+      // Check if this was an abort
+      if (err.name === "AbortError" || signal?.aborted) {
+        logger.info({ userPhone }, "LLM request aborted by user");
+        return ""; // Return empty string — the new message will generate a response
+      }
       logger.error({ userPhone, model: this.llm.getActiveModel().id, err: err.message }, "Gemini Flash failed — no fallback");
       return `Erro no Gemini: ${err.message?.substring(0, 200) || "erro desconhecido"}.\nTente novamente em alguns segundos.`;
     }
@@ -786,7 +852,8 @@ export class Agent {
     imageUrls?: string[],
     imageMedias?: MediaAttachment[],
     fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
-    userId?: number
+    userId?: number,
+    signal?: AbortSignal
   ): Promise<string | null> {
     const doneSessions = this.sessionManager.getDoneSessionsForUser(userPhone);
     if (doneSessions.length === 0) return "Nenhuma sessao pendente.";
@@ -839,7 +906,7 @@ export class Agent {
 
     if (!isContinuation) {
       // Use classifier as tiebreaker
-      const classification = await classifyTask(text);
+      const classification = await classifyTask(text, signal);
       if (classification) {
         // CASE 3: New DELEGATE task — nag to close pending sessions first
         const sessionList = doneSessions
@@ -1805,6 +1872,22 @@ Retorne APENAS as linhas de extracao, nada mais.`;
 
       setMainTypingCallback: (cb: (userId: number, composing: boolean) => void) => {
         this.mainTypingCallback = cb;
+      },
+
+      interruptUser: (userId: string): boolean => {
+        return this.interruptUser(userId);
+      },
+
+      isUserProcessing: (userId: string): boolean => {
+        return this.isUserProcessing(userId);
+      },
+
+      interruptSession: (sessionId: string): boolean => {
+        return this.sessionManager.interruptSession(sessionId);
+      },
+
+      isSessionProcessing: (sessionId: string): boolean => {
+        return this.sessionManager.isSessionProcessing(sessionId);
       },
     };
 

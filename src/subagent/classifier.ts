@@ -73,8 +73,9 @@ function getClient(): GoogleGenerativeAI {
 /**
  * Classify a user message using Gemini Flash to determine routing.
  * Returns null for SELF (Rick handles directly), or a TaskClassification for DELEGATE.
+ * @param signal Optional AbortSignal to cancel the classification request
  */
-export async function classifyTask(userMessage: string): Promise<TaskClassification | null> {
+export async function classifyTask(userMessage: string, signal?: AbortSignal): Promise<TaskClassification | null> {
   const text = userMessage.trim();
 
   // Skip very short messages — always SELF
@@ -84,13 +85,29 @@ export async function classifyTask(userMessage: string): Promise<TaskClassificat
   if (text.startsWith("/")) return null;
 
   try {
+    // Check if already aborted before making request
+    if (signal?.aborted) {
+      logger.info("Classifier aborted before request");
+      return null;
+    }
+
     const client = getClient();
     const model = client.getGenerativeModel({
       model: CLASSIFIER_MODEL,
       systemInstruction: CLASSIFIER_PROMPT,
     });
 
-    const result = await model.generateContent(text);
+    // Apply abort signal via Promise.race
+    const resultPromise = model.generateContent(text);
+    const abortPromise = signal
+      ? new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("Classifier aborted")), { once: true });
+        })
+      : null;
+    
+    const result = abortPromise
+      ? await Promise.race([resultPromise, abortPromise])
+      : await resultPromise;
     const raw = result.response.text().trim();
 
     // Parse "CATEGORY|cred1,cred2" format

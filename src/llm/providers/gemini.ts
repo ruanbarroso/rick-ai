@@ -25,7 +25,8 @@ export class GeminiProvider implements LLMProvider {
   async chat(
     messages: LLMMessage[],
     systemPrompt?: string,
-    modelOverride?: string
+    modelOverride?: string,
+    signal?: AbortSignal
   ): Promise<LLMResponse> {
     const modelId = modelOverride || config.gemini.model;
 
@@ -67,12 +68,23 @@ export class GeminiProvider implements LLMProvider {
     }
     lastParts.push({ text: lastMessage.content });
 
-    // Apply timeout to prevent indefinite hangs on API calls
+    // Apply timeout and abort signal to prevent indefinite hangs on API calls
     const resultPromise = chat.sendMessage(lastParts);
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error(`Gemini API timeout after ${LLM_TIMEOUT_MS / 1000}s`)), LLM_TIMEOUT_MS)
     );
-    const result = await Promise.race([resultPromise, timeoutPromise]);
+    const abortPromise = signal
+      ? new Promise<never>((_, reject) => {
+          if (signal.aborted) {
+            reject(new Error("Gemini API call aborted"));
+          }
+          signal.addEventListener("abort", () => reject(new Error("Gemini API call aborted")), { once: true });
+        })
+      : null;
+    const racers = abortPromise
+      ? [resultPromise, timeoutPromise, abortPromise]
+      : [resultPromise, timeoutPromise];
+    const result = await Promise.race(racers);
     const response = result.response;
     const text = response.text();
 
