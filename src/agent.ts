@@ -210,18 +210,25 @@ export class Agent {
 
     logger.info({ userPhone, generation, aborted: signal.aborted, text: rawText?.substring(0, 30) }, "handleMessageInternal: starting");
 
-    // Check if already aborted before starting (another message arrived while we were in queue)
-    if (signal.aborted) {
-      logger.info({ userPhone, generation }, "Request already aborted before processing — skipping");
-      return "";
-    }
-
     // Get or create user — always yields a numeric user.id for DB operations.
     // When RBAC is active (numericUserId available), the user was already resolved by the connector.
     // Otherwise, fall back to legacy phone-based lookup.
     const user = numericUserId
       ? { id: numericUserId, phone: userPhone, displayName: userName || null }
       : await this.memory.getOrCreateUser(userPhone, userName);
+
+    // Save user message EARLY so it appears in history even if request is aborted.
+    // This ensures subsequent messages have full context of what user said.
+    await this.memory.saveMessageByUserId(user.id, "user", rawText, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
+    const userMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
+      ? { audioUrl, imageUrls, fileInfos } : undefined;
+    this.notifyMainViewers(user.id, "user", rawText, "text", connectorName, userMediaInfo);
+
+    // Check if aborted AFTER saving user message (so context is preserved)
+    if (signal.aborted) {
+      logger.info({ userPhone, generation }, "Request aborted — user message saved, skipping LLM response");
+      return "";
+    }
 
     // If message is a reply to another message, prepend quoted context
     let fullText = rawText;
@@ -515,11 +522,8 @@ export class Agent {
       { role: "user" as const, content: text, media },
     ];
 
-    // Save user message BEFORE the LLM call so it persists even if the call fails/crashes
-    await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
-    const userMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
-      ? { audioUrl, imageUrls, fileInfos } : undefined;
-    this.notifyMainViewers(userId!, "user", text, "text", connectorName, userMediaInfo);
+    // Note: User message is already saved in handleMessageInternal() before we get here.
+    // This ensures aborted messages are also in the history for context.
 
     let response;
     try {
