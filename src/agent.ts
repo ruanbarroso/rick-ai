@@ -142,9 +142,18 @@ export class Agent {
    * Public entry point — serializes per user to prevent race conditions.
    * Two messages from the same user are processed sequentially, never concurrently.
    * Called by ConnectorManager when any connector receives a message.
+   * 
+   * IMPORTANT: Abort is triggered IMMEDIATELY when a new message arrives,
+   * before waiting in the queue. This ensures in-flight LLM requests are
+   * cancelled as soon as possible, not after the previous message finishes.
    */
   async handleMessage(msg: IncomingMessage): Promise<string> {
     const { userId } = msg;
+
+    // Abort any in-flight request IMMEDIATELY — don't wait for the queue.
+    // This ensures the LLM request is cancelled as soon as the new message arrives.
+    this.interruptUser(userId);
+
     const prev = this.messageQueue.get(userId) ?? Promise.resolve("");
     const next = prev
       .catch(() => {}) // don't let a failed message block the queue
@@ -190,21 +199,11 @@ export class Agent {
     // For connectors (WhatsApp), userRole comes from resolveUser() and can be null (pending).
     const userRole: UserRole = msg.userRole !== undefined ? msg.userRole : "admin";
 
-    // Increment generation counter and create new AbortController for this request.
-    // This allows us to cancel in-flight LLM requests when a new message arrives.
-    const prevGeneration = this.userGenerations.get(userPhone) ?? 0;
-    const generation = prevGeneration + 1;
-    this.userGenerations.set(userPhone, generation);
-
-    // Abort any previous in-flight request for this user
-    const prevState = this.userAbortControllers.get(userPhone);
-    if (prevState) {
-      logger.info({ userPhone, prevGeneration: prevState.generation, newGeneration: generation }, "Auto-cancelling previous request");
-      prevState.controller.abort();
-    }
-
-    // Create new AbortController for this request
+    // Create new AbortController for this request.
+    // Note: interruptUser() was already called in handleMessage() to abort any previous request.
     const abortController = new AbortController();
+    const generation = (this.userGenerations.get(userPhone) ?? 0) + 1;
+    this.userGenerations.set(userPhone, generation);
     this.userAbortControllers.set(userPhone, { controller: abortController, generation });
     const signal = abortController.signal;
 
@@ -337,6 +336,13 @@ export class Agent {
     let routingMedia = media; // keep original for simple chat (image support)
     if (media?.mimeType.startsWith("audio/")) {
       const transcription = await this.transcribeAudioWithGemini(media);
+
+      // Check if aborted during transcription
+      if (signal.aborted) {
+        logger.info({ userPhone }, "Request aborted during audio transcription — skipping response");
+        return "";
+      }
+
       const trimmedText = fullText.trim();
       const isAudioPlaceholder = /o usuario enviou um audio/i.test(trimmedText);
       const isCombinedPlaceholder = /o usuario enviou um audio e imagens?/i.test(trimmedText);
@@ -402,6 +408,13 @@ export class Agent {
       // Skip classification for roles that cannot invoke sub-agents (business)
       const canDelegate = canInvokeSubAgent(userRole);
       const classification = canDelegate ? await classifyTask(fullText, signal) : null;
+
+      // Check if aborted during classification — if so, bail out silently
+      if (signal.aborted) {
+        logger.info({ userPhone }, "Request aborted during classification — skipping response");
+        return "";
+      }
+
       logger.info(
         { userPhone, userRole, canDelegate, classified: classification ? "DELEGATE" : "SELF", text: fullText.substring(0, 80) },
         "Task classification result"
@@ -503,8 +516,8 @@ export class Agent {
     try {
       response = await this.llm.chat(messages, systemPrompt, signal);
     } catch (err: any) {
-      // Check if this was an abort
-      if (err.name === "AbortError" || signal?.aborted) {
+      // Check if this was an abort (either AbortError or our custom abort message)
+      if (err.name === "AbortError" || signal?.aborted || err.message?.includes("aborted")) {
         logger.info({ userPhone }, "LLM request aborted by user");
         return ""; // Return empty string — the new message will generate a response
       }
