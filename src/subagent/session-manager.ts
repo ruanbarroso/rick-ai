@@ -844,22 +844,22 @@ export class SessionManager {
   // ==================== IMAGE INJECTION ====================
 
   /**
-   * Copy image attachments into a running sub-agent container.
-   * Returns the list of paths inside the container (e.g. /tmp/img-xxx.png).
+   * Copy media attachments (images, PDFs, documents) into a running sub-agent container.
+   * Returns the list of paths inside the container (e.g. /tmp/img-xxx.png, /tmp/file-xxx.pdf).
    */
   private async injectImages(session: SubAgentSession, images?: MediaAttachment[]): Promise<string[]> {
     if (!images || images.length === 0 || !session.containerId) return [];
 
     const paths: string[] = [];
-    for (const img of images) {
-      if (!img.mimeType.startsWith("image/")) continue;
+    for (const attachment of images) {
       try {
-        const ext = img.mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png";
+        const ext = this.getFileExtension(attachment);
         const id = randomBytes(4).toString("hex");
-        const containerPath = `/tmp/img-${id}.${ext}`;
-        const tmpFile = join(tmpdir(), `subagent-img-${id}.${ext}`);
+        const prefix = attachment.mimeType.startsWith("image/") ? "img" : "file";
+        const containerPath = `/tmp/${prefix}-${id}.${ext}`;
+        const tmpFile = join(tmpdir(), `subagent-${prefix}-${id}.${ext}`);
 
-        await writeFile(tmpFile, img.data);
+        await writeFile(tmpFile, attachment.data);
         try {
           await execFileAsync("docker", ["cp", tmpFile, `${session.containerName}:${containerPath}`]);
           paths.push(containerPath);
@@ -867,10 +867,38 @@ export class SessionManager {
           await unlink(tmpFile).catch(() => {});
         }
       } catch (err) {
-        logger.warn({ err, sessionId: session.id }, "Failed to inject image into sub-agent container");
+        logger.warn({ err, sessionId: session.id }, "Failed to inject attachment into sub-agent container");
       }
     }
     return paths;
+  }
+
+  /** Derive a file extension from a MediaAttachment's mimeType or fileName. */
+  private getFileExtension(attachment: MediaAttachment): string {
+    // Prefer extension from original fileName if available
+    if (attachment.fileName) {
+      const dotIdx = attachment.fileName.lastIndexOf(".");
+      if (dotIdx > 0) return attachment.fileName.substring(dotIdx + 1).toLowerCase();
+    }
+    // Common MIME → extension mappings
+    const mimeMap: Record<string, string> = {
+      "application/pdf": "pdf",
+      "application/msword": "doc",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+      "application/vnd.ms-excel": "xls",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+      "application/vnd.ms-powerpoint": "ppt",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+      "text/plain": "txt",
+      "text/csv": "csv",
+      "application/json": "json",
+      "application/zip": "zip",
+      "image/jpeg": "jpg",
+      "image/png": "png",
+      "image/webp": "webp",
+      "image/gif": "gif",
+    };
+    return mimeMap[attachment.mimeType] || attachment.mimeType.split("/")[1] || "bin";
   }
 
 }

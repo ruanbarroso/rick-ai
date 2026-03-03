@@ -1,6 +1,8 @@
 export interface MediaAttachment {
   data: Buffer;
   mimeType: string;
+  /** Original file name (for documents/files sent via WhatsApp or Web UI) */
+  fileName?: string;
 }
 
 export interface LLMMessage {

@@ -397,13 +397,14 @@ export class WhatsAppConnector implements Connector {
         return;
       }
 
-      // Extract text, detect audio and image
+      // Extract text, detect audio, image, and document
       const text = this.extractText(msg);
       const audioInfo = this.extractAudioInfo(msg);
       const imageInfo = this.extractImageInfo(msg);
+      const docInfo = this.extractDocumentInfo(msg);
 
-      // Skip if no text, audio, or image
-      if (!text && !audioInfo && !imageInfo) return;
+      // Skip if no text, audio, image, or document
+      if (!text && !audioInfo && !imageInfo && !docInfo) return;
 
       // Dedup: skip if already being processed
       if (this.processing.has(msgId)) return;
@@ -426,7 +427,7 @@ export class WhatsAppConnector implements Connector {
       const pushName = msg.pushName || undefined;
 
       // Track message in message_log for dedup
-      const trackText = text || (audioInfo ? "[audio]" : "[imagem]");
+      const trackText = text || (audioInfo ? "[audio]" : docInfo ? `[arquivo: ${docInfo.fileName}]` : "[imagem]");
       await this.memory.trackMessage(msgId, "USER", trackText);
 
       // ==================== RBAC: Resolve user ====================
@@ -462,7 +463,7 @@ export class WhatsAppConnector implements Connector {
       // Extract quoted message text (if user replied to a message)
       const quotedText = this.extractQuotedText(msg);
 
-      // Download media if present (audio or image)
+      // Download media if present (audio, image, or document/file)
       let media: MediaAttachment | undefined;
       if (audioInfo) {
         try {
@@ -496,6 +497,23 @@ export class WhatsAppConnector implements Connector {
           await this.sendTextMessage(chatJid, "Nao consegui baixar a imagem. Tenta enviar de novo?");
           return;
         }
+      } else if (docInfo) {
+        try {
+          const buffer = await downloadMediaMessage(msg, "buffer", {});
+          media = {
+            data: buffer as Buffer,
+            mimeType: docInfo.mimeType,
+            fileName: docInfo.fileName,
+          };
+          logger.info(
+            { from: senderId, type: "document", mimeType: docInfo.mimeType, fileName: docInfo.fileName, hasCaption: !!text },
+            "Document message received"
+          );
+        } catch (err) {
+          logger.error({ err }, "Failed to download document");
+          await this.sendTextMessage(chatJid, "Nao consegui baixar o arquivo. Tenta enviar de novo?");
+          return;
+        }
       } else {
         logger.info(
           {
@@ -513,6 +531,9 @@ export class WhatsAppConnector implements Connector {
         promptText = text || "O usuario enviou um audio. Ouça, entenda e responda naturalmente.";
       } else if (media && imageInfo) {
         promptText = text || "O usuario enviou uma imagem. Analise a imagem e descreva o que voce ve.";
+      } else if (media && docInfo) {
+        const fname = docInfo.fileName;
+        promptText = text || `O usuario enviou o arquivo "${fname}". Leia o conteudo e responda com base nele.`;
       } else {
         promptText = text || "";
       }
@@ -786,6 +807,23 @@ export class WhatsAppConnector implements Connector {
 
     return {
       mimeType: image.mimetype || "image/jpeg",
+    };
+  }
+
+  private extractDocumentInfo(msg: any): { mimeType: string; fileName: string } | null {
+    const message = msg.message;
+    if (!message) return null;
+
+    const inner = message.ephemeralMessage?.message || message;
+    // documentWithCaptionMessage wraps a documentMessage inside .message
+    const doc = inner.documentWithCaptionMessage?.message?.documentMessage
+      || inner.documentMessage;
+
+    if (!doc) return null;
+
+    return {
+      mimeType: doc.mimetype || "application/octet-stream",
+      fileName: doc.fileName || "document",
     };
   }
 
