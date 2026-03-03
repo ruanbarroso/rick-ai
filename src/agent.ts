@@ -481,8 +481,11 @@ export class Agent {
       if (currentState && currentState.generation === generation) {
         this.userAbortControllers.delete(userPhone);
       }
-      // Note: setTyping(false) is now called by connectors AFTER sending the response,
-      // ensuring the typing indicator stays visible until the message is delivered.
+      // Always turn off typing indicator when processing ends (success, error, or abort).
+      // The WebConnector will also send typing:false after broadcasting the response,
+      // but we need this here to handle aborted requests that return early.
+      await this.connectorManager.setTyping(connectorName, userPhone, false);
+      if (this.mainTypingCallback) try { this.mainTypingCallback(user.id, false); } catch {}
     }
   }
 
@@ -536,6 +539,13 @@ export class Agent {
       }
       logger.error({ userPhone, model: this.llm.getActiveModel().id, err: err.message }, "Gemini Flash failed — no fallback");
       return `Erro no Gemini: ${err.message?.substring(0, 200) || "erro desconhecido"}.\nTente novamente em alguns segundos.`;
+    }
+
+    // Final abort check: even if LLM completed, don't send response if aborted
+    // This handles the race condition where LLM finishes just as abort arrives
+    if (signal?.aborted) {
+      logger.info({ userPhone }, "LLM completed but request was aborted — discarding response");
+      return "";
     }
 
     await this.memory.saveMessageByUserId(userId!, "assistant", response.content, response.model, response.tokensUsed, undefined, undefined, undefined, undefined, connectorName);
