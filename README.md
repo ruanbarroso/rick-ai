@@ -447,24 +447,19 @@ Rick can update itself from GitHub without SSH access:
 ## Quick Start
 
 ```bash
-# 1. Clone and configure
+# 1. Clone
 git clone https://github.com/ruanbarroso/rick-ai.git
 cd rick-ai
-cp .env.example .env
-# Edit .env with your GEMINI_API_KEY (minimum required)
-# Optionally set DATABASE_URL, WEB_AUTH_PASSWORD, etc.
 
-# 2. Build and start
-docker compose up -d --build
+# 2. Run setup (interactive — generates .env, builds, optionally installs systemd service)
+bash scripts/setup.sh
 
 # 3. Pair WhatsApp
 docker compose logs -f agent
 # Scan the QR code with WhatsApp (Linked Devices)
-
-# 4. Message yourself on WhatsApp or open the Web UI
-# Rick will respond to your self-chat messages
-# Web UI available at http://localhost:80 (requires WEB_AUTH_PASSWORD)
 ```
+
+For manual setup, copy `.env.example` to `.env`, fill in at least `GEMINI_API_KEY`, then run `docker compose up -d --build`.
 
 ## Security
 

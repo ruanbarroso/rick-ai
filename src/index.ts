@@ -25,16 +25,14 @@ async function main() {
   console.log(`
   ╔══════════════════════════════════╗
   ║          RICK AI v2.1           ║
-  ║      Assistente multi-canal      ║
-  ║   + Sub-agentes (Claude/Search) ║
-  ║   + SQLite fallback             ║
   ╚══════════════════════════════════╝
   `);
 
   // 1. Initialize database (PostgreSQL if DATABASE_URL is set, otherwise SQLite)
   const databaseUrl = process.env.DATABASE_URL || "";
   await initDatabase(databaseUrl || undefined, "./data/rick.db");
-  logger.info({ backend: isPostgres() ? "postgresql" : "sqlite" }, "Database backend initialized");
+  const dbBackend = isPostgres() ? "PostgreSQL" : "SQLite (./data/rick.db)";
+  logger.info({ backend: dbBackend }, "Database: %s", dbBackend);
 
   // 2. Run migrations (creates tables in whichever backend is active)
   logger.info("Running database migrations...");

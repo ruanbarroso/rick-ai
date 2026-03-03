@@ -73,14 +73,25 @@ export function reloadConfig(): void {
 }
 
 export function validateConfig(): void {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
   if (!config.gemini.apiKey) {
-    throw new Error("GEMINI_API_KEY is required");
+    errors.push("GEMINI_API_KEY is required. Get one at https://aistudio.google.com/apikey");
   }
-  // DATABASE_URL is now optional — Rick uses SQLite when not set
+  if (!config.webAuthPassword) {
+    warnings.push("WEB_AUTH_PASSWORD not set — Web UI will be disabled");
+  }
   if (!process.env.MEMORY_ENCRYPTION_KEY) {
-    console.warn(
-      "[WARN] MEMORY_ENCRYPTION_KEY not set — credentials will be stored as plaintext. " +
-      "Set this env var to enable AES-256-GCM encryption for sensitive memories."
+    warnings.push("MEMORY_ENCRYPTION_KEY not set — credentials stored as plaintext");
+  }
+
+  for (const w of warnings) {
+    console.warn(`[config] ${w}`);
+  }
+  if (errors.length > 0) {
+    throw new Error(
+      `Configuration errors:\n${errors.map((e) => `  - ${e}`).join("\n")}\n\nFix these in your .env file or run: bash scripts/setup.sh`
     );
   }
 }
