@@ -302,24 +302,50 @@ function makeGeminiAdapter(history, userContent) {
 
 // ── Claude raw passthrough ──────────────────────────────────────────────────
 
+/**
+ * Detect rate-limit / quota-exhaustion signals in Claude CLI output.
+ * These indicate the provider refused to process the request — NOT that useful
+ * output was produced. In this case, we should fall through to the next provider.
+ */
+function isRateLimitOrQuotaError(text) {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("rate limit") ||
+    lower.includes("429") ||
+    lower.includes("overloaded") ||
+    lower.includes("credits") ||
+    lower.includes("quota") ||
+    lower.includes("hit your limit") ||
+    lower.includes("out of extra usage") ||
+    lower.includes("out of usage") ||
+    (lower.includes("limit") && lower.includes("resets"))
+  );
+}
+
 async function runClaudeRaw() {
   return await new Promise((resolve) => {
     const child = spawn("claude", rawArgs, { stdio: ["inherit", "pipe", "pipe"] });
     let hadStdout = false;
+    let allStdout = "";
 
     child.stdout?.on("data", (chunk) => {
       if (chunk.length > 0) hadStdout = true;
+      allStdout += chunk.toString();
       process.stdout.write(chunk);
     });
 
     child.stderr?.on("data", (chunk) => {
+      allStdout += chunk.toString(); // also collect stderr for rate-limit detection
       process.stderr.write(chunk);
     });
 
-    child.on("exit", (code) => resolve({ ok: (code ?? 0) === 0, code: code ?? 0, hadStdout }));
+    child.on("exit", (code) => {
+      const rateLimited = isRateLimitOrQuotaError(allStdout);
+      resolve({ ok: (code ?? 0) === 0, code: code ?? 0, hadStdout, rateLimited });
+    });
     child.on("error", (err) => {
       process.stderr.write(`Erro ao iniciar Claude CLI: ${err.message}\n`);
-      resolve({ ok: false, code: 1, hadStdout: false });
+      resolve({ ok: false, code: 1, hadStdout: false, rateLimited: false });
     });
   });
 }
@@ -342,7 +368,13 @@ const providers = [
     async run() {
       const claude = await runClaudeRaw();
       if (claude.ok) process.exit(0);
-      // If Claude produced output and then failed, preserve that failure and stop.
+      // Rate limit / quota exhaustion — fall through to next provider even if
+      // Claude wrote output (the output was just the error message, not useful work).
+      if (claude.rateLimited) {
+        throw new Error(`Claude rate limited (code ${claude.code || 1})`);
+      }
+      // If Claude produced real output and then failed mid-stream, preserve that
+      // failure and stop — retrying with another provider would duplicate content.
       if (claude.hadStdout) process.exit(claude.code || 1);
       throw new Error(`Claude CLI saiu com code ${claude.code || 1}`);
     },
