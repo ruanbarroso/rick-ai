@@ -194,6 +194,13 @@ function looksLikeTechnicalActionRequest(text) {
   return /(commit|push|pull request|pr\b|git|corrig|ajust|remov|alter|refator|implemen|adicion|cria|bug|erro|teste|build|codigo|code|arquivo|repo|reposit)/.test(normalized);
 }
 
+function isPlanningOnlyRequest(text) {
+  const normalized = String(text || "").toLowerCase();
+  const asksPlan = /(plano|planejamento|estrategia|estratégia|roadmap|passo a passo|proposta|arquitetura|como faria|o que faria)/.test(normalized);
+  const asksExecutionNow = /(fa[çc]a agora|implemente|corrija|ajuste|edite|altere|rode|execute|aplique)/.test(normalized);
+  return asksPlan && !asksExecutionNow;
+}
+
 function acknowledgesPriorExecution(text) {
   const normalized = String(text || "").toLowerCase();
   return /(ja foi|já foi|etapa anterior|anteriormente|nesta conversa|como eu disse|sem alteracoes pendentes|sem alterações pendentes|nao executei|não executei)/.test(normalized);
@@ -1970,6 +1977,7 @@ rl.on("line", async (line) => {
       !currentTurnStats?.maxStepsReached
       && (currentTurnStats?.toolCalls ?? 0) === 0
       && looksLikeTechnicalActionRequest(turnTaskText)
+      && !isPlanningOnlyRequest(turnTaskText)
       && looksLikeTechnicalCompletion(result)
       && !acknowledgesPriorExecution(result)
     ) {
