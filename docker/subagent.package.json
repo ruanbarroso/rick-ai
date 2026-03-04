@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "description": "Runtime dependencies for rick-ai subagent container",
   "dependencies": {
+    "@playwright/mcp": "0.0.68",
     "@modelcontextprotocol/sdk": "1.17.3",
-    "playwright": "1.55.0"
+    "playwright": "1.59.0-alpha-1771104257000"
   }
 }

@@ -337,7 +337,7 @@ Host Docker (cluster-24g)
 | `WEB_BASE_URL` | No | — | Public base URL for session links (e.g., `https://rick.barroso.tec.br`) |
 | `WEB_PORT` | No | `80` | Port for the HTTP + WebSocket server |
 | `GITHUB_TOKEN` | No | — | GitHub Personal Access Token. Used for version checks (avoids rate limits) and sub-agents. Can also be set via Web UI settings. |
-| `RICK_PLAYWRIGHT_MCP_COMMAND` | No | `"[\"npx\",\"-y\",\"@playwright/mcp@latest\",\"--browser\",\"chromium\"]"` | JSON array command used to launch local Playwright MCP server in sub-agent containers |
+| `RICK_PLAYWRIGHT_MCP_COMMAND` | No | `"[\"node\",\"/app/node_modules/@playwright/mcp/cli.js\",\"--browser\",\"chromium\"]"` | JSON array command used to launch local Playwright MCP server in sub-agent containers |
 | `AGENT_NAME` | No | `Rick` | Agent display name |
 | `AGENT_LANGUAGE` | No | `pt-BR` | Agent language |
 | `OWNER_PHONE` | No | — | Owner's phone number for permission checks |

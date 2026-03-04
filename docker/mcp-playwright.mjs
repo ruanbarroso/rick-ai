@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const DEFAULT_COMMAND = ["npx", "-y", "@playwright/mcp@latest", "--browser", "chromium"];
+const DEFAULT_COMMAND = ["node", "/app/node_modules/@playwright/mcp/cli.js", "--browser", "chromium"];
 
 let mcpClient = null;
 let mcpTransport = null;
@@ -24,12 +24,6 @@ function parseCommand() {
 
 function commandKey(parts) {
   return Array.isArray(parts) ? parts.join("\u0000") : "";
-}
-
-function isMissingChromeError(err) {
-  const text = String(err?.message || err || "").toLowerCase();
-  return text.includes("chromium distribution 'chrome' is not found")
-    || (text.includes("chrome") && text.includes("not found at /opt/google/chrome/chrome"));
 }
 
 function looksLikeMcpErrorText(text) {
@@ -115,38 +109,16 @@ function normalizeResult(result) {
 }
 
 export async function callPlaywrightMcp(action, payload = {}) {
-  try {
-    const client = await ensureMcpClient();
-    const toolName = pickToolName(action);
-    if (!toolName) {
-      throw new Error(`Playwright MCP nao tem ferramenta para acao: ${action}`);
-    }
-    const result = await client.callTool({
-      name: toolName,
-      arguments: payload || {},
-    });
-    return normalizeResult(result);
-  } catch (err) {
-    const parsed = parseCommand();
-    const hasChromeArg = parsed.some((part) => part.toLowerCase() === "chrome");
-    const canAutoSwap = !process.env.RICK_PLAYWRIGHT_MCP_COMMAND && hasChromeArg;
-    if (canAutoSwap && isMissingChromeError(err)) {
-      process.env.RICK_PLAYWRIGHT_MCP_COMMAND = JSON.stringify(DEFAULT_COMMAND);
-      await closePlaywrightMcp();
-
-      const client = await ensureMcpClient();
-      const toolName = pickToolName(action);
-      if (!toolName) {
-        throw new Error(`Playwright MCP nao tem ferramenta para acao: ${action}`);
-      }
-      const retried = await client.callTool({
-        name: toolName,
-        arguments: payload || {},
-      });
-      return normalizeResult(retried);
-    }
-    throw err;
+  const client = await ensureMcpClient();
+  const toolName = pickToolName(action);
+  if (!toolName) {
+    throw new Error(`Playwright MCP nao tem ferramenta para acao: ${action}`);
   }
+  const result = await client.callTool({
+    name: toolName,
+    arguments: payload || {},
+  });
+  return normalizeResult(result);
 }
 
 export async function closePlaywrightMcp() {
