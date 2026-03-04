@@ -201,6 +201,13 @@ function looksLikeExecutionNowRequest(text) {
   return /(execute|executa|executar|pode executar|agora|manda ver|aplica|aplicar|faz|fa[çc]a|segue com a implementa|pode seguir)/.test(normalized);
 }
 
+function looksLikePlanDraftRequest(text) {
+  const normalized = String(text || "").toLowerCase();
+  const asksPlan = /(plano|planejamento|estrategia|estratégia|roadmap|passo a passo|proposta|como faria|o que faria|montar um plano)/.test(normalized);
+  const asksExecutionNow = looksLikeExecutionNowRequest(normalized);
+  return asksPlan && !asksExecutionNow;
+}
+
 function looksLikeExecutionPromise(text) {
   const normalized = String(text || "").toLowerCase();
   return /(vou executar|vou aplicar|vou implementar|posso executar|fechado[\s\S]{0,20}execut|entendi[\s\S]{0,30}execut|se voc[eê] confirma|se confirmar|assim que confirmar)/.test(normalized);
@@ -2046,6 +2053,7 @@ rl.on("line", async (line) => {
       !currentTurnStats?.maxStepsReached
       && (currentTurnStats?.toolCalls ?? 0) === 0
       && looksLikeTechnicalActionRequest(turnTaskText)
+      && !looksLikePlanDraftRequest(turnTaskText)
       && looksLikeTechnicalCompletion(result)
       && !acknowledgesPriorExecution(result)
     ) {
