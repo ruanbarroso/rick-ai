@@ -139,6 +139,7 @@ let currentTurnPolicy = {
   allowPush: false,
   allowPr: false,
 };
+let pendingContinuation = null;
 
 function nextToolCallId() {
   toolCallSequence += 1;
@@ -204,6 +205,37 @@ function parseTurnPolicy(text) {
   const allowPush = /(\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b)/.test(normalized);
   const allowPr = /(\bpull request\b|\babrir pr\b|\bcriar pr\b|\bgh pr\b)/.test(normalized);
   return { allowCommit, allowPush, allowPr };
+}
+
+function isContinuationRequest(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  return /^(continua|continue|continuar|segue|prossegue|pode continuar|continue de onde parou|retoma|retomar)[.!?\s]*$/.test(normalized);
+}
+
+function buildContinuationPrompt(userText) {
+  if (!pendingContinuation) return userText;
+  const context = [
+    "Retome EXATAMENTE a tarefa que ficou pendente na rodada anterior.",
+    `Tarefa original pendente: ${pendingContinuation.userText}`,
+    pendingContinuation.evidence || "",
+    "Nao reinicie do zero. Continue do ponto onde parou.",
+  ].filter(Boolean).join("\n");
+  return `${userText}\n\n[CONTEXTO_DE_CONTINUACAO]\n${context}`;
+}
+
+function snapshotPendingContinuation(userText) {
+  const tools = currentTurnStats ? Array.from(currentTurnStats.toolNames).slice(0, 6).join(", ") : "";
+  const cmds = currentTurnStats ? currentTurnStats.commands.slice(0, 3).join("; ") : "";
+  const evidence = [
+    tools ? `Ferramentas usadas antes de parar: ${tools}.` : "",
+    cmds ? `Comandos recentes: ${cmds}.` : "",
+  ].filter(Boolean).join(" ");
+
+  pendingContinuation = {
+    userText: trimForReceipt(userText, 240),
+    evidence,
+    createdAt: Date.now(),
+  };
 }
 
 function summarizeCommandInput(input) {
@@ -1637,6 +1669,14 @@ rl.on("line", async (line) => {
     repeatedToolCount: 0,
     maxStepsReached: false,
   };
+  const continuation = isContinuationRequest(userText) && !!pendingContinuation;
+  const turnTaskText = continuation ? buildContinuationPrompt(userText) : userText;
+  if (continuation) {
+    emitStatus("Retomando tarefa pendente da rodada anterior...");
+  }
+  if (!continuation && !isContinuationRequest(userText)) {
+    pendingContinuation = null;
+  }
   const imageInputs = await loadImageInputs(msg.images);
   const selectedModelId = isSupportedModelId(msg.model) ? msg.model : DEFAULT_MODEL_ID;
   
@@ -1665,6 +1705,7 @@ rl.on("line", async (line) => {
     currentAbortController = null;
     currentTurnStats = null;
     currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
+    pendingContinuation = null;
     return;
   }
 
@@ -1736,7 +1777,7 @@ rl.on("line", async (line) => {
       attempts++;
       try {
         emitModelActive(provider.modelId, provider.name);
-        result = await provider.fn(userText, signal, imageInputs);
+        result = await provider.fn(turnTaskText, signal, imageInputs);
         lastErr = null;
         break;
       } catch (err) {
@@ -1757,6 +1798,7 @@ rl.on("line", async (line) => {
           }
           currentTurnStats = null;
           currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
+          pendingContinuation = null;
           return;
         }
 
@@ -1824,6 +1866,7 @@ rl.on("line", async (line) => {
   if (isSuperseded()) {
     currentTurnStats = null;
     currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
+    pendingContinuation = null;
     return;
   }
 
@@ -1831,13 +1874,14 @@ rl.on("line", async (line) => {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");
     currentTurnStats = null;
     currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
+    pendingContinuation = null;
   } else {
     currentTurnStats.phase = "reporting";
 
     if (
       !currentTurnStats?.maxStepsReached
       && (currentTurnStats?.toolCalls ?? 0) === 0
-      && looksLikeTechnicalActionRequest(userText)
+      && looksLikeTechnicalActionRequest(turnTaskText)
       && looksLikeTechnicalCompletion(result)
       && !acknowledgesPriorExecution(result)
     ) {
@@ -1848,7 +1892,7 @@ rl.on("line", async (line) => {
 
     const shouldAppendReceipt =
       !currentTurnStats?.maxStepsReached
-      && looksLikeTechnicalActionRequest(userText)
+      && looksLikeTechnicalActionRequest(turnTaskText)
       && (currentTurnStats?.toolCalls ?? 0) > 0
       && !hasExecutionReceipt(result);
 
@@ -1857,11 +1901,16 @@ rl.on("line", async (line) => {
     }
 
     // Record successful turn in provider-agnostic transcript (for cascade seeding)
-    conversationTranscript.push({ role: "user", content: userText });
+    conversationTranscript.push({ role: "user", content: turnTaskText });
     if (result && result !== FALLBACK_RESULT) {
       conversationTranscript.push({ role: "assistant", content: result });
     }
     compactContextIfNeeded();
+    if (currentTurnStats?.maxStepsReached) {
+      snapshotPendingContinuation(userText);
+    } else {
+      pendingContinuation = null;
+    }
     // Signal that we're done processing this turn but ready for more input.
     // The session stays alive — the host will show the compose bar again.
     emitWaitingUser(result);
