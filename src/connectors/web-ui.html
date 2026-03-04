@@ -1868,6 +1868,91 @@
     color: var(--text-muted);
   }
 
+  .subagent-active-sessions-link {
+    margin-top: 8px;
+    font-size: 0.82rem;
+    color: #93c5fd;
+    text-decoration: underline;
+    text-decoration-color: rgba(147, 197, 253, 0.45);
+    text-underline-offset: 2px;
+    cursor: pointer;
+    display: none;
+    width: fit-content;
+  }
+
+  .subagent-active-sessions-link.visible {
+    display: inline-block;
+  }
+
+  .subagent-sessions-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.95);
+    width: 700px;
+    max-width: calc(100% - 32px);
+    height: 80vh;
+    max-height: 760px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    z-index: 221;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
+  }
+
+  .subagent-sessions-modal.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  .subagent-sessions-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 20px;
+  }
+
+  .subagent-session-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(42, 51, 72, 0.45);
+  }
+
+  .subagent-session-row:last-child {
+    border-bottom: none;
+  }
+
+  .subagent-session-main {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .subagent-session-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .subagent-session-meta {
+    margin-top: 4px;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .status-dot {
     width: 8px;
     height: 8px;
@@ -2481,6 +2566,7 @@
         </div>
 
         <div class="subagent-metrics-footnote" id="subagent-metrics-footnote"></div>
+        <button class="subagent-active-sessions-link" id="subagent-active-sessions-link" onclick="openSubagentActiveSessionsModal()">Ver sessões ativas</button>
       </div>
     </div>
 
@@ -2756,6 +2842,18 @@
       </button>
       <div id="user-detail-content"></div>
     </div>
+  </div>
+</div>
+
+<!-- SUBAGENT ACTIVE SESSIONS MODAL -->
+<div class="confirm-overlay" id="subagent-sessions-overlay" onclick="closeSubagentActiveSessionsModal()"></div>
+<div class="subagent-sessions-modal" id="subagent-sessions-modal">
+  <div class="users-header">
+    <h2>Sessões ativas de subagentes</h2>
+    <button class="users-close" onclick="closeSubagentActiveSessionsModal()">&times;</button>
+  </div>
+  <div class="subagent-sessions-body" id="subagent-sessions-body">
+    <div style="text-align:center;color:var(--text-muted);padding:30px 0;">Carregando...</div>
   </div>
 </div>
 
@@ -5649,6 +5747,7 @@ var pendingDbSave = null;
 // When set, settings_saved will show combined "Conexao OK. Salvo!" feedback
 var pendingDbSaveConfirm = null;
 var subagentMetricsTimer = null;
+var subagentActiveSessionsCache = [];
 
 function formatMetricsValue(n) {
   return typeof n === 'number' ? String(n) : '-';
@@ -5664,13 +5763,17 @@ function setMetricsStatus(text, isError) {
 function renderSubagentMetrics(data) {
   var gauges = data && data.gauges ? data.gauges : {};
   var counters = data && data.counters ? data.counters : {};
+  subagentActiveSessionsCache = data && data.liveSessionsList ? data.liveSessionsList.slice() : [];
 
   var setText = function(id, value) {
     var el = document.getElementById(id);
     if (el) el.textContent = value;
   };
 
-  setText('metric-live-sessions', formatMetricsValue(gauges.liveSessions));
+  var liveSessionsCount = (typeof gauges.liveSessions === 'number')
+    ? gauges.liveSessions
+    : subagentActiveSessionsCache.length;
+  setText('metric-live-sessions', formatMetricsValue(liveSessionsCount));
   setText('metric-running-sessions', formatMetricsValue(gauges.runningSessions));
   setText('metric-waiting-sessions', formatMetricsValue(gauges.waitingUserSessions));
   setText('metric-failed-sessions', formatMetricsValue(gauges.failedSessions));
@@ -5690,6 +5793,86 @@ function renderSubagentMetrics(data) {
     var startedText = startedAt && !isNaN(startedAt.getTime()) ? startedAt.toLocaleString('pt-BR') : '-';
     foot.textContent = 'Inicio da coleta: ' + startedText;
   }
+
+  updateSubagentActiveSessionsLink(liveSessionsCount);
+}
+
+function updateSubagentActiveSessionsLink(activeCount) {
+  var link = document.getElementById('subagent-active-sessions-link');
+  if (!link) return;
+  var hasActive = Number(activeCount) > 0;
+  link.classList.toggle('visible', hasActive);
+}
+
+function getSessionLastMessageAtTs(session) {
+  if (!session || typeof session !== 'object') return 0;
+  var candidates = [
+    session.lastMessageAt,
+    session.lastMessageTs,
+    session.lastActivityAt,
+    session.updatedAt,
+    session.lastMessageTime,
+    session.lastEventAt
+  ];
+  for (var i = 0; i < candidates.length; i++) {
+    var raw = candidates[i];
+    if (!raw) continue;
+    if (typeof raw === 'number' && isFinite(raw)) {
+      return raw > 1e12 ? raw : raw * 1000;
+    }
+    var parsed = new Date(raw).getTime();
+    if (!isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function renderSubagentActiveSessionsModal() {
+  var body = document.getElementById('subagent-sessions-body');
+  if (!body) return;
+
+  var rows = (subagentActiveSessionsCache || []).slice();
+  rows.sort(function(a, b) {
+    return getSessionLastMessageAtTs(b) - getSessionLastMessageAtTs(a);
+  });
+
+  if (rows.length === 0) {
+    body.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:30px 0;">Nenhuma sessão ativa no momento.</div>';
+    return;
+  }
+
+  var html = '';
+  for (var i = 0; i < rows.length; i++) {
+    var s = rows[i] || {};
+    var sid = s.sessionId || s.id || '-';
+    var userLabel = s.userId ? ('Usuário #' + s.userId) : 'Usuário desconhecido';
+    var state = s.state || 'active';
+    var stateDot = state === 'running' ? 'green' : (state === 'failed' ? 'red' : 'gray');
+    var ts = getSessionLastMessageAtTs(s);
+    var timeText = ts ? new Date(ts).toLocaleString('pt-BR') : 'sem mensagens';
+
+    html += '<div class="subagent-session-row">';
+    html +=   '<div class="subagent-session-main">';
+    html +=     '<div class="subagent-session-title">' + escapeHtml(String(sid)) + '</div>';
+    html +=     '<div class="subagent-session-meta">' + escapeHtml(userLabel) + ' · Última mensagem: ' + escapeHtml(timeText) + '</div>';
+    html +=   '</div>';
+    html +=   '<div class="settings-status optional" style="margin:0;white-space:nowrap;"><span class="status-dot ' + stateDot + '"></span>' + escapeHtml(String(state)) + '</div>';
+    html += '</div>';
+  }
+
+  body.innerHTML = html;
+}
+
+function openSubagentActiveSessionsModal() {
+  if (!subagentActiveSessionsCache || subagentActiveSessionsCache.length === 0) return;
+  closeSettings();
+  renderSubagentActiveSessionsModal();
+  document.getElementById('subagent-sessions-overlay').classList.add('visible');
+  document.getElementById('subagent-sessions-modal').classList.add('visible');
+}
+
+function closeSubagentActiveSessionsModal() {
+  document.getElementById('subagent-sessions-overlay').classList.remove('visible');
+  document.getElementById('subagent-sessions-modal').classList.remove('visible');
 }
 
 function loadSubagentMetrics() {
