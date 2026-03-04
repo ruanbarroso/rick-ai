@@ -1799,9 +1799,6 @@ rl.on("line", async (line) => {
   if (continuation) {
     emitStatus("Retomando tarefa pendente da rodada anterior...");
   }
-  if (currentTurnPolicy.planningOnly) {
-    emitStatus("Modo planejamento: respondendo sem executar ferramentas.");
-  }
   if (!continuation && !isContinuationRequest(userText)) {
     pendingContinuation = null;
   }

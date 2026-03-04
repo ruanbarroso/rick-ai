@@ -13,9 +13,8 @@ import {
   mkdirSync,
 } from "fs";
 import { join, relative } from "path";
-import { execFile, spawn } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
-import { createInterface } from "readline";
 import { callPlaywrightMcp, closePlaywrightMcp } from "./mcp-playwright.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -100,100 +99,12 @@ export function toolStatusLabel(name, input) {
 // ── Core tool execution (shared by both agents) ─────────────────────────────
 
 const COMMAND_TIMEOUT = 120_000; // 2 minutes
-const BROWSER_TIMEOUT = 120_000;
-const PLAYWRIGHT_MODE = String(process.env.RICK_PLAYWRIGHT_MODE || "native").toLowerCase();
-let mcpUnavailableInAuto = false;
-
-let browserWorker = null;
-let browserReqId = 0;
-const browserPending = new Map();
-
-function ensureBrowserWorker() {
-  if (browserWorker && !browserWorker.killed) return browserWorker;
-
-  const proc = spawn("node", ["/app/browser-agent.mjs"], {
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  const rl = createInterface({ input: proc.stdout, terminal: false });
-  rl.on("line", (line) => {
-    let msg;
-    try {
-      msg = JSON.parse(line);
-    } catch {
-      return;
-    }
-    const pending = browserPending.get(msg.id);
-    if (!pending) return;
-    browserPending.delete(msg.id);
-    if (msg.ok) {
-      pending.resolve(msg.result);
-    } else {
-      pending.reject(new Error(msg.error || "browser worker error"));
-    }
-  });
-
-  proc.stderr.on("data", () => {
-    // browser worker diagnostics are intentionally ignored from tool output
-  });
-
-  proc.on("exit", () => {
-    for (const [, pending] of browserPending) {
-      pending.reject(new Error("browser worker finalizado"));
-    }
-    browserPending.clear();
-    browserWorker = null;
-  });
-
-  browserWorker = proc;
-  return proc;
-}
-
-async function callBrowser(action, payload = {}, timeoutMs = BROWSER_TIMEOUT) {
-  if (PLAYWRIGHT_MODE === "mcp" || (PLAYWRIGHT_MODE === "auto" && !mcpUnavailableInAuto)) {
-    try {
-      if (action === "close") {
-        await closePlaywrightMcp();
-        return { ok: true };
-      }
-      return await callPlaywrightMcp(action, payload);
-    } catch (err) {
-      if (PLAYWRIGHT_MODE === "mcp") {
-        throw err;
-      }
-      mcpUnavailableInAuto = true;
-      // auto mode fallback: continue into native browser worker
-    }
+async function callBrowser(action, payload = {}) {
+  if (action === "close") {
+    await closePlaywrightMcp();
+    return { ok: true };
   }
-
-  const proc = ensureBrowserWorker();
-  const id = ++browserReqId;
-
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      browserPending.delete(id);
-      reject(new Error(`browser timeout: ${action}`));
-    }, timeoutMs);
-
-    browserPending.set(id, {
-      resolve: (result) => {
-        clearTimeout(timeout);
-        resolve(result);
-      },
-      reject: (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      },
-    });
-
-    try {
-      proc.stdin.write(JSON.stringify({ id, action, payload }) + "\n");
-    } catch (err) {
-      clearTimeout(timeout);
-      browserPending.delete(id);
-      reject(err);
-    }
-  });
+  return await callPlaywrightMcp(action, payload);
 }
 
 /**

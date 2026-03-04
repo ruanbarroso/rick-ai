@@ -24,7 +24,6 @@ class SubagentImageBuilder {
     const sharedToolsPath = `${localAppDir}/docker/tools.mjs`;
     const sharedDeclsPath = `${localAppDir}/docker/tool-declarations.mjs`;
     const rickApiPath = `${localAppDir}/docker/rick-api.mjs`;
-    const browserAgentPath = `${localAppDir}/docker/browser-agent.mjs`;
     const mcpPlaywrightPath = `${localAppDir}/docker/mcp-playwright.mjs`;
     const subagentPackagePath = `${localAppDir}/docker/subagent.package.json`;
     const dockerfilePath = `${localAppDir}/docker/subagent.Dockerfile`;
@@ -39,8 +38,6 @@ class SubagentImageBuilder {
       .update(readFileSync(sharedDeclsPath))
       .update("\n---\n")
       .update(readFileSync(rickApiPath))
-      .update("\n---\n")
-      .update(readFileSync(browserAgentPath))
       .update("\n---\n")
       .update(readFileSync(mcpPlaywrightPath))
       .update("\n---\n")
