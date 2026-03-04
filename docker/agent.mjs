@@ -370,6 +370,35 @@ function looksToolErrorOutput(toolName, output) {
   return false;
 }
 
+function requestedFullHistory(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(todas as mensagens|historico completo|histórico completo|ler tudo|100% das mensagens|tudo da sessao|tudo da sessão)/.test(normalized);
+}
+
+function looksLikeFullCoverageClaim(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(li todas as mensagens|todas as mensagens|historico completo|histórico completo|100%|li tudo)/.test(normalized);
+}
+
+function captureBrowserProgress(toolName, output) {
+  if (!currentTurnStats) return;
+  if (toolName !== "browser_snapshot" && toolName !== "browser_scroll") return;
+
+  let data = null;
+  try {
+    data = JSON.parse(String(output || ""));
+  } catch {
+    return;
+  }
+  const scroll = data?.scroll;
+  if (typeof scroll?.atBottom === "boolean") {
+    currentTurnStats.browserAtBottom = scroll.atBottom;
+  }
+  if (toolName === "browser_scroll") {
+    currentTurnStats.browserScrolled = true;
+  }
+}
+
 function isMaxStepsError(err) {
   return !!err && (err.code === "MAX_STEPS_REACHED" || err.message === "MAX_STEPS_REACHED");
 }
@@ -498,6 +527,8 @@ async function runToolWithLifecycle(name, input) {
       commands: [],
       validations: [],
       executionTrail: [],
+      browserScrolled: false,
+      browserAtBottom: false,
       lastToolFingerprint: "",
       repeatedToolCount: 0,
       maxStepsReached: false,
@@ -542,6 +573,7 @@ async function runToolWithLifecycle(name, input) {
     const result = await runTool(name, input);
     const output = String(result);
     collectTurnEvidence(name, input);
+    captureBrowserProgress(name, output);
     if (currentTurnStats.executionTrail.length < 16) {
       const inputPreview = trimForReceipt(summarizeCommandInput(input) || (input?.path ?? input?.filePath ?? input?.url ?? ""), 90);
       const outputPreview = trimForReceipt(output, 90);
@@ -1708,6 +1740,8 @@ rl.on("line", async (line) => {
     commands: [],
     validations: [],
     executionTrail: [],
+    browserScrolled: false,
+    browserAtBottom: false,
     lastToolFingerprint: "",
     repeatedToolCount: 0,
     maxStepsReached: false,
@@ -1952,6 +1986,16 @@ rl.on("line", async (line) => {
 
     if (shouldAppendReceipt) {
       result = `${String(result || "").trim()}${buildExecutionReceipt()}`.trim();
+    }
+
+    if (
+      requestedFullHistory(turnTaskText)
+      && (currentTurnStats?.toolNames?.has("browser_navigate") || currentTurnStats?.toolNames?.has("browser_snapshot"))
+      && !currentTurnStats?.browserAtBottom
+      && looksLikeFullCoverageClaim(result)
+    ) {
+      result = "Ainda nao posso afirmar que li TODAS as mensagens, porque nao cheguei ao fim da rolagem da pagina nesta rodada. Posso continuar agora rolando a sessao (browser_scroll + snapshots) ate o final e te entregar a transcricao completa.";
+      emitProviderError("Guardrail de navegacao: resposta ajustada para evitar alegacao de cobertura total sem rolagem ate o fim.");
     }
 
     // Record successful turn in provider-agnostic transcript (for cascade seeding)

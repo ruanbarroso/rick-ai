@@ -305,6 +305,19 @@ export async function executeTool(name, input, extraHandler) {
         return `Erro no browser_wait_for: ${e.message}`;
       }
     }
+    case "browser_scroll": {
+      try {
+        const result = await callBrowser("scroll", {
+          direction: input.direction,
+          pixels: input.pixels,
+          steps: input.steps,
+          waitMs: input.waitMs,
+        });
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_scroll: ${e.message}`;
+      }
+    }
     case "browser_screenshot": {
       try {
         const result = await callBrowser("screenshot", {

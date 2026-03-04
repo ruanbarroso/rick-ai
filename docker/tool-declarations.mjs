@@ -122,6 +122,20 @@ export const coreToolDeclarations = [
     },
   },
   {
+    name: "browser_scroll",
+    description: "Rola a pagina para cima/baixo em passos para carregar conteudo incremental",
+    parameters: {
+      type: "object",
+      properties: {
+        direction: { type: "string", description: "down ou up" },
+        pixels: { type: "number", description: "Quantidade de pixels por passo" },
+        steps: { type: "number", description: "Quantidade de passos de rolagem" },
+        waitMs: { type: "number", description: "Pausa em ms entre passos" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "browser_screenshot",
     description: "Tira screenshot da pagina atual e salva no workspace",
     parameters: {

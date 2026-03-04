@@ -67,8 +67,57 @@ async function actionSnapshot() {
     url,
     title,
     text: bodyText.slice(0, 5000),
+    scroll: await p.evaluate(() => {
+      const top = window.scrollY || document.documentElement?.scrollTop || 0;
+      const viewport = window.innerHeight || document.documentElement?.clientHeight || 0;
+      const full = Math.max(
+        document.body?.scrollHeight || 0,
+        document.documentElement?.scrollHeight || 0,
+      );
+      return {
+        top,
+        viewport,
+        full,
+        atBottom: top + viewport >= full - 4,
+      };
+    }),
     links,
   };
+}
+
+async function actionScroll(payload) {
+  const p = await ensurePage();
+  const direction = String(payload.direction || "down").toLowerCase() === "up" ? "up" : "down";
+  const steps = Math.max(1, Math.min(50, Number(payload.steps || 1)));
+  const waitMs = Math.max(0, Math.min(5000, Number(payload.waitMs || 120)));
+
+  let pixels = Number(payload.pixels || 0);
+  if (!Number.isFinite(pixels) || pixels <= 0) {
+    pixels = await p.evaluate(() => Math.max(300, Math.floor((window.innerHeight || 900) * 0.9)));
+  }
+  const delta = direction === "up" ? -Math.abs(pixels) : Math.abs(pixels);
+
+  for (let i = 0; i < steps; i++) {
+    await p.evaluate((d) => { window.scrollBy(0, d); }, delta);
+    if (waitMs > 0) await p.waitForTimeout(waitMs);
+  }
+
+  const scroll = await p.evaluate(() => {
+    const top = window.scrollY || document.documentElement?.scrollTop || 0;
+    const viewport = window.innerHeight || document.documentElement?.clientHeight || 0;
+    const full = Math.max(
+      document.body?.scrollHeight || 0,
+      document.documentElement?.scrollHeight || 0,
+    );
+    return {
+      top,
+      viewport,
+      full,
+      atBottom: top + viewport >= full - 4,
+    };
+  });
+
+  return { ok: true, direction, steps, pixels: Math.abs(pixels), scroll };
 }
 
 async function actionClick(payload) {
@@ -127,6 +176,8 @@ async function handleCommand(cmd) {
       return actionType(payload);
     case "wait_for":
       return actionWaitFor(payload);
+    case "scroll":
+      return actionScroll(payload);
     case "screenshot":
       return actionScreenshot(payload);
     case "close":
