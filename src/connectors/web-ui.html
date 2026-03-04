@@ -2710,7 +2710,16 @@ sidebarAvatarEl.addEventListener('click', function() {
       avatarClickTimer = null;
     }
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'message', text: 'Faça checkout no projeto https://github.com/ruanbarroso/rick-ai e me dê um resumo do estado atual do código' }));
+      var checkoutText = 'Faça checkout no projeto https://github.com/ruanbarroso/rick-ai e me dê um resumo do estado atual do código';
+      var checkoutSid = currentSessionId || 'main';
+      // Show locally + set echo flag (same pattern as sendMessage)
+      pendingUserEcho = true;
+      storeMessage(checkoutSid, checkoutText, 'user', null, null, null, null);
+      if (checkoutSid === currentSessionId) {
+        appendMessageToDOM(checkoutText, 'user', null, null, null, null);
+      }
+      showTyping(true);
+      ws.send(JSON.stringify({ type: 'message', text: checkoutText, sessionId: checkoutSid }));
     }
   }
 });

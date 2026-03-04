@@ -606,10 +606,7 @@ export class Agent {
       };
 
       const missingList = missing.map((m) => `*${m}*`).join(", ");
-      await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
-      const missingMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
-        ? { audioUrl, imageUrls, fileInfos } : undefined;
-      this.notifyMainViewers(userId!, "user", userMessage, "text", connectorName, missingMediaInfo);
+      // NOTE: user message already saved and notified by handleMessageInternal — no duplicate save here
       return `Vou precisar de credenciais para ${missingList} pra fazer isso.\n\nMe manda as credenciais de *${missing[0]}* (usuario, senha, token, o que for necessario).`;
     }
 
@@ -617,10 +614,7 @@ export class Agent {
       logger.info({ missing, resolved: Object.keys(resolved) }, "Proceeding with partial credentials");
     }
 
-    await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
-    const delegateMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
-      ? { audioUrl, imageUrls, fileInfos } : undefined;
-    this.notifyMainViewers(userId!, "user", userMessage, "text", connectorName, delegateMediaInfo);
+    // NOTE: user message already saved and notified by handleMessageInternal — no duplicate save here
 
     // Start the sub-agent container
     let session;
@@ -876,10 +870,7 @@ export class Agent {
     }
 
     // CASE 2: Continuation — relay to the most recent done session
-    await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
-    const relayMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
-      ? { audioUrl, imageUrls, fileInfos } : undefined;
-    this.notifyMainViewers(userId!, "user", text, "text", connectorName, relayMediaInfo);
+    // NOTE: user message already saved and notified by handleMessageInternal — no duplicate save here
 
     this.sessionManager.sendToSession(mostRecent.id, text, imageMedias, audioUrl, imageUrls, fileInfos).catch(async (err) => {
       logger.error({ err }, "Sub-agent relay failed");
