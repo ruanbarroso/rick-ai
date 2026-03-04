@@ -1423,6 +1423,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
             taskDescription: s.taskDescription,
             variantName: s.variantName,
             preferredModel: s.preferredModel,
+            executionMode: s.executionMode,
             numericUserId: s.numericUserId,
             createdAt: s.createdAt,
             updatedAt: s.updatedAt,
@@ -1546,6 +1547,10 @@ Retorne APENAS as linhas de extracao, nada mais.`;
 
       setSessionPreferredModel: (sessionId: string, modelId: string) => {
         return this.sessionManager.setSessionPreferredModel(sessionId, modelId);
+      },
+
+      setSessionExecutionMode: (sessionId: string, mode: string) => {
+        return this.sessionManager.setSessionExecutionMode(sessionId, mode);
       },
     };
 

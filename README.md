@@ -125,6 +125,8 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 - **Prompt layering**: System prompt is composed from a shared base + provider-specific overlay + runtime environment block + project instructions loaded from `AGENTS.md`/`CLAUDE.md` in the workspace
 - **Execution guardrails**: Per-turn max tool-step cap prevents endless loops; for code-change requests, the sub-agent refuses to claim technical completion when no tool execution happened in that turn
 - **Git safety gate**: `git commit`, `git push`, and `gh pr create` are blocked unless explicitly requested in the current user turn
+- **Build/Plan mode**: Session viewer has a mode selector (default `Build`); `Plan` mode answers with strategy only and blocks tool execution for safe planning
+- **Playwright MCP compatibility**: Browser tools support MCP mode (`RICK_PLAYWRIGHT_MODE=auto|mcp|native`) with configurable local command (`RICK_PLAYWRIGHT_MCP_COMMAND`), mirroring OpenCode-style local MCP integration
 - **Credential injection**: OAuth tokens and stored passwords injected at runtime (never in task descriptions). Sensitive memories are pre-resolved and injected as `RICK_SECRET_*` env vars (decrypted, no encryption key exposed).
 - **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick's read-only API for memories, credentials, semantic search, conversations, and config — all scoped to the owner's data.
 - **Session recovery**: Running containers are recovered after Rick restarts
@@ -335,6 +337,8 @@ Host Docker (cluster-24g)
 | `WEB_BASE_URL` | No | — | Public base URL for session links (e.g., `https://rick.barroso.tec.br`) |
 | `WEB_PORT` | No | `80` | Port for the HTTP + WebSocket server |
 | `GITHUB_TOKEN` | No | — | GitHub Personal Access Token. Used for version checks (avoids rate limits) and sub-agents. Can also be set via Web UI settings. |
+| `RICK_PLAYWRIGHT_MODE` | No | `auto` | Browser backend for sub-agent tools: `auto` (try MCP then native), `mcp`, or `native` |
+| `RICK_PLAYWRIGHT_MCP_COMMAND` | No | `"[\"npx\",\"-y\",\"@playwright/mcp@latest\",\"--browser\",\"chrome\"]"` | JSON array command used to launch local Playwright MCP server in sub-agent containers |
 | `AGENT_NAME` | No | `Rick` | Agent display name |
 | `AGENT_LANGUAGE` | No | `pt-BR` | Agent language |
 | `OWNER_PHONE` | No | — | Owner's phone number for permission checks |

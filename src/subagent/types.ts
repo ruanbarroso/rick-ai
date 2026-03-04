@@ -38,6 +38,14 @@ export type SubAgentModelId = (typeof SUBAGENT_MODELS)[number]["id"];
 
 export const DEFAULT_SUBAGENT_MODEL: SubAgentModelId = "claude-opus-4-6";
 
+export const SUBAGENT_EXECUTION_MODES = ["build", "plan"] as const;
+export type SubAgentExecutionMode = (typeof SUBAGENT_EXECUTION_MODES)[number];
+export const DEFAULT_SUBAGENT_EXECUTION_MODE: SubAgentExecutionMode = "build";
+
+export function isSubAgentExecutionMode(value: string): value is SubAgentExecutionMode {
+  return SUBAGENT_EXECUTION_MODES.includes(value as SubAgentExecutionMode);
+}
+
 export function isSubAgentModelId(value: string): value is SubAgentModelId {
   return SUBAGENT_MODELS.some((model) => model.id === value);
 }
@@ -81,6 +89,8 @@ export interface SubAgentSession {
   variantName?: string;
   /** Preferred primary model for this session's cascade order. */
   preferredModel: SubAgentModelId;
+  /** Execution mode for this session: build (execute) or plan (no writes). */
+  executionMode: SubAgentExecutionMode;
   /** True if this session was recovered after a server restart */
   recovered?: boolean;
   createdAt: number;

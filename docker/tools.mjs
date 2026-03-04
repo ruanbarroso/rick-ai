@@ -16,6 +16,7 @@ import { join, relative } from "path";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { createInterface } from "readline";
+import { callPlaywrightMcp, closePlaywrightMcp } from "./mcp-playwright.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -100,6 +101,8 @@ export function toolStatusLabel(name, input) {
 
 const COMMAND_TIMEOUT = 120_000; // 2 minutes
 const BROWSER_TIMEOUT = 120_000;
+const PLAYWRIGHT_MODE = String(process.env.RICK_PLAYWRIGHT_MODE || "native").toLowerCase();
+let mcpUnavailableInAuto = false;
 
 let browserWorker = null;
 let browserReqId = 0;
@@ -147,6 +150,22 @@ function ensureBrowserWorker() {
 }
 
 async function callBrowser(action, payload = {}, timeoutMs = BROWSER_TIMEOUT) {
+  if (PLAYWRIGHT_MODE === "mcp" || (PLAYWRIGHT_MODE === "auto" && !mcpUnavailableInAuto)) {
+    try {
+      if (action === "close") {
+        await closePlaywrightMcp();
+        return { ok: true };
+      }
+      return await callPlaywrightMcp(action, payload);
+    } catch (err) {
+      if (PLAYWRIGHT_MODE === "mcp") {
+        throw err;
+      }
+      mcpUnavailableInAuto = true;
+      // auto mode fallback: continue into native browser worker
+    }
+  }
+
   const proc = ensureBrowserWorker();
   const id = ++browserReqId;
 

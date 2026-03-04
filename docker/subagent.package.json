@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Runtime dependencies for rick-ai subagent container",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.17.3",
     "playwright": "1.55.0"
   }
 }

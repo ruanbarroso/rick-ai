@@ -17,7 +17,7 @@ import { OpenAIOAuthService } from "../auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "../auth/oauth-singleton.js";
 import { GeminiProvider } from "../llm/providers/gemini.js";
 import { resolveSessionsToken, getMainSessionName, getUserSessionsToken } from "../subagent/session-manager.js";
-import { DEFAULT_SUBAGENT_MODEL, SUBAGENT_MODELS, type SubAgentModelId } from "../subagent/types.js";
+import { DEFAULT_SUBAGENT_EXECUTION_MODE, DEFAULT_SUBAGENT_MODEL, SUBAGENT_MODELS, type SubAgentExecutionMode, type SubAgentModelId } from "../subagent/types.js";
 
 /**
  * Web UI connector using WebSocket on the shared HTTP server.
@@ -46,6 +46,7 @@ export interface WebAgentBridge {
     taskDescription: string;
     variantName?: string;
     preferredModel: SubAgentModelId;
+    executionMode: SubAgentExecutionMode;
     numericUserId: number | null;
     createdAt: number;
     updatedAt: number;
@@ -91,6 +92,8 @@ export interface WebAgentBridge {
   isSessionProcessing(sessionId: string): boolean;
   /** Set preferred primary model for a sub-agent session. */
   setSessionPreferredModel(sessionId: string, modelId: string): SubAgentModelId;
+  /** Set execution mode for a sub-agent session. */
+  setSessionExecutionMode(sessionId: string, mode: string): SubAgentExecutionMode;
 }
 
 export class WebConnector implements Connector {
@@ -470,6 +473,7 @@ export class WebConnector implements Connector {
                 taskDescription: session.taskDescription,
                 variantName: session.variantName,
                 preferredModel: session.preferredModel || DEFAULT_SUBAGENT_MODEL,
+                executionMode: session.executionMode || DEFAULT_SUBAGENT_EXECUTION_MODE,
                 availableModels: SUBAGENT_MODELS,
                 canManageProviders,
                 agentName,
@@ -491,6 +495,7 @@ export class WebConnector implements Connector {
                 agentName,
                 variantName,
                 preferredModel: DEFAULT_SUBAGENT_MODEL,
+                executionMode: DEFAULT_SUBAGENT_EXECUTION_MODE,
                 availableModels: SUBAGENT_MODELS,
                 canManageProviders,
               },
@@ -510,6 +515,7 @@ export class WebConnector implements Connector {
                 state: "done",
                 agentName: config.agentName,
                 preferredModel: DEFAULT_SUBAGENT_MODEL,
+                executionMode: DEFAULT_SUBAGENT_EXECUTION_MODE,
                 availableModels: SUBAGENT_MODELS,
                 canManageProviders: false,
               },
@@ -544,6 +550,23 @@ export class WebConnector implements Connector {
               }
             } catch (err) {
               const message = (err as Error).message || "Falha ao atualizar modelo";
+              ws.send(JSON.stringify({ type: "error", text: message }));
+            }
+            return;
+          }
+
+          if (msg.type === "set_mode" && this.agentBridge && typeof msg.mode === "string") {
+            try {
+              const mode = this.agentBridge.setSessionExecutionMode(sessionId, msg.mode);
+              const payload = JSON.stringify({ type: "mode_updated", sessionId, mode });
+              const subs = this.sessionSubscribers.get(sessionId);
+              if (subs) {
+                for (const sub of subs) {
+                  if (sub.readyState === WebSocket.OPEN) sub.send(payload);
+                }
+              }
+            } catch (err) {
+              const message = (err as Error).message || "Falha ao atualizar modo";
               ws.send(JSON.stringify({ type: "error", text: message }));
             }
             return;

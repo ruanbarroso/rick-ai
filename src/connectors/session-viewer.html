@@ -237,6 +237,33 @@ body {
   transition: background 0.2s, border-color 0.2s;
 }
 
+.execution-mode-btn {
+  height: 42px;
+  min-width: 74px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.execution-mode-btn:hover {
+  background: var(--border);
+}
+
+.execution-mode-btn.plan {
+  border-color: rgba(245, 158, 11, 0.6);
+  color: #fbbf24;
+}
+
 .model-picker-btn:hover {
   background: var(--border);
   border-color: #3b82f6;
@@ -755,6 +782,13 @@ body {
     flex: 1 1 auto;
   }
 
+  .execution-mode-btn {
+    height: 38px;
+    min-width: 64px;
+    flex: 0 0 auto;
+    padding: 0 10px;
+  }
+
   .compose-attach {
     width: 38px;
     height: 38px;
@@ -887,6 +921,7 @@ body {
 </div>
 
 <div class="compose-bar">
+  <button class="execution-mode-btn" id="execution-mode-btn" onclick="toggleExecutionMode()" title="Modo de execucao">Build</button>
   <button class="model-picker-btn" id="model-picker-btn" onclick="openModelModal()" title="Selecionar modelo">Modelo</button>
   <button class="compose-attach" onclick="document.getElementById('file-input').click()" title="Anexar arquivos">
     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
@@ -946,6 +981,7 @@ var sessionState = 'unknown'; // unknown, running, done, killed
 var pendingUserEcho = false; // true after local sendMessage — skip server echo
 var sessionName = 'Sub-agente #' + sessionId.substring(0, 6);
 var selectedModelId = 'claude-opus-4-6';
+var selectedExecutionMode = 'build';
 var availableModels = [
   { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
   { id: 'gpt-5.3-codex', label: 'GPT 5.3 Codex' },
@@ -974,6 +1010,30 @@ function updateModelButton() {
   if (!btn) return;
   btn.textContent = getModelLabel(selectedModelId);
   btn.title = 'Modelo atual: ' + getModelLabel(selectedModelId);
+}
+
+function updateExecutionModeButton() {
+  var btn = document.getElementById('execution-mode-btn');
+  if (!btn) return;
+  var isPlan = selectedExecutionMode === 'plan';
+  btn.textContent = isPlan ? 'Plan' : 'Build';
+  btn.classList.toggle('plan', isPlan);
+  btn.title = isPlan
+    ? 'Modo Plan: sem escrita/commit'
+    : 'Modo Build: pode executar alteracoes';
+}
+
+function setExecutionMode(mode, silent) {
+  var next = mode === 'plan' ? 'plan' : 'build';
+  selectedExecutionMode = next;
+  updateExecutionModeButton();
+  if (!silent && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'set_mode', mode: next }));
+  }
+}
+
+function toggleExecutionMode() {
+  setExecutionMode(selectedExecutionMode === 'build' ? 'plan' : 'build');
 }
 
 function renderModelOptions() {
@@ -1114,6 +1174,7 @@ function selectModel(modelId) {
 }
 
 updateModelButton();
+updateExecutionModeButton();
 
 // ==================== SCROLL TO BOTTOM ====================
 function isAtBottom() {
@@ -1438,8 +1499,12 @@ function connect() {
           if (msg.session.preferredModel) {
             selectedModelId = msg.session.preferredModel;
           }
+          if (msg.session.executionMode) {
+            selectedExecutionMode = msg.session.executionMode === 'plan' ? 'plan' : 'build';
+          }
           canManageProviders = !!msg.session.canManageProviders;
           updateModelButton();
+          updateExecutionModeButton();
           renderModelOptions();
           updateHeaderIcon();
           updateSessionState(msg.session.state);
@@ -1455,6 +1520,13 @@ function connect() {
           updateModelButton();
           renderModelOptions();
           closeModelModal();
+        }
+        break;
+
+      case 'mode_updated':
+        if (msg.mode) {
+          selectedExecutionMode = msg.mode === 'plan' ? 'plan' : 'build';
+          updateExecutionModeButton();
         }
         break;
 

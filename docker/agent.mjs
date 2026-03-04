@@ -138,6 +138,8 @@ let currentTurnPolicy = {
   allowCommit: false,
   allowPush: false,
   allowPr: false,
+  planningOnly: false,
+  executionMode: "build",
 };
 let pendingContinuation = null;
 
@@ -211,7 +213,12 @@ function parseTurnPolicy(text) {
   const allowCommit = /(\bcommit\b|\bcommitar\b)/.test(normalized);
   const allowPush = /(\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b)/.test(normalized);
   const allowPr = /(\bpull request\b|\babrir pr\b|\bcriar pr\b|\bgh pr\b)/.test(normalized);
-  return { allowCommit, allowPush, allowPr };
+  const planningOnly = isPlanningOnlyRequest(normalized);
+  return { allowCommit, allowPush, allowPr, planningOnly, executionMode: "build" };
+}
+
+function buildPlanningOnlyPrompt(userText) {
+  return `${userText}\n\n[MODO_PLANEJAMENTO]\nResponda APENAS com plano/estrategia. Nao execute ferramentas nesta rodada e nao alegue execucao.`;
 }
 
 function isContinuationRequest(text) {
@@ -247,6 +254,9 @@ function snapshotPendingContinuation(userText) {
 
 function summarizeCommandInput(input) {
   if (!input || typeof input !== "object") return "";
+  if (typeof input.commandLine === "string" && input.commandLine.trim()) {
+    return input.commandLine.trim().toLowerCase();
+  }
   const cmd = typeof input.command === "string" ? input.command : "";
   const args = Array.isArray(input.args) ? input.args.map((a) => String(a)) : [];
   return `${cmd} ${args.join(" ")}`.trim().toLowerCase();
@@ -268,6 +278,16 @@ function detectBlockedGitAction(toolName, input) {
   }
 
   return null;
+}
+
+function detectPlanningOnlyToolBlock(toolName) {
+  if (!currentTurnPolicy?.planningOnly) return null;
+  return `Bloqueado por politica desta rodada: pedido de planejamento. Ferramenta ${toolName} nao deve ser executada.`;
+}
+
+function looksLikeFakeAccessBlockClaim(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(nao tenho acesso|não tenho acesso|nao tenho execucao ativa|não tenho execução ativa|nao consigo executar ferramentas|não consigo executar ferramentas|bloqueado por acesso)/.test(normalized);
 }
 
 function trimForReceipt(text, max = 90) {
@@ -536,6 +556,7 @@ async function runToolWithLifecycle(name, input) {
       executionTrail: [],
       browserScrolled: false,
       browserAtBottom: false,
+      toolErrors: 0,
       lastToolFingerprint: "",
       repeatedToolCount: 0,
       maxStepsReached: false,
@@ -551,6 +572,13 @@ async function runToolWithLifecycle(name, input) {
 
   const callId = nextToolCallId();
   const started = Date.now();
+
+  const planningBlockReason = detectPlanningOnlyToolBlock(name);
+  if (planningBlockReason) {
+    emitToolCallError(callId, name, Date.now() - started, planningBlockReason);
+    return planningBlockReason;
+  }
+
   emitToolCallStart(callId, name, input);
   currentTurnStats.toolCalls += 1;
   currentTurnStats.toolNames.add(name);
@@ -587,6 +615,7 @@ async function runToolWithLifecycle(name, input) {
       currentTurnStats.executionTrail.push({ name, input: inputPreview, output: outputPreview });
     }
     if (looksToolErrorOutput(name, output)) {
+      currentTurnStats.toolErrors += 1;
       emitToolCallError(callId, name, Date.now() - started, toPreview(output));
     } else {
       emitToolCallCompleted(callId, name, Date.now() - started, toPreview(output));
@@ -594,6 +623,7 @@ async function runToolWithLifecycle(name, input) {
     return output;
   } catch (err) {
     const message = err?.message || String(err || "Erro desconhecido na ferramenta");
+    if (currentTurnStats) currentTurnStats.toolErrors += 1;
     emitToolCallError(callId, name, Date.now() - started, message);
     throw err;
   }
@@ -634,7 +664,8 @@ REGRAS:
 17. Ao concluir uma alteração técnica, inclua evidência objetiva em 1 frase: arquivo(s) alterado(s) e comando(s) de validação executado(s).
 18. Se não for possível aplicar a mudança (limitação real, erro de permissão, ausência de arquivo, etc.), diga explicitamente que NÃO foi aplicado, explique o motivo e proponha próximo passo.
 19. Em tarefas de código em repositório, antes de alterar arquivos, procure e leia o AGENTS.md do projeto (e qualquer AGENTS.md no caminho da pasta alvo) e siga essas instruções.
-20. Em pedidos diretos de mudança (ex.: "ajuste", "corrija", "remova"), execute a mudança primeiro e só depois responda; só peça confirmação adicional se houver ambiguidade real que impeça aplicar com segurança.`;
+20. Em pedidos diretos de mudança (ex.: "ajuste", "corrija", "remova"), execute a mudança primeiro e só depois responda; só peça confirmação adicional se houver ambiguidade real que impeça aplicar com segurança.
+21. Quando o usuário pedir explicitamente apenas um plano/estratégia (sem execução), responda só com o plano e não use ferramentas.`;
 
 const PROVIDER_SYSTEM_PROMPTS = {
   gemini: `Diretrizes de provider (Gemini):
@@ -1738,7 +1769,13 @@ rl.on("line", async (line) => {
 
   const userText = msg.text;
   await refreshSystemPromptCache();
-  currentTurnPolicy = parseTurnPolicy(userText);
+  const requestedMode = String(msg.mode || "build").toLowerCase() === "plan" ? "plan" : "build";
+  const parsedPolicy = parseTurnPolicy(userText);
+  currentTurnPolicy = {
+    ...parsedPolicy,
+    executionMode: requestedMode,
+    planningOnly: requestedMode === "plan" ? true : parsedPolicy.planningOnly,
+  };
   currentTurnStats = {
     phase: "planning",
     toolCalls: 0,
@@ -1749,14 +1786,21 @@ rl.on("line", async (line) => {
     executionTrail: [],
     browserScrolled: false,
     browserAtBottom: false,
+    toolErrors: 0,
     lastToolFingerprint: "",
     repeatedToolCount: 0,
     maxStepsReached: false,
   };
   const continuation = isContinuationRequest(userText) && !!pendingContinuation;
-  const turnTaskText = continuation ? buildContinuationPrompt(userText) : userText;
+  const baseTurnTaskText = continuation ? buildContinuationPrompt(userText) : userText;
+  const turnTaskText = currentTurnPolicy.planningOnly
+    ? buildPlanningOnlyPrompt(baseTurnTaskText)
+    : baseTurnTaskText;
   if (continuation) {
     emitStatus("Retomando tarefa pendente da rodada anterior...");
+  }
+  if (currentTurnPolicy.planningOnly) {
+    emitStatus("Modo planejamento: respondendo sem executar ferramentas.");
   }
   if (!continuation && !isContinuationRequest(userText)) {
     pendingContinuation = null;
@@ -1788,7 +1832,7 @@ rl.on("line", async (line) => {
   if (isSuperseded()) {
     currentAbortController = null;
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
     return;
   }
@@ -1892,7 +1936,7 @@ rl.on("line", async (line) => {
             emitWaitingUser();
           }
           currentTurnStats = null;
-          currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
+          currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
           pendingContinuation = null;
           return;
         }
@@ -1960,7 +2004,7 @@ rl.on("line", async (line) => {
   // Check if superseded before emitting response
   if (isSuperseded()) {
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
     return;
   }
@@ -1968,12 +2012,14 @@ rl.on("line", async (line) => {
   if (lastErr) {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
   } else {
     currentTurnStats.phase = "reporting";
 
     if (
+      currentTurnPolicy.executionMode !== "plan"
+      &&
       !currentTurnStats?.maxStepsReached
       && (currentTurnStats?.toolCalls ?? 0) === 0
       && looksLikeTechnicalActionRequest(turnTaskText)
@@ -1987,13 +2033,24 @@ rl.on("line", async (line) => {
     }
 
     const shouldAppendReceipt =
-      !currentTurnStats?.maxStepsReached
+      currentTurnPolicy.executionMode !== "plan"
+      && !currentTurnStats?.maxStepsReached
       && looksLikeTechnicalActionRequest(turnTaskText)
       && (currentTurnStats?.toolCalls ?? 0) > 0
       && !hasExecutionReceipt(result);
 
     if (shouldAppendReceipt) {
       result = `${String(result || "").trim()}${buildExecutionReceipt()}`.trim();
+    }
+
+    if (
+      currentTurnPolicy.executionMode === "build"
+      && looksLikeFakeAccessBlockClaim(result)
+      && (currentTurnStats?.toolErrors ?? 0) === 0
+      && (currentTurnStats?.toolCalls ?? 0) === 0
+    ) {
+      result = "Ainda nao tentei executar ferramentas suficientes nesta rodada para concluir que existe bloqueio real de acesso. Posso executar agora os passos tecnicos e te trazer evidencias objetivas.";
+      emitProviderError("Guardrail de bloqueio: resposta ajustada para evitar alegacao de falta de acesso sem erro real de ferramenta.");
     }
 
     if (
@@ -2021,7 +2078,7 @@ rl.on("line", async (line) => {
     // The session stays alive — the host will show the compose bar again.
     emitWaitingUser(maxStepsTriggered ? undefined : result);
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
   }
 });
 

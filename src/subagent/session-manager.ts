@@ -4,7 +4,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SubAgentSession, SessionState, DEFAULT_SUBAGENT_MODEL, SubAgentModelId, isSubAgentModelId, SubAgentMetricsSnapshot } from "./types.js";
+import { SubAgentSession, SessionState, DEFAULT_SUBAGENT_MODEL, DEFAULT_SUBAGENT_EXECUTION_MODE, SubAgentModelId, isSubAgentExecutionMode, isSubAgentModelId, SubAgentMetricsSnapshot, SubAgentExecutionMode } from "./types.js";
 import type { ConnectorManager } from "../connectors/connector-manager.js";
 import type { MediaAttachment } from "../llm/types.js";
 import { query } from "../memory/database.js";
@@ -392,6 +392,7 @@ export class SessionManager {
           numericUserId,
           variantName,
           preferredModel: DEFAULT_SUBAGENT_MODEL,
+          executionMode: DEFAULT_SUBAGENT_EXECUTION_MODE,
           output: "",
           pendingQuestion: null,
           recovered: true,
@@ -574,6 +575,7 @@ export class SessionManager {
       numericUserId: numericUserId ?? null,
       variantName,
       preferredModel: DEFAULT_SUBAGENT_MODEL,
+      executionMode: DEFAULT_SUBAGENT_EXECUTION_MODE,
       output: "",
       pendingQuestion: null,
       createdAt: Date.now(),
@@ -651,7 +653,13 @@ export class SessionManager {
     const imagePaths = await this.injectImages(session, images);
 
     // Send via stdin NDJSON with generation number
-    const payload: any = { type: "message", text: message, generation, model: session.preferredModel };
+    const payload: any = {
+      type: "message",
+      text: message,
+      generation,
+      model: session.preferredModel,
+      mode: session.executionMode,
+    };
     if (imagePaths.length > 0) payload.images = imagePaths;
     this.sendToAgentProcess(sessionId, payload);
   }
@@ -769,6 +777,19 @@ export class SessionManager {
     return session.preferredModel;
   }
 
+  setSessionExecutionMode(sessionId: string, mode: string): SubAgentExecutionMode {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`No session with id ${sessionId}`);
+    }
+    if (!isSubAgentExecutionMode(mode)) {
+      throw new Error("Modo invalido");
+    }
+    session.executionMode = mode;
+    session.updatedAt = Date.now();
+    return session.executionMode;
+  }
+
   async getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>> {
     try {
       const result = await query(
@@ -871,7 +892,12 @@ export class SessionManager {
       // Copy images into container and send to agent
       // Credentials are available as RICK_CRED_* / RICK_SECRET_* env vars — not in the prompt
       const imagePaths = await this.injectImages(session, images);
-      const payload: any = { type: "message", text: session.taskDescription, model: session.preferredModel };
+      const payload: any = {
+        type: "message",
+        text: session.taskDescription,
+        model: session.preferredModel,
+        mode: session.executionMode,
+      };
       if (imagePaths.length > 0) payload.images = imagePaths;
       this.sendToAgentProcess(session.id, payload);
     } else {
@@ -900,6 +926,9 @@ export class SessionManager {
     const apiUrl = this.getCurrentApiUrl();
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
+    agentEnv.RICK_PLAYWRIGHT_MODE = process.env.RICK_PLAYWRIGHT_MODE || "auto";
+    agentEnv.RICK_PLAYWRIGHT_MCP_COMMAND = process.env.RICK_PLAYWRIGHT_MCP_COMMAND
+      || JSON.stringify(["npx", "-y", "@playwright/mcp@latest", "--browser", "chrome"]);
 
     const gitIdentity = await this.buildSubagentGitIdentity(session, agentEnv);
     agentEnv.GIT_AUTHOR_NAME = gitIdentity.name;
