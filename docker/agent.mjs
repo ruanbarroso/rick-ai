@@ -311,6 +311,27 @@ function collectTurnEvidence(toolName, input) {
   }
 }
 
+function buildFallbackCarryoverContext(baseTaskText) {
+  if (!currentTurnStats || (currentTurnStats.toolCalls ?? 0) === 0) {
+    return baseTaskText;
+  }
+
+  const files = Array.from(currentTurnStats.changedPaths).slice(-6).map((p) => trimForReceipt(p, 70));
+  const cmds = currentTurnStats.commands.slice(-4);
+  const tools = Array.from(currentTurnStats.toolNames).slice(-8);
+
+  const lines = [
+    "[CONTEXTO_DE_FALLBACK]",
+    "A rodada atual ja teve execucao de ferramentas antes do fallback.",
+    tools.length > 0 ? `Ferramentas usadas: ${tools.join(", ")}.` : "",
+    files.length > 0 ? `Arquivos/paths envolvidos: ${files.join(", ")}.` : "",
+    cmds.length > 0 ? `Comandos recentes: ${cmds.join("; ")}.` : "",
+    "Continue da etapa atual e NAO reinicie a tarefa do zero.",
+  ].filter(Boolean);
+
+  return `${baseTaskText}\n\n${lines.join("\n")}`;
+}
+
 function hasExecutionReceipt(text) {
   const normalized = String(text || "").toLowerCase();
   return /(evidencias de execucao|evidências de execução|arquivos alterados|comandos executados|validacoes executadas|validações executadas)/.test(normalized);
@@ -466,6 +487,7 @@ async function runToolWithLifecycle(name, input) {
       changedPaths: new Set(),
       commands: [],
       validations: [],
+      executionTrail: [],
       lastToolFingerprint: "",
       repeatedToolCount: 0,
       maxStepsReached: false,
@@ -510,6 +532,11 @@ async function runToolWithLifecycle(name, input) {
     const result = await runTool(name, input);
     const output = String(result);
     collectTurnEvidence(name, input);
+    if (currentTurnStats.executionTrail.length < 16) {
+      const inputPreview = trimForReceipt(summarizeCommandInput(input) || (input?.path ?? input?.filePath ?? input?.url ?? ""), 90);
+      const outputPreview = trimForReceipt(output, 90);
+      currentTurnStats.executionTrail.push({ name, input: inputPreview, output: outputPreview });
+    }
     emitToolCallCompleted(callId, name, Date.now() - started, toPreview(output));
     return output;
   } catch (err) {
@@ -1665,6 +1692,7 @@ rl.on("line", async (line) => {
     changedPaths: new Set(),
     commands: [],
     validations: [],
+    executionTrail: [],
     lastToolFingerprint: "",
     repeatedToolCount: 0,
     maxStepsReached: false,
@@ -1768,6 +1796,15 @@ rl.on("line", async (line) => {
   let maxStepsTriggered = false;
   for (let providerIndex = 0; providerIndex < cascade.length; providerIndex++) {
     const provider = cascade[providerIndex];
+    const providerTaskText = providerIndex > 0 ? buildFallbackCarryoverContext(turnTaskText) : turnTaskText;
+    if (providerIndex > 0 && currentTurnStats) {
+      // Avoid false loop detection when the next provider repeats the latest probe command.
+      currentTurnStats.lastToolFingerprint = "";
+      currentTurnStats.repeatedToolCount = 0;
+      if (currentTurnStats.toolCalls > 0) {
+        emitStatus(`Retomando no ${provider.name} com contexto de execucao da rodada...`);
+      }
+    }
     // Seed provider history with transcript from other providers (prevents amnesia on cascade switch)
     seedProviderHistory(provider.seedName);
 
@@ -1778,7 +1815,7 @@ rl.on("line", async (line) => {
       attempts++;
       try {
         emitModelActive(provider.modelId, provider.name);
-        result = await provider.fn(turnTaskText, signal, imageInputs);
+        result = await provider.fn(providerTaskText, signal, imageInputs);
         lastErr = null;
         break;
       } catch (err) {
