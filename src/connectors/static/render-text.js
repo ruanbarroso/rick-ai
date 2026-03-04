@@ -170,6 +170,18 @@ function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
     displayText = displayText.replace(/\n\n\[Conte\u00FAdo do arquivo "[^"]*"\]:[\s\S]*/g, '').trim();
   }
 
+  var remainingText = displayText || '';
+  var audioTranscription = null;
+
+  if (audioUrl && remainingText) {
+    var transcriptionTag = remainingText.match(/\n?\[\u00C1udio transcrito:\s*"([\s\S]+?)"\]\s*$/i)
+      || remainingText.match(/\n?\[\u00C1udio transcrito\]:\s*([\s\S]+)$/i);
+    if (transcriptionTag) {
+      audioTranscription = (transcriptionTag[1] || '').trim();
+      remainingText = remainingText.replace(transcriptionTag[0], '').trim();
+    }
+  }
+
   // Image attachments
   if (hasImages) {
     for (var ii = 0; ii < imageUrls.length; ii++) {
@@ -183,15 +195,19 @@ function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
   if (audioUrl) {
     html += '<div class="audio-message">';
     html += '<audio controls preload="metadata" src="' + audioUrl + '"></audio>';
-    if (displayText) {
-      var isPlaceholder = /^O usuario enviou um audio/i.test(displayText) || displayText === '[audio]';
+    if (!audioTranscription && remainingText) {
+      var isPlaceholder = /^O usuario enviou um audio/i.test(remainingText) || remainingText === '[audio]';
       if (!isPlaceholder) {
-        var cleanText = displayText.replace(/^aqui\s+est[a\u00E1]\s+a\s+transcri[c\u00E7][a\u00E3]o.*?:\s*/i, '');
+        var cleanText = remainingText.replace(/^aqui\s+est[a\u00E1]\s+a\s+transcri[c\u00E7][a\u00E3]o.*?:\s*/i, '');
         cleanText = cleanText.replace(/^["\u201C\u201D](.+)["\u201C\u201D]$/, '$1');
         if (cleanText.trim()) {
-          html += '<blockquote class="audio-transcription">' + renderText(cleanText) + '</blockquote>';
+          audioTranscription = cleanText.trim();
+          remainingText = '';
         }
       }
+    }
+    if (audioTranscription) {
+      html += '<blockquote class="audio-transcription">' + renderText(audioTranscription) + '</blockquote>';
     }
     html += '</div>';
   }
@@ -219,15 +235,14 @@ function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
 
   // If we had media, only show text if it's not a placeholder
   if (hasImages || audioUrl) {
-    if (displayText && audioUrl && !hasImages) return html;
-    if (displayText && hasImages) {
-      var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(displayText);
-      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(displayText);
+    if (remainingText) {
+      var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(remainingText);
+      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(remainingText);
       if (!isImgPlaceholder && !isAudioPlaceholder) {
-        html += renderText(displayText);
+        html += renderText(remainingText);
       }
     }
-    return html || renderText(displayText);
+    return html || renderText(remainingText || displayText);
   }
 
   if (hasFileInfos) {
