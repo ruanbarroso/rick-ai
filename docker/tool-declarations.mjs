@@ -63,10 +63,7 @@ export const coreToolDeclarations = [
         args: { type: "array", items: { type: "string" } },
         commandLine: { type: "string", description: "Comando completo para executar via bash -lc" },
       },
-      anyOf: [
-        { required: ["command"] },
-        { required: ["commandLine"] },
-      ],
+      additionalProperties: false,
     },
   },
   {
