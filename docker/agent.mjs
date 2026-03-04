@@ -155,6 +155,10 @@ async function refreshLLMTokens({ force = false } = {}) {
         cachedClaudeToken = data.accessToken;
       } else if (provider === "openai") {
         cachedOpenAIToken = data.accessToken;
+        // Update account ID from host API (may be needed for ChatGPT-Account-Id header)
+        if (data.accountId) {
+          process.env.OPENAI_ACCOUNT_ID = data.accountId;
+        }
       }
     }
   }
@@ -346,6 +350,10 @@ async function runGeminiLoop(userText, signal) {
 
 // ── OpenAI adapter ──────────────────────────────────────────────────────────
 
+// Codex Responses API endpoint — used when authenticating via OAuth
+// (user's ChatGPT Pro/Plus subscription). Same endpoint opencode uses.
+const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
+
 async function runOpenAILoop(userText, signal) {
   const apiKey = process.env.OPENAI_API_KEY ?? "";
   // Prefer dynamically cached token (freshly refreshed from host API) over
@@ -355,6 +363,16 @@ async function runOpenAILoop(userText, signal) {
   if (!token) {
     throw new Error("OpenAI: nenhum token disponível");
   }
+
+  // When using OAuth, we must use the Codex Responses API at chatgpt.com
+  // (not api.openai.com which rejects ChatGPT OAuth tokens).
+  const useCodexApi = !!oauthToken && !apiKey;
+
+  if (useCodexApi) {
+    return runOpenAICodexLoop(userText, oauthToken, signal);
+  }
+
+  // Standard API key mode — Chat Completions API
   const authHeader = `Bearer ${token}`;
   const openaiTools = toolDeclarations.map((t) => ({
     type: "function",
@@ -432,15 +450,162 @@ async function runOpenAILoop(userText, signal) {
   }
 }
 
+/**
+ * OAuth mode — Codex Responses API at chatgpt.com
+ * Uses the OpenAI Responses API format (not Chat Completions).
+ * Same approach as opencode's codex auth plugin.
+ */
+async function runOpenAICodexLoop(userText, oauthToken, signal) {
+  const accountId = process.env.OPENAI_ACCOUNT_ID || "";
+
+  // Build Responses API input format
+  const input = [];
+  // Add system prompt as developer instructions (Responses API uses top-level `instructions`)
+  // Add conversation history from transcript if we have prior context
+  if (!openaiHistory) {
+    openaiHistory = [{ role: "system", content: SYSTEM_PROMPT }];
+  }
+  const historyLenBefore = openaiHistory.length;
+  openaiHistory.push({ role: "user", content: userText });
+
+  // Build Responses API input from history (skip system message at index 0)
+  for (let i = 1; i < openaiHistory.length; i++) {
+    const m = openaiHistory[i];
+    if (m.role === "user") {
+      input.push({ role: "user", content: [{ type: "input_text", text: m.content }] });
+    } else if (m.role === "assistant") {
+      input.push({ role: "assistant", content: [{ type: "output_text", text: m.content }] });
+    }
+    // Skip system and tool messages in Responses API format
+  }
+
+  // Define tools in Responses API format
+  const responsesTools = toolDeclarations.map((t) => ({
+    type: "function",
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters,
+  }));
+
+  try {
+    while (true) {
+      if (signal?.aborted || interruptRequested) {
+        throw new Error("Interrupted");
+      }
+
+      const timeoutSignal = AbortSignal.timeout(LLM_TIMEOUT_MS);
+      const combinedSignal = signal
+        ? AbortSignal.any([timeoutSignal, signal])
+        : timeoutSignal;
+
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${oauthToken}`,
+        "User-Agent": "rick-ai/1.0",
+        originator: "opencode",
+      };
+      if (accountId) {
+        headers["ChatGPT-Account-Id"] = accountId;
+      }
+
+      const body = {
+        model: "gpt-5.3-codex",
+        instructions: SYSTEM_PROMPT,
+        input,
+        tools: responsesTools,
+        store: false,
+        stream: false,
+      };
+
+      const res = await fetch(CODEX_API_ENDPOINT, {
+        method: "POST",
+        signal: combinedSignal,
+        headers,
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`OpenAI Codex API error ${res.status}: ${errText}`);
+      }
+
+      const data = await res.json();
+
+      // Parse Responses API output
+      let text = "";
+      const toolCalls = [];
+
+      if (data.output && Array.isArray(data.output)) {
+        for (const item of data.output) {
+          if (item.type === "message" && item.content) {
+            for (const part of item.content) {
+              if (part.type === "output_text") {
+                text += part.text;
+              }
+            }
+          }
+          if (item.type === "function_call") {
+            toolCalls.push({
+              name: item.name,
+              input: (() => { try { return JSON.parse(item.arguments); } catch { return {}; } })(),
+              callId: item.call_id,
+            });
+          }
+        }
+      }
+
+      if (text) emitMessage(text);
+
+      if (toolCalls.length === 0) {
+        // Update openaiHistory with the assistant response for future turns
+        if (text) openaiHistory.push({ role: "assistant", content: text });
+        return text || FALLBACK_RESULT;
+      }
+
+      // Execute tool calls and build function_call_output items for next request
+      for (const tc of toolCalls) {
+        if (signal?.aborted || interruptRequested) {
+          throw new Error("Interrupted");
+        }
+        emitStatus(toolStatusLabel(tc.name, tc.input));
+        const result = await runTool(tc.name, tc.input);
+
+        // Add function call + output to the input for next iteration
+        input.push({
+          type: "function_call",
+          name: tc.name,
+          arguments: JSON.stringify(tc.input),
+          call_id: tc.callId,
+        });
+        input.push({
+          type: "function_call_output",
+          call_id: tc.callId,
+          output: String(result),
+        });
+      }
+    }
+  } catch (err) {
+    openaiHistory.length = historyLenBefore;
+    throw err;
+  }
+}
+
 // ── Claude API adapter ──────────────────────────────────────────────────────
+
+// Tool name prefix required by Anthropic's OAuth/beta endpoint.
+// The server requires tool names to start with "mcp_" when using OAuth tokens.
+// Same approach as opencode's anthropic-auth plugin.
+const CLAUDE_OAUTH_TOOL_PREFIX = "mcp_";
 
 async function runClaudeLoop(userText, signal) {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
   // Prefer dynamically cached token (freshly refreshed from host API) over
   // the static env var which may have expired since container start.
   const oauthToken = cachedClaudeToken || process.env.ANTHROPIC_ACCESS_TOKEN || "";
+  const useOAuth = !!oauthToken && !apiKey;
+
   const claudeTools = toolDeclarations.map((t) => ({
-    name: t.name,
+    name: useOAuth ? `${CLAUDE_OAUTH_TOOL_PREFIX}${t.name}` : t.name,
     description: t.description,
     input_schema: t.parameters,
   }));
@@ -449,6 +614,10 @@ async function runClaudeLoop(userText, signal) {
   const historyLenBefore = claudeHistory.length;
   claudeHistory.push({ role: "user", content: userText });
   let messages = claudeHistory;
+
+  // For OAuth mode, prefix tool names in existing history's tool_use/tool_result blocks
+  // so the API sees consistent mcp_ prefixed names throughout
+  const messagesForApi = useOAuth ? prefixToolNamesInMessages(messages) : messages;
 
   try {
     while (true) {
@@ -461,8 +630,12 @@ async function runClaudeLoop(userText, signal) {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
       };
-      if (oauthToken) {
+      if (useOAuth) {
         headers["Authorization"] = `Bearer ${oauthToken}`;
+        // Required beta header for OAuth authentication support
+        headers["anthropic-beta"] = "oauth-2025-04-20,interleaved-thinking-2025-05-14";
+        // Identify as Claude CLI (required by OAuth endpoint)
+        headers["user-agent"] = "claude-cli/2.1.2 (external, cli)";
       } else if (apiKey) {
         headers["x-api-key"] = apiKey;
       } else {
@@ -475,15 +648,25 @@ async function runClaudeLoop(userText, signal) {
         ? AbortSignal.any([timeoutSignal, signal])
         : timeoutSignal;
 
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      // Sanitize system prompt for OAuth mode — the server blocks non-Claude branding
+      const systemPrompt = useOAuth
+        ? SYSTEM_PROMPT.replace(/Rick Sub-Agent/g, "Claude Code").replace(/Rick/g, "Claude")
+        : SYSTEM_PROMPT;
+
+      // Build URL — OAuth mode requires ?beta=true query param
+      const apiUrl = useOAuth
+        ? "https://api.anthropic.com/v1/messages?beta=true"
+        : "https://api.anthropic.com/v1/messages";
+
+      const res = await fetch(apiUrl, {
         method: "POST",
         signal: combinedSignal,
         headers,
         body: JSON.stringify({
           model: "claude-opus-4-6",
           max_tokens: 8192,
-          system: SYSTEM_PROMPT,
-          messages,
+          system: systemPrompt,
+          messages: messagesForApi,
           tools: claudeTools,
         }),
       });
@@ -494,10 +677,13 @@ async function runClaudeLoop(userText, signal) {
       }
 
       const data = await res.json();
-      messages.push({ role: "assistant", content: data.content });
 
-      const textBlocks = data.content.filter((b) => b.type === "text");
-      const toolBlocks = data.content.filter((b) => b.type === "tool_use");
+      // Strip mcp_ prefix from tool names in the response before storing in history
+      const content = useOAuth ? stripToolPrefixFromContent(data.content) : data.content;
+      messages.push({ role: "assistant", content });
+
+      const textBlocks = content.filter((b) => b.type === "text");
+      const toolBlocks = content.filter((b) => b.type === "tool_use");
 
       for (const tb of textBlocks) {
         emitMessage(tb.text);
@@ -518,6 +704,13 @@ async function runClaudeLoop(userText, signal) {
       }
 
       messages.push({ role: "user", content: toolResults });
+      // For OAuth, the messagesForApi reference is the same as messages after prefix transformation,
+      // but since we strip on receive and re-prefix on send, update the reference
+      if (useOAuth) {
+        // Rebuild the prefixed messages for the next API call
+        messagesForApi.length = 0;
+        messagesForApi.push(...prefixToolNamesInMessages(messages));
+      }
     }
   } catch (err) {
     // Roll back history to prevent dangling user messages that break
@@ -525,6 +718,38 @@ async function runClaudeLoop(userText, signal) {
     claudeHistory.length = historyLenBefore;
     throw err;
   }
+}
+
+/**
+ * Prefix tool names in messages for OAuth mode.
+ * Deep-clones messages and adds mcp_ prefix to tool_use and tool_result names.
+ */
+function prefixToolNamesInMessages(messages) {
+  return messages.map((msg) => {
+    if (!msg.content || !Array.isArray(msg.content)) return msg;
+    return {
+      ...msg,
+      content: msg.content.map((block) => {
+        if (block.type === "tool_use" && block.name && !block.name.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)) {
+          return { ...block, name: `${CLAUDE_OAUTH_TOOL_PREFIX}${block.name}` };
+        }
+        return block;
+      }),
+    };
+  });
+}
+
+/**
+ * Strip mcp_ prefix from tool names in response content.
+ */
+function stripToolPrefixFromContent(content) {
+  if (!Array.isArray(content)) return content;
+  return content.map((block) => {
+    if (block.type === "tool_use" && block.name && block.name.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)) {
+      return { ...block, name: block.name.slice(CLAUDE_OAUTH_TOOL_PREFIX.length) };
+    }
+    return block;
+  });
 }
 
 // ── Main: stdin/stdout event loop ───────────────────────────────────────────

@@ -1023,30 +1023,23 @@ export class Agent {
   }
 
   /**
-   * Ensure the LLM service has the user's OAuth tokens if they're connected.
-   * Falls back to admin (id=1) when the user has no tokens configured.
+   * Pre-warm OAuth tokens so they're fresh in the DB for sub-agents.
+   * The main session itself only uses Gemini — these tokens are consumed by
+   * sub-agents via the /api/agent/llm-token endpoint.
    */
   private async ensureOAuthTokens(userId: number): Promise<void> {
-    // Claude (with admin fallback)
+    // Claude (with admin fallback) — just validate/refresh, don't set on LLM service
     try {
-      const claudeToken = await this.resolveClaudeToken(userId);
-      this.llm.setAnthropicOAuthToken(claudeToken);
+      await this.resolveClaudeToken(userId);
     } catch (err) {
-      logger.warn({ err }, "Failed to get Claude OAuth token");
-      this.llm.setAnthropicOAuthToken(null);
+      logger.warn({ err }, "Failed to pre-warm Claude OAuth token");
     }
 
-    // OpenAI (with admin fallback)
+    // OpenAI (with admin fallback) — just validate/refresh, don't set on LLM service
     try {
-      const openaiData = await this.resolveOpenAIToken(userId);
-      if (openaiData) {
-        this.llm.setOpenAIOAuthToken(openaiData.accessToken, openaiData.accountId);
-      } else {
-        this.llm.setOpenAIOAuthToken(null);
-      }
+      await this.resolveOpenAIToken(userId);
     } catch (err) {
-      logger.warn({ err }, "Failed to get OpenAI OAuth token");
-      this.llm.setOpenAIOAuthToken(null);
+      logger.warn({ err }, "Failed to pre-warm OpenAI OAuth token");
     }
   }
 
@@ -1179,12 +1172,6 @@ IMPORTANTE SOBRE SUB-AGENTE:
       return result.error || "Erro ao conectar. Tente novamente pelas configuracoes.";
     }
 
-    // Set the token in LLM service immediately
-    const token = await this.claudeOAuth.getValidToken(userId);
-    if (token) {
-      this.llm.setAnthropicOAuthToken(token);
-    }
-
     return `*Claude conectado com sucesso!*
 
 Conta: ${result.email || "conectada"}
@@ -1200,12 +1187,6 @@ O sub-agente agora pode usar o Claude Opus. O token e renovado automaticamente.`
 
     if (!result.success) {
       return result.error || "Erro ao conectar. Tente novamente pelas configuracoes.";
-    }
-
-    // Set the token in LLM service immediately
-    const tokenData = await this.openaiOAuth.getValidToken(userId);
-    if (tokenData) {
-      this.llm.setOpenAIOAuthToken(tokenData.accessToken, tokenData.accountId);
     }
 
     return `*GPT conectado com sucesso!*

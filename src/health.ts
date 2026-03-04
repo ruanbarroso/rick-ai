@@ -608,6 +608,7 @@ async function handleAgentApiGet(
       const userIdsToTry = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
 
       let accessToken: string | null = null;
+      let accountId: string | null = null;
       for (const uid of userIdsToTry) {
         if (accessToken) break;
         if (provider === "claude") {
@@ -615,6 +616,7 @@ async function handleAgentApiGet(
         } else {
           const oauthToken = await openaiOAuthService.getValidToken(uid, forceRefresh);
           accessToken = oauthToken?.accessToken ?? null;
+          accountId = oauthToken?.accountId ?? null;
         }
       }
 
@@ -624,7 +626,9 @@ async function handleAgentApiGet(
       }
 
       logger.info({ sessionId: session.sessionId, provider, forceRefresh }, "Agent API: LLM token refreshed");
-      jsonResponse(res, 200, { accessToken, provider });
+      const responseBody: Record<string, any> = { accessToken, provider };
+      if (accountId) responseBody.accountId = accountId;
+      jsonResponse(res, 200, responseBody);
       return;
     }
 

@@ -147,10 +147,20 @@ async function agenticLoop(adapter) {
 }
 
 // ── OpenAI adapter ───────────────────────────────────────────────────────────
+// Codex Responses API endpoint for OAuth mode (same as opencode)
+const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
+
 function makeOpenAIAdapter(history, userContent) {
   const apiKey = process.env.OPENAI_API_KEY ?? "";
   const oauthToken = process.env.OPENAI_ACCESS_TOKEN ?? "";
-  const authHeader = oauthToken ? `Bearer ${oauthToken}` : `Bearer ${apiKey}`;
+  const useCodexApi = !!oauthToken && !apiKey;
+
+  if (useCodexApi) {
+    return makeOpenAICodexAdapter(history, userContent, oauthToken);
+  }
+
+  // Standard API key mode — Chat Completions API
+  const authHeader = `Bearer ${apiKey || oauthToken}`;
   const openaiTools = toolDeclarations.map((t) => ({
     type: "function",
     function: { name: t.name, description: t.description, parameters: t.parameters },
@@ -211,6 +221,126 @@ function makeOpenAIAdapter(history, userContent) {
 
     persistHistory(messages) {
       saveHistory(messages.filter((m) => m.role !== "system"));
+    },
+  };
+}
+
+/**
+ * OAuth mode — Codex Responses API adapter.
+ * Uses chatgpt.com/backend-api/codex/responses instead of api.openai.com.
+ */
+function makeOpenAICodexAdapter(history, userContent, oauthToken) {
+  const accountId = process.env.OPENAI_ACCOUNT_ID || "";
+
+  const responsesTools = toolDeclarations.map((t) => ({
+    type: "function",
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters,
+  }));
+
+  return {
+    init() {
+      // Build Responses API input from history
+      const input = [];
+      for (const m of history) {
+        if (m.role === "user") {
+          input.push({ role: "user", content: [{ type: "input_text", text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }] });
+        } else if (m.role === "assistant") {
+          input.push({ role: "assistant", content: [{ type: "output_text", text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }] });
+        }
+      }
+      input.push({ role: "user", content: [{ type: "input_text", text: userContent }] });
+      return input;
+    },
+
+    async call(input) {
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${oauthToken}`,
+        "User-Agent": "rick-ai/1.0",
+        originator: "opencode",
+      };
+      if (accountId) {
+        headers["ChatGPT-Account-Id"] = accountId;
+      }
+
+      const res = await fetch(CODEX_API_ENDPOINT, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "gpt-5.3-codex",
+          instructions: systemPrompt || "",
+          input,
+          tools: responsesTools,
+          store: false,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+      });
+
+      if (!res.ok) {
+        throw new Error(`OpenAI Codex API error ${res.status}: ${await res.text()}`);
+      }
+
+      const data = await res.json();
+      let text = "";
+      const toolCalls = [];
+
+      if (data.output && Array.isArray(data.output)) {
+        for (const item of data.output) {
+          if (item.type === "message" && item.content) {
+            for (const part of item.content) {
+              if (part.type === "output_text") text += part.text;
+            }
+          }
+          if (item.type === "function_call") {
+            toolCalls.push({
+              name: item.name,
+              input: (() => { try { return JSON.parse(item.arguments); } catch { return {}; } })(),
+              id: item.call_id,
+            });
+          }
+        }
+      }
+
+      return {
+        texts: text ? [text] : [],
+        toolCalls,
+        done: toolCalls.length === 0,
+        nextState: input,
+      };
+    },
+
+    addToolResults(input, results) {
+      const extended = [...input];
+      for (const r of results) {
+        extended.push({
+          type: "function_call",
+          name: r.name,
+          arguments: JSON.stringify(r.input ?? {}),
+          call_id: r.id,
+        });
+        extended.push({
+          type: "function_call_output",
+          call_id: r.id,
+          output: r.result,
+        });
+      }
+      return extended;
+    },
+
+    persistHistory(input) {
+      // Convert Responses API input back to simple format for persistence
+      const simple = [];
+      for (const item of input) {
+        if (item.role === "user" && item.content?.[0]?.text) {
+          simple.push({ role: "user", content: item.content[0].text });
+        } else if (item.role === "assistant" && item.content?.[0]?.text) {
+          simple.push({ role: "assistant", content: item.content[0].text });
+        }
+      }
+      saveHistory(simple);
     },
   };
 }

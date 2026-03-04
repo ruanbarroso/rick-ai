@@ -35,10 +35,15 @@ export interface LLMProvider {
 export interface ModelConfig {
   id: string;
   alias: string;
-  provider: "gemini" | "anthropic" | "openai";
+  provider: "gemini";
   modelId: string;
 }
 
+/**
+ * Main session models — Gemini only.
+ * Claude and OpenAI are used exclusively in sub-agents and edit-agents
+ * (docker/agent.mjs, docker/edit-agent.mjs), not in the main session.
+ */
 export const AVAILABLE_MODELS: ModelConfig[] = [
   {
     id: "gemini-flash",
@@ -51,17 +56,5 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     alias: "Gemini 3.1 Pro",
     provider: "gemini",
     modelId: "gemini-3.1-pro-preview",
-  },
-  {
-    id: "claude-opus",
-    alias: "Claude Opus 4.6",
-    provider: "anthropic",
-    modelId: "claude-opus-4-6",
-  },
-  {
-    id: "gpt-codex",
-    alias: "GPT-5.3 Codex",
-    provider: "openai",
-    modelId: "gpt-5.3-codex",
   },
 ];
