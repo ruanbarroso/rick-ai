@@ -4,7 +4,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SubAgentSession, SessionState } from "./types.js";
+import { SubAgentSession, SessionState, DEFAULT_SUBAGENT_MODEL, SubAgentModelId, isSubAgentModelId } from "./types.js";
 import type { ConnectorManager } from "../connectors/connector-manager.js";
 import type { MediaAttachment } from "../llm/types.js";
 import { query } from "../memory/database.js";
@@ -351,6 +351,7 @@ export class SessionManager {
           userId,
           numericUserId,
           variantName,
+          preferredModel: DEFAULT_SUBAGENT_MODEL,
           output: "",
           pendingQuestion: null,
           recovered: true,
@@ -530,6 +531,7 @@ export class SessionManager {
       userId,
       numericUserId: numericUserId ?? null,
       variantName,
+      preferredModel: DEFAULT_SUBAGENT_MODEL,
       output: "",
       pendingQuestion: null,
       createdAt: Date.now(),
@@ -606,7 +608,7 @@ export class SessionManager {
     const imagePaths = await this.injectImages(session, images);
 
     // Send via stdin NDJSON with generation number
-    const payload: any = { type: "message", text: message, generation };
+    const payload: any = { type: "message", text: message, generation, model: session.preferredModel };
     if (imagePaths.length > 0) payload.images = imagePaths;
     this.sendToAgentProcess(sessionId, payload);
   }
@@ -706,6 +708,19 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     return session.state === "running" || session.state === "starting";
+  }
+
+  setSessionPreferredModel(sessionId: string, modelId: string): SubAgentModelId {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`No session with id ${sessionId}`);
+    }
+    if (!isSubAgentModelId(modelId)) {
+      throw new Error("Modelo invalido");
+    }
+    session.preferredModel = modelId;
+    session.updatedAt = Date.now();
+    return session.preferredModel;
   }
 
   async getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>> {
@@ -810,7 +825,7 @@ export class SessionManager {
       // Copy images into container and send to agent
       // Credentials are available as RICK_CRED_* / RICK_SECRET_* env vars — not in the prompt
       const imagePaths = await this.injectImages(session, images);
-      const payload: any = { type: "message", text: session.taskDescription };
+      const payload: any = { type: "message", text: session.taskDescription, model: session.preferredModel };
       if (imagePaths.length > 0) payload.images = imagePaths;
       this.sendToAgentProcess(session.id, payload);
     } else {

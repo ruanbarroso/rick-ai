@@ -27,6 +27,21 @@ export interface PendingDelegation {
   createdAt: number;
 }
 
+export const SUBAGENT_MODELS = [
+  { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
+  { id: "gpt-5.3-codex", label: "GPT 5.3 Codex" },
+  { id: "gemini-3.1-pro", label: "Gemini 3.1 Pro" },
+  { id: "gemini-3.0-flash", label: "Gemini 3.0 Flash" },
+] as const;
+
+export type SubAgentModelId = (typeof SUBAGENT_MODELS)[number]["id"];
+
+export const DEFAULT_SUBAGENT_MODEL: SubAgentModelId = "claude-opus-4-6";
+
+export function isSubAgentModelId(value: string): value is SubAgentModelId {
+  return SUBAGENT_MODELS.some((model) => model.id === value);
+}
+
 /**
  * Sub-agent session state.
  */
@@ -64,6 +79,8 @@ export interface SubAgentSession {
   pendingQuestion: string | null;
   /** Assigned variant name for this session (e.g. "Pickle Rick", "Zoe Alpha") */
   variantName?: string;
+  /** Preferred primary model for this session's cascade order. */
+  preferredModel: SubAgentModelId;
   /** True if this session was recovered after a server restart */
   recovered?: boolean;
   createdAt: number;

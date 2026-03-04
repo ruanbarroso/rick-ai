@@ -105,14 +105,30 @@ function hasGemini() {
   return !!process.env.GEMINI_API_KEY;
 }
 
+const MODEL_CHAIN = [
+  { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
+  { id: "gpt-5.3-codex", label: "GPT 5.3 Codex" },
+  { id: "gemini-3.1-pro", label: "Gemini 3.1 Pro" },
+  { id: "gemini-3.0-flash", label: "Gemini 3.0 Flash" },
+];
+
+const DEFAULT_MODEL_ID = "claude-opus-4-6";
+
+function isSupportedModelId(value) {
+  return MODEL_CHAIN.some((m) => m.id === value);
+}
+
 /**
  * Build the current list of available providers.
  */
 function getProviderList() {
   const list = [];
-  if (hasClaude()) list.push("claude");
-  if (hasOpenAI()) list.push("openai");
-  if (hasGemini()) list.push("gemini");
+  if (hasClaude()) list.push("claude-opus-4-6");
+  if (hasOpenAI()) list.push("gpt-5.3-codex");
+  if (hasGemini()) {
+    list.push("gemini-3.1-pro");
+    list.push("gemini-3.0-flash");
+  }
   return list;
 }
 
@@ -211,9 +227,9 @@ const FALLBACK_RESULT = "Tarefa concluída.";
 
 // ── Gemini adapter ──────────────────────────────────────────────────────────
 
-async function callGemini(contents, signal) {
+async function callGemini(contents, signal, modelId) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const MODEL = "gemini-3.1-pro-preview";
+  const MODEL = modelId === "gemini-3.0-flash" ? "gemini-3.0-flash" : "gemini-3.1-pro-preview";
   const BASE = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}`;
   const geminiTools = [{ functionDeclarations: toolDeclarations }];
 
@@ -298,7 +314,7 @@ function seedProviderHistory(providerName) {
 let currentAbortController = null;
 let interruptRequested = false;
 
-async function runGeminiLoop(userText, signal) {
+async function runGeminiLoop(userText, signal, modelId) {
   // Remember history length so we can roll back on error.
   // This prevents dangling user messages that break alternation requirements.
   const historyLenBefore = geminiHistory.length;
@@ -312,7 +328,7 @@ async function runGeminiLoop(userText, signal) {
         throw new Error("Interrupted");
       }
 
-      const { texts, toolCalls, modelParts } = await callGemini(contents, signal);
+      const { texts, toolCalls, modelParts } = await callGemini(contents, signal, modelId);
       contents.push({ role: "model", parts: modelParts });
 
       for (const text of texts) {
@@ -760,7 +776,7 @@ if (initialProviderList.length === 0) {
 }
 
 // Emit ready signal (initial providers — may expand after refreshLLMTokens)
-emit({ type: "ready", providers: initialProviderList, tools: toolNames });
+emit({ type: "ready", providers: initialProviderList, models: MODEL_CHAIN, tools: toolNames });
 
 // Read messages from stdin (NDJSON, one per line)
 const rl = createInterface({ input: process.stdin, terminal: false });
@@ -832,6 +848,7 @@ rl.on("line", async (line) => {
   if (msg.type !== "message" || !msg.text) return;
 
   const userText = msg.text;
+  const selectedModelId = isSupportedModelId(msg.model) ? msg.model : DEFAULT_MODEL_ID;
   
   // Track generation for this message (if provided by host)
   const messageGeneration = msg.generation ?? (currentGeneration + 1);
@@ -856,13 +873,53 @@ rl.on("line", async (line) => {
     return;
   }
 
-  // Provider cascade: try each currently available provider in priority order.
+  // Provider cascade: start from selected model, then continue in chain order.
   // Re-evaluated per turn to detect providers added since session start.
-  // If a provider fails, fall through to the next one instead of killing the turn.
+  const availability = {
+    "claude-opus-4-6": hasClaude(),
+    "gpt-5.3-codex": hasOpenAI(),
+    "gemini-3.1-pro": hasGemini(),
+    "gemini-3.0-flash": hasGemini(),
+  };
+
+  const selectedIndex = MODEL_CHAIN.findIndex((m) => m.id === selectedModelId);
+  const orderedModels = selectedIndex >= 0
+    ? MODEL_CHAIN.slice(selectedIndex).concat(MODEL_CHAIN.slice(0, selectedIndex))
+    : MODEL_CHAIN;
+
   const cascade = [];
-  if (hasClaude()) cascade.push({ name: "Claude", fn: runClaudeLoop });
-  if (hasOpenAI()) cascade.push({ name: "OpenAI", fn: runOpenAILoop });
-  if (hasGemini()) cascade.push({ name: "Gemini", fn: runGeminiLoop });
+  for (const model of orderedModels) {
+    if (!availability[model.id]) continue;
+    if (model.id === "claude-opus-4-6") {
+      cascade.push({
+        modelId: model.id,
+        name: model.label,
+        seedName: "Claude",
+        fn: (text, sig) => runClaudeLoop(text, sig),
+      });
+    } else if (model.id === "gpt-5.3-codex") {
+      cascade.push({
+        modelId: model.id,
+        name: model.label,
+        seedName: "OpenAI",
+        fn: (text, sig) => runOpenAILoop(text, sig),
+      });
+    } else if (model.id === "gemini-3.1-pro") {
+      cascade.push({
+        modelId: model.id,
+        name: model.label,
+        seedName: "Gemini",
+        fn: (text, sig) => runGeminiLoop(text, sig, "gemini-3.1-pro"),
+      });
+    } else if (model.id === "gemini-3.0-flash") {
+      cascade.push({
+        modelId: model.id,
+        name: model.label,
+        seedName: "Gemini",
+        fn: (text, sig) => runGeminiLoop(text, sig, "gemini-3.0-flash"),
+      });
+    }
+  }
 
   if (cascade.length === 0) {
     emitError("Nenhum provedor de LLM disponível. Conecte Claude, OpenAI ou Gemini no painel de configurações.");
@@ -874,7 +931,7 @@ rl.on("line", async (line) => {
   let lastErr;
   for (const provider of cascade) {
     // Seed provider history with transcript from other providers (prevents amnesia on cascade switch)
-    seedProviderHistory(provider.name);
+    seedProviderHistory(provider.seedName);
 
     let attempts = 0;
     let authRetried = false; // auth refresh retry is separate from timeout retries
@@ -882,6 +939,7 @@ rl.on("line", async (line) => {
     while (attempts < maxAttempts) {
       attempts++;
       try {
+        emitStatus(`Modelo atual: ${provider.name}`);
         result = await provider.fn(userText, signal);
         lastErr = null;
         break;

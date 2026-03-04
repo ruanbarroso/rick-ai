@@ -17,6 +17,7 @@ import { OpenAIOAuthService } from "../auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "../auth/oauth-singleton.js";
 import { GeminiProvider } from "../llm/providers/gemini.js";
 import { resolveSessionsToken, getMainSessionName, getUserSessionsToken } from "../subagent/session-manager.js";
+import { DEFAULT_SUBAGENT_MODEL, SUBAGENT_MODELS, type SubAgentModelId } from "../subagent/types.js";
 
 /**
  * Web UI connector using WebSocket on the shared HTTP server.
@@ -44,6 +45,7 @@ export interface WebAgentBridge {
     state: string;
     taskDescription: string;
     variantName?: string;
+    preferredModel: SubAgentModelId;
     createdAt: number;
     updatedAt: number;
   }>;
@@ -86,6 +88,8 @@ export interface WebAgentBridge {
   interruptSession(sessionId: string): boolean;
   /** Check if a sub-agent session is currently processing. */
   isSessionProcessing(sessionId: string): boolean;
+  /** Set preferred primary model for a sub-agent session. */
+  setSessionPreferredModel(sessionId: string, modelId: string): SubAgentModelId;
 }
 
 export class WebConnector implements Connector {
@@ -448,7 +452,15 @@ export class WebConnector implements Connector {
           if (session) {
             // Session is live — send history + info
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
-            ws.send(JSON.stringify({ type: "session_info", session: { ...session, agentName } }));
+            ws.send(JSON.stringify({
+              type: "session_info",
+              session: {
+                ...session,
+                preferredModel: session.preferredModel || DEFAULT_SUBAGENT_MODEL,
+                availableModels: SUBAGENT_MODELS,
+                agentName,
+              },
+            }));
           } else if (history.length > 0) {
             // Session is no longer in memory — check DB for the real status
             const dbInfo = await this.agentBridge!.getSessionInfoFromDB(sessionId);
@@ -456,7 +468,17 @@ export class WebConnector implements Connector {
             const state = dbInfo?.status === "killed" ? "killed" : "done";
             const variantName = dbInfo?.variantName || undefined;
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
-            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state, agentName, variantName } }));
+            ws.send(JSON.stringify({
+              type: "session_info",
+              session: {
+                id: sessionId,
+                state,
+                agentName,
+                variantName,
+                preferredModel: DEFAULT_SUBAGENT_MODEL,
+                availableModels: SUBAGENT_MODELS,
+              },
+            }));
           } else {
             // Session doesn't exist and has no history — not found
             ws.send(JSON.stringify({ type: "session_not_found", sessionId }));
@@ -465,7 +487,16 @@ export class WebConnector implements Connector {
           logger.warn({ err, sessionId }, "Failed to load session history for viewer");
           // Send a fallback so the viewer doesn't stay stuck on "Trabalhando..."
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state: "done", agentName: config.agentName } }));
+            ws.send(JSON.stringify({
+              type: "session_info",
+              session: {
+                id: sessionId,
+                state: "done",
+                agentName: config.agentName,
+                preferredModel: DEFAULT_SUBAGENT_MODEL,
+                availableModels: SUBAGENT_MODELS,
+              },
+            }));
           }
         });
       }
@@ -481,6 +512,23 @@ export class WebConnector implements Connector {
             const interrupted = this.agentBridge.interruptSession(sessionId);
             ws.send(JSON.stringify({ type: "interrupt_result", sessionId, interrupted }));
             logger.info({ sessionId, interrupted }, "Session viewer interrupt request");
+            return;
+          }
+
+          if (msg.type === "set_model" && this.agentBridge && typeof msg.modelId === "string") {
+            try {
+              const modelId = this.agentBridge.setSessionPreferredModel(sessionId, msg.modelId);
+              const payload = JSON.stringify({ type: "model_updated", sessionId, modelId, availableModels: SUBAGENT_MODELS });
+              const subs = this.sessionSubscribers.get(sessionId);
+              if (subs) {
+                for (const sub of subs) {
+                  if (sub.readyState === WebSocket.OPEN) sub.send(payload);
+                }
+              }
+            } catch (err) {
+              const message = (err as Error).message || "Falha ao atualizar modelo";
+              ws.send(JSON.stringify({ type: "error", text: message }));
+            }
             return;
           }
 

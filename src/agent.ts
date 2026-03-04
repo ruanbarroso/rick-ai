@@ -1417,6 +1417,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
             state: s.state,
             taskDescription: s.taskDescription,
             variantName: s.variantName,
+            preferredModel: s.preferredModel,
             createdAt: s.createdAt,
             updatedAt: s.updatedAt,
           }))
@@ -1535,6 +1536,10 @@ Retorne APENAS as linhas de extracao, nada mais.`;
 
       isSessionProcessing: (sessionId: string): boolean => {
         return this.sessionManager.isSessionProcessing(sessionId);
+      },
+
+      setSessionPreferredModel: (sessionId: string, modelId: string) => {
+        return this.sessionManager.setSessionPreferredModel(sessionId, modelId);
       },
     };
 

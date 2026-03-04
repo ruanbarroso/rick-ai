@@ -27,7 +27,7 @@ Built on Oracle Cloud Always Free VMs, Rick orchestrates multiple LLM providers 
      │        (Claude/GPT)         (RBAC)
      ▼                                  │
   Unified Sub-Agent Container           │
-  (Claude→GPT→Gemini 3.1 Pro)           │
+  (Claude→GPT→Gemini 3.1 Pro→Flash)      │
   (Browser + Shell + Files + DB)        │
 ```
 
@@ -84,6 +84,7 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 | Claude Opus 4.6 | Anthropic | Sub-agent primary (via OAuth) |
 | GPT-5.3 Codex | OpenAI | Sub-agent fallback (via OAuth) |
 | Gemini 3.1 Pro | Google | Sub-agent fallback |
+| Gemini 3.0 Flash | Google | Sub-agent fallback |
 
 No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect via your existing Pro/Max subscriptions. API key fallback models (`claude-opus-4-6`, `gpt-5.3-codex`) are used when OAuth is not configured.
 
@@ -117,7 +118,7 @@ Tables are automatically pruned to prevent unbounded growth:
 
 All delegated tasks (coding, research, browser automation) are handled by a **single unified sub-agent** container with:
 
-- **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro (automatic failover on rate limits or errors, with automatic retry on timeout before falling through). Providers are re-evaluated per turn, so a session started with only Gemini will automatically gain Claude/GPT access when they are connected later via OAuth. Conversation context is shared across providers via a common transcript, so a cascade switch does not cause amnesia.
+- **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro → Gemini 3.0 Flash (automatic failover on rate limits or errors, with automatic retry on timeout before falling through). The session viewer also lets you pick a primary model per session; the selected model is tried first, then the cascade continues from that point. Providers are re-evaluated per turn, so a session started with only Gemini will automatically gain Claude/GPT access when they are connected later via OAuth. Conversation context is shared across providers via a common transcript, so a cascade switch does not cause amnesia.
 - **Tools**: Browser (Playwright + headless Chromium), shell commands, file I/O, HTTP fetch, read-only PostgreSQL access
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
 - **Context rotation**: Automatic summarization when context window fills up

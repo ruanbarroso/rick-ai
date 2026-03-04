@@ -215,6 +215,99 @@ body {
 }
 .compose-attach:hover { background: var(--border); color: var(--text); }
 
+.model-picker-btn {
+  height: 42px;
+  max-width: 180px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.model-picker-btn:hover {
+  background: var(--border);
+  border-color: #3b82f6;
+}
+
+.model-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 120;
+  padding: 16px;
+}
+
+.model-modal-overlay.visible { display: flex; }
+
+.model-modal {
+  width: min(460px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.model-modal-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.model-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-option {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.model-option:hover { border-color: #60a5fa; }
+
+.model-option.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(29, 161, 242, 0.5);
+}
+
+.model-modal-close {
+  margin-top: 12px;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text2);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.model-modal-close:hover { background: var(--surface2); color: var(--text); }
+
 .input-area {
   display: flex;
   align-items: flex-end;
@@ -578,7 +671,16 @@ body {
 
 <div class="attachments-preview" id="attachments-preview"></div>
 
+<div class="model-modal-overlay" id="model-modal-overlay" onclick="if (event.target === this) closeModelModal()">
+  <div class="model-modal" role="dialog" aria-modal="true" aria-label="Selecionar modelo">
+    <div class="model-modal-title">Selecionar modelo</div>
+    <div class="model-options" id="model-options"></div>
+    <button class="model-modal-close" onclick="closeModelModal()">Fechar</button>
+  </div>
+</div>
+
 <div class="compose-bar">
+  <button class="model-picker-btn" id="model-picker-btn" onclick="openModelModal()" title="Selecionar modelo">Modelo</button>
   <button class="compose-attach" onclick="document.getElementById('file-input').click()" title="Anexar arquivos">
     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
   </button>
@@ -636,9 +738,60 @@ var reconnectTimer = null;
 var sessionState = 'unknown'; // unknown, running, done, killed
 var pendingUserEcho = false; // true after local sendMessage — skip server echo
 var sessionName = 'Sub-agente #' + sessionId.substring(0, 6);
+var selectedModelId = 'claude-opus-4-6';
+var availableModels = [
+  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+  { id: 'gpt-5.3-codex', label: 'GPT 5.3 Codex' },
+  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
+  { id: 'gemini-3.0-flash', label: 'Gemini 3.0 Flash' }
+];
 
 document.title = sessionName;
 document.getElementById('header-name').textContent = sessionName;
+
+function getModelLabel(modelId) {
+  for (var i = 0; i < availableModels.length; i++) {
+    if (availableModels[i].id === modelId) return availableModels[i].label;
+  }
+  return 'Claude Opus 4.6';
+}
+
+function updateModelButton() {
+  var btn = document.getElementById('model-picker-btn');
+  if (!btn) return;
+  btn.textContent = getModelLabel(selectedModelId);
+  btn.title = 'Modelo atual: ' + getModelLabel(selectedModelId);
+}
+
+function renderModelOptions() {
+  var container = document.getElementById('model-options');
+  if (!container) return;
+  var html = '';
+  for (var i = 0; i < availableModels.length; i++) {
+    var m = availableModels[i];
+    var active = m.id === selectedModelId ? ' active' : '';
+    html += '<button class="model-option' + active + '" onclick="selectModel(\'' + m.id + '\')">' + escapeHtml(m.label) + '</button>';
+  }
+  container.innerHTML = html;
+}
+
+function openModelModal() {
+  renderModelOptions();
+  var overlay = document.getElementById('model-modal-overlay');
+  if (overlay) overlay.classList.add('visible');
+}
+
+function closeModelModal() {
+  var overlay = document.getElementById('model-modal-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}
+
+function selectModel(modelId) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'set_model', modelId: modelId }));
+}
+
+updateModelButton();
 
 // ==================== SCROLL TO BOTTOM ====================
 function isAtBottom() {
@@ -941,8 +1094,27 @@ function connect() {
           }
           document.getElementById('header-name').textContent = sessionName;
           document.title = sessionName;
+          if (Array.isArray(msg.session.availableModels) && msg.session.availableModels.length > 0) {
+            availableModels = msg.session.availableModels;
+          }
+          if (msg.session.preferredModel) {
+            selectedModelId = msg.session.preferredModel;
+          }
+          updateModelButton();
           updateHeaderIcon();
           updateSessionState(msg.session.state);
+        }
+        break;
+
+      case 'model_updated':
+        if (Array.isArray(msg.availableModels) && msg.availableModels.length > 0) {
+          availableModels = msg.availableModels;
+        }
+        if (msg.modelId) {
+          selectedModelId = msg.modelId;
+          updateModelButton();
+          renderModelOptions();
+          closeModelModal();
         }
         break;
     }
