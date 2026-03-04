@@ -1118,7 +1118,15 @@ function appendToolLine(text, timeStr) {
 function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) {
   // System state messages (e.g. {"state":"done"}) — don't render as bubbles
   if (role === 'system' || messageType === 'system') {
-    try { var sys = JSON.parse(text); if (sys.state) updateSessionState(sys.state); } catch(e) {}
+    try {
+      var sys = JSON.parse(text);
+      if (sys.state) updateSessionState(sys.state);
+      if (sys.activeModel) {
+        selectedModelId = sys.activeModel;
+        updateModelButton();
+        renderModelOptions();
+      }
+    } catch(e) {}
     return;
   }
 
@@ -1169,7 +1177,15 @@ function appendHistoryMessage(msg) {
 
   // System state messages — don't render, just update state
   if (role === 'system' || messageType === 'system') {
-    try { var sys = JSON.parse(text); if (sys.state) updateSessionState(sys.state); } catch(e) {}
+    try {
+      var sys = JSON.parse(text);
+      if (sys.state) updateSessionState(sys.state);
+      if (sys.activeModel) {
+        selectedModelId = sys.activeModel;
+        updateModelButton();
+        renderModelOptions();
+      }
+    } catch(e) {}
     return;
   }
 

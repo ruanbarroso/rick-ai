@@ -77,6 +77,16 @@ function emitError(message) {
   emit({ type: "error", message: redactSecrets(message) });
 }
 
+function emitModelActive(modelId, modelName) {
+  if (isCurrentSuperseded()) return;
+  emit({ type: "model_active", modelId, modelName: redactSecrets(modelName) });
+}
+
+function emitProviderError(message) {
+  if (isCurrentSuperseded()) return;
+  emit({ type: "provider_error", message: redactSecrets(message) });
+}
+
 // ── Provider detection (dynamic — re-evaluated per turn) ────────────────────
 
 // Cached tokens fetched from the host API at runtime.
@@ -929,7 +939,8 @@ rl.on("line", async (line) => {
 
   let result;
   let lastErr;
-  for (const provider of cascade) {
+  for (let providerIndex = 0; providerIndex < cascade.length; providerIndex++) {
+    const provider = cascade[providerIndex];
     // Seed provider history with transcript from other providers (prevents amnesia on cascade switch)
     seedProviderHistory(provider.seedName);
 
@@ -940,6 +951,7 @@ rl.on("line", async (line) => {
       attempts++;
       try {
         emitStatus(`Modelo atual: ${provider.name}`);
+        emitModelActive(provider.modelId, provider.name);
         result = await provider.fn(userText, signal);
         lastErr = null;
         break;
@@ -996,6 +1008,10 @@ rl.on("line", async (line) => {
         }
 
         process.stderr.write(`Provedor ${provider.name} falhou: ${err.message}\n`);
+        const nextProvider = cascade[providerIndex + 1];
+        if (nextProvider) {
+          emitProviderError(`${provider.name} falhou: ${err.message}. Tentando ${nextProvider.name}.`);
+        }
         break; // Move to next provider
       }
     }

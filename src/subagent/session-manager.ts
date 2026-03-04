@@ -1013,6 +1013,27 @@ export class SessionManager {
           }
           break;
 
+        case "model_active":
+          if (isSubAgentModelId(msg.modelId)) {
+            session.preferredModel = msg.modelId;
+            session.updatedAt = Date.now();
+            if (this.onSessionMessage) {
+              this.onSessionMessage(
+                session.id,
+                "system",
+                JSON.stringify({ activeModel: msg.modelId, activeModelName: msg.modelName || null }),
+                "system",
+              );
+            }
+          }
+          break;
+
+        case "provider_error":
+          if (msg.message) {
+            this.sendToUser(session, msg.message, "error");
+          }
+          break;
+
         case "waiting_user":
           // Agent finished processing this turn — waiting for user's next message.
           // Session stays alive; compose bar shown to user.
