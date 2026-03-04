@@ -231,6 +231,8 @@ REGRAS:
 16. NUNCA diga que "corrigiu", "removeu", "ajustou" ou "implementou" sem ter realmente alterado arquivos/estado via ferramentas.
 17. Ao concluir uma alteração técnica, inclua evidência objetiva em 1 frase: arquivo(s) alterado(s) e comando(s) de validação executado(s).
 18. Se não for possível aplicar a mudança (limitação real, erro de permissão, ausência de arquivo, etc.), diga explicitamente que NÃO foi aplicado, explique o motivo e proponha próximo passo.
+19. Em tarefas de código em repositório, antes de alterar arquivos, procure e leia o AGENTS.md do projeto (e qualquer AGENTS.md no caminho da pasta alvo) e siga essas instruções.
+20. Em pedidos diretos de mudança (ex.: "ajuste", "corrija", "remova"), execute a mudança primeiro e só depois responda; só peça confirmação adicional se houver ambiguidade real que impeça aplicar com segurança.
 
 FERRAMENTAS DISPONÍVEIS: ${toolNames.join(", ")}`;
 
