@@ -380,6 +380,104 @@ async function runGeminiLoop(userText, signal, modelId) {
 // (user's ChatGPT Pro/Plus subscription). Same endpoint opencode uses.
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 
+function parseCodexOutput(data) {
+  let text = "";
+  const toolCalls = [];
+  if (data?.output && Array.isArray(data.output)) {
+    for (const item of data.output) {
+      if (item.type === "message" && item.content) {
+        for (const part of item.content) {
+          if (part.type === "output_text") {
+            text += part.text || "";
+          }
+        }
+      }
+      if (item.type === "function_call") {
+        toolCalls.push({
+          name: item.name,
+          input: (() => { try { return JSON.parse(item.arguments); } catch { return {}; } })(),
+          callId: item.call_id,
+        });
+      }
+    }
+  }
+  return { text, toolCalls };
+}
+
+async function parseCodexStreamResponse(res, signal) {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("OpenAI Codex stream sem body de resposta");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let streamedText = "";
+  const toolCallsById = new Map();
+  let completedResponse = null;
+
+  while (true) {
+    if (signal?.aborted || interruptRequested) {
+      throw new Error("Interrupted");
+    }
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+      const rawEvent = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+
+      const lines = rawEvent.split("\n");
+      let dataText = "";
+      for (const line of lines) {
+        if (line.startsWith("data:")) {
+          dataText += line.slice(5).trimStart();
+        }
+      }
+      if (!dataText || dataText === "[DONE]") continue;
+
+      let event;
+      try {
+        event = JSON.parse(dataText);
+      } catch {
+        continue;
+      }
+
+      if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
+        streamedText += event.delta;
+      }
+
+      if (event.type === "response.output_item.done" && event.item?.type === "function_call") {
+        const item = event.item;
+        toolCallsById.set(item.call_id, {
+          name: item.name,
+          input: (() => { try { return JSON.parse(item.arguments); } catch { return {}; } })(),
+          callId: item.call_id,
+        });
+      }
+
+      if (event.type === "response.completed" && event.response) {
+        completedResponse = event.response;
+      }
+
+      if (event.type === "response.failed") {
+        const message = event.response?.error?.message || event.error?.message || "OpenAI Codex stream failed";
+        throw new Error(message);
+      }
+    }
+  }
+
+  const parsedCompleted = parseCodexOutput(completedResponse || {});
+  const text = streamedText || parsedCompleted.text;
+  const toolCalls = toolCallsById.size > 0
+    ? Array.from(toolCallsById.values())
+    : parsedCompleted.toolCalls;
+
+  return { text, toolCalls };
+}
+
 async function runOpenAILoop(userText, signal) {
   const apiKey = process.env.OPENAI_API_KEY ?? "";
   // Prefer dynamically cached token (freshly refreshed from host API) over
@@ -540,7 +638,7 @@ async function runOpenAICodexLoop(userText, oauthToken, signal) {
         input,
         tools: responsesTools,
         store: false,
-        stream: false,
+        stream: true,
       };
 
       const res = await fetch(CODEX_API_ENDPOINT, {
@@ -555,30 +653,7 @@ async function runOpenAICodexLoop(userText, oauthToken, signal) {
         throw new Error(`OpenAI Codex API error ${res.status}: ${errText}`);
       }
 
-      const data = await res.json();
-
-      // Parse Responses API output
-      let text = "";
-      const toolCalls = [];
-
-      if (data.output && Array.isArray(data.output)) {
-        for (const item of data.output) {
-          if (item.type === "message" && item.content) {
-            for (const part of item.content) {
-              if (part.type === "output_text") {
-                text += part.text;
-              }
-            }
-          }
-          if (item.type === "function_call") {
-            toolCalls.push({
-              name: item.name,
-              input: (() => { try { return JSON.parse(item.arguments); } catch { return {}; } })(),
-              callId: item.call_id,
-            });
-          }
-        }
-      }
+      const { text, toolCalls } = await parseCodexStreamResponse(res, signal);
 
       if (text) emitMessage(text);
 
