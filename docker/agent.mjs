@@ -1765,6 +1765,7 @@ rl.on("line", async (line) => {
 
   let result;
   let lastErr;
+  let maxStepsTriggered = false;
   for (let providerIndex = 0; providerIndex < cascade.length; providerIndex++) {
     const provider = cascade[providerIndex];
     // Seed provider history with transcript from other providers (prevents amnesia on cascade switch)
@@ -1782,8 +1783,9 @@ rl.on("line", async (line) => {
         break;
       } catch (err) {
         if (isMaxStepsError(err)) {
+          maxStepsTriggered = true;
           emitProviderError(MAX_STEPS_MESSAGE);
-          result = MAX_STEPS_MESSAGE;
+          result = "";
           lastErr = null;
           break;
         }
@@ -1913,7 +1915,7 @@ rl.on("line", async (line) => {
     }
     // Signal that we're done processing this turn but ready for more input.
     // The session stays alive — the host will show the compose bar again.
-    emitWaitingUser(result);
+    emitWaitingUser(maxStepsTriggered ? undefined : result);
     currentTurnStats = null;
     currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
   }
