@@ -19,9 +19,17 @@ const LEVEL_MAP: Record<number, LogEntry["level"]> = {
 
 const LOG_BUFFER_MAX = 500;
 const logBuffer: LogEntry[] = [];
+const logListeners = new Set<(entry: LogEntry) => void>();
 
 export function getLogBuffer(): readonly LogEntry[] {
   return logBuffer;
+}
+
+export function subscribeLogBuffer(listener: (entry: LogEntry) => void): () => void {
+  logListeners.add(listener);
+  return () => {
+    logListeners.delete(listener);
+  };
 }
 
 class LogBufferStream extends Writable {
@@ -44,6 +52,13 @@ class LogBufferStream extends Writable {
         logBuffer.push(entry);
         if (logBuffer.length > LOG_BUFFER_MAX) {
           logBuffer.shift();
+        }
+        for (const listener of logListeners) {
+          try {
+            listener(entry);
+          } catch {
+            // ignore listener failures to keep logging path safe
+          }
         }
       } catch {
         // linha não-JSON (ex: stack trace parcial) — ignora no buffer

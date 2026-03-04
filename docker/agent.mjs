@@ -30,6 +30,29 @@ import {
 } from "./rick-api.mjs";
 import { redactSecrets } from "./tools.mjs";
 
+const SENSITIVE_TOOL_PREVIEW = new Set(["rick_memory", "rick_search"]);
+
+function redactUserVisibleText(value) {
+  let text = String(value ?? "");
+  text = redactSecrets(text);
+
+  // Key/value secrets in prose or logs: "senha: ...", "token=...", etc.
+  text = text.replace(
+    /((?:senha|password|pass|token|api[_ -]?key|secret|chave(?:\s+de\s+acesso)?)\s*[:=]\s*)([^\s,;`"'\\]+)/gi,
+    "$1[REDACTED]",
+  );
+
+  // Common token formats that may come from memories or command output.
+  text = text.replace(/\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, "[REDACTED]");
+
+  // URLs with embedded credentials: https://user:pass@host
+  text = text.replace(/(https?:\/\/[^\s:/@]+:)([^@\s/]+)(@)/gi, "$1[REDACTED]$3");
+
+  // JSON payloads with explicit password/token fields.
+  text = text.replace(/("(?:password|senha|token|apiKey|secret)"\s*:\s*")([^"]+)(")/gi, "$1[REDACTED]$3");
+  return text;
+}
+
 // ── NDJSON helpers ──────────────────────────────────────────────────────────
 
 // Generation tracking — ensures only the latest request sends responses.
@@ -52,13 +75,13 @@ function isCurrentSuperseded() {
 function emitMessage(text) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
-  emit({ type: "message", text: redactSecrets(text) });
+  emit({ type: "message", text: redactUserVisibleText(text) });
 }
 
 function emitStatus(message) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
-  emit({ type: "status", message: redactSecrets(message) });
+  emit({ type: "status", message: redactUserVisibleText(message) });
 }
 
 function emitDone(result) {
@@ -76,27 +99,27 @@ function emitWaitingUser(result) {
 function emitError(message) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
-  emit({ type: "error", message: redactSecrets(message) });
+  emit({ type: "error", message: redactUserVisibleText(message) });
 }
 
 function emitModelActive(modelId, modelName) {
   if (isCurrentSuperseded()) return;
-  emit({ type: "model_active", modelId, modelName: redactSecrets(modelName) });
+  emit({ type: "model_active", modelId, modelName: redactUserVisibleText(modelName) });
 }
 
 function emitProviderError(message) {
   if (isCurrentSuperseded()) return;
-  emit({ type: "provider_error", message: redactSecrets(message) });
+  emit({ type: "provider_error", message: redactUserVisibleText(message) });
 }
 
 function emitFallbackUsed(providerName, depth) {
   if (isCurrentSuperseded()) return;
-  emit({ type: "fallback_used", providerName: redactSecrets(providerName), depth });
+  emit({ type: "fallback_used", providerName: redactUserVisibleText(providerName), depth });
 }
 
 function emitProviderRetry(providerName, reason) {
   if (isCurrentSuperseded()) return;
-  emit({ type: "provider_retry", providerName: redactSecrets(providerName), reason });
+  emit({ type: "provider_retry", providerName: redactUserVisibleText(providerName), reason });
 }
 
 function emitContextCompacted(removedMessages, summaryChars) {
@@ -129,13 +152,16 @@ function emitToolCallStart(callId, name, input) {
 
 function emitToolCallCompleted(callId, name, durationMs, outputPreview) {
   if (isCurrentSuperseded()) return;
+  const safePreview = SENSITIVE_TOOL_PREVIEW.has(name)
+    ? "resultado ocultado por seguranca"
+    : redactUserVisibleText(outputPreview);
   emit({
     type: "tool_call",
     event: "completed",
     callId,
     name,
     durationMs,
-    outputPreview: redactSecrets(outputPreview),
+    outputPreview: safePreview,
   });
 }
 
@@ -147,7 +173,7 @@ function emitToolCallError(callId, name, durationMs, message) {
     callId,
     name,
     durationMs,
-    message: redactSecrets(message),
+    message: redactUserVisibleText(message),
   });
 }
 

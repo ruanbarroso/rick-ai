@@ -1303,7 +1303,7 @@
   #scroll-bottom-btn {
     display: none;
     position: absolute;
-    bottom: 80px;
+    bottom: calc(var(--scroll-bottom-offset, 80px) + env(safe-area-inset-bottom, 0px));
     left: 50%;
     transform: translateX(-50%);
     width: 36px;
@@ -2218,6 +2218,7 @@
     .attachment-chip {
       max-width: 100%;
     }
+
   }
 </style>
 <link rel="stylesheet" href="/static/tool-blocks.css">
@@ -2706,18 +2707,16 @@
         <p class="settings-hint">Ultimas 500 entradas de log do servidor (apenas em memoria). Mais recente no topo.</p>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
           <select id="log-level-filter" onchange="applyLogFilter()" style="padding:7px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.85rem;outline:none;cursor:pointer;">
-            <option value="all">Todos os niveis</option>
-            <option value="info">Info+</option>
+            <option value="info" selected>Info+</option>
             <option value="warn">Warn+</option>
             <option value="error">Error+</option>
           </select>
           <div style="flex:1;"></div>
-          <button class="settings-action-btn" onclick="refreshLogs()">Atualizar</button>
           <button class="settings-action-btn" onclick="copyLogs()">Copiar</button>
           <button class="settings-action-btn" onclick="downloadLogs()">Baixar</button>
         </div>
         <div class="log-viewer" id="log-viewer">
-          <div class="logs-empty">Clique em "Atualizar" para carregar os logs.</div>
+          <div class="logs-empty">Aguardando logs...</div>
         </div>
         <div id="log-count" style="margin-top:6px;font-size:0.75rem;color:var(--text-muted);text-align:right;"></div>
       </div>
@@ -2933,6 +2932,7 @@ document.getElementById('password-input').addEventListener('keydown', function(e
 });
 
 initProviderModes();
+updateScrollBottomOffset();
 
 // Auto-login from stored password
 (function() {
@@ -2957,6 +2957,25 @@ initProviderModes();
     });
   }
 })();
+
+function updateScrollBottomOffset() {
+  var main = document.querySelector('.main-area');
+  var composeBar = document.querySelector('.compose-bar');
+  if (!main || !composeBar) return;
+
+  var composeHeight = composeBar.getBoundingClientRect().height || 0;
+  var extraGap = 10;
+  var offset = Math.max(80, Math.round(composeHeight + extraGap));
+  main.style.setProperty('--scroll-bottom-offset', offset + 'px');
+}
+
+window.addEventListener('resize', function() {
+  updateScrollBottomOffset();
+});
+
+window.addEventListener('orientationchange', function() {
+  setTimeout(updateScrollBottomOffset, 120);
+});
 
 // ==================== WEBSOCKET ====================
 function connectWebSocket() {
@@ -3276,6 +3295,10 @@ function handleServerMessage(msg) {
 
     case 'logs':
       renderLogs(msg.entries || []);
+      break;
+
+    case 'log_entry':
+      appendLiveLog(msg.entry || null);
       break;
 
     // ==================== RBAC: User Management ====================
@@ -4149,6 +4172,7 @@ function autoResize(el) {
   el.style.height = Math.min(el.scrollHeight, 120) + 'px';
   // Update button state when user types
   updateSendButton();
+  updateScrollBottomOffset();
 }
 
 // ==================== AUDIO RECORDING ====================
@@ -4259,6 +4283,7 @@ function showInputArea() {
   document.getElementById('input-area').style.display = 'flex';
   document.getElementById('recording-bar').classList.remove('visible');
   document.getElementById('audio-preview-bar').classList.remove('visible');
+  updateScrollBottomOffset();
 }
 
 function startRecording() {
@@ -4330,6 +4355,7 @@ function startRecording() {
     // Show recording bar, hide input area
     document.getElementById('input-area').style.display = 'none';
     document.getElementById('recording-bar').classList.add('visible');
+    updateScrollBottomOffset();
   }).catch(function(err) {
     console.error('Mic error:', err);
     showToast('Mic: ' + (err.message || err.name || 'erro desconhecido'));
@@ -4455,6 +4481,7 @@ function renderAttachmentsPreviews() {
   if (pendingFiles.length === 0) {
     container.classList.remove('visible');
     container.innerHTML = '';
+    updateScrollBottomOffset();
     return;
   }
   container.classList.add('visible');
@@ -4473,6 +4500,7 @@ function renderAttachmentsPreviews() {
     html += '</div>';
   }
   container.innerHTML = html;
+  updateScrollBottomOffset();
 }
 
 function removeFile(index) {
@@ -4506,27 +4534,36 @@ function closeSidebar() {
 var cachedLogs = [];
 var LOG_LEVEL_ORDER = { trace: 0, debug: 1, info: 2, warn: 3, error: 4, fatal: 5 };
 
-function refreshLogs() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'get_logs' }));
-  }
-}
-
 function renderLogs(entries) {
   cachedLogs = entries || [];
+  if (cachedLogs.length > 500) {
+    cachedLogs = cachedLogs.slice(cachedLogs.length - 500);
+  }
   applyLogFilter();
 }
 
-function applyLogFilter() {
-  var filter = document.getElementById('log-level-filter');
-  var minLevel = filter ? filter.value : 'all';
-  var minOrder = minLevel === 'all' ? -1 : (LOG_LEVEL_ORDER[minLevel] !== undefined ? LOG_LEVEL_ORDER[minLevel] : 2);
+function appendLiveLog(entry) {
+  if (!entry || typeof entry !== 'object') return;
+  cachedLogs.push(entry);
+  if (cachedLogs.length > 500) {
+    cachedLogs = cachedLogs.slice(cachedLogs.length - 500);
+  }
+  applyLogFilter();
+}
 
-  var filtered = cachedLogs.filter(function(e) {
-    if (minLevel === 'all') return true;
+function getFilteredLogs() {
+  var filter = document.getElementById('log-level-filter');
+  var minLevel = filter ? filter.value : 'info';
+  var minOrder = LOG_LEVEL_ORDER[minLevel] !== undefined ? LOG_LEVEL_ORDER[minLevel] : 2;
+
+  return cachedLogs.filter(function(e) {
     var lvlOrder = LOG_LEVEL_ORDER[e.level] !== undefined ? LOG_LEVEL_ORDER[e.level] : 2;
     return lvlOrder >= minOrder;
   });
+}
+
+function applyLogFilter() {
+  var filtered = getFilteredLogs();
 
   var viewer = document.getElementById('log-viewer');
   if (!viewer) return;
@@ -4584,15 +4621,7 @@ function renderLogEntry(entry) {
 }
 
 function formatLogsAsText() {
-  var filter = document.getElementById('log-level-filter');
-  var minLevel = filter ? filter.value : 'all';
-  var minOrder = minLevel === 'all' ? -1 : (LOG_LEVEL_ORDER[minLevel] !== undefined ? LOG_LEVEL_ORDER[minLevel] : 2);
-
-  var filtered = cachedLogs.filter(function(e) {
-    if (minLevel === 'all') return true;
-    var lvlOrder = LOG_LEVEL_ORDER[e.level] !== undefined ? LOG_LEVEL_ORDER[e.level] : 2;
-    return lvlOrder >= minOrder;
-  });
+  var filtered = getFilteredLogs();
 
   return filtered.map(function(e) {
     var skip = { timestamp: true, level: true, msg: true };

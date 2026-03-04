@@ -11,7 +11,7 @@ import { httpServer } from "../health.js";
 import { config, reloadConfig } from "../config/env.js";
 import { configGet, configSet, SETTINGS_KEY_MAP, ENV_SKIP_KEYS } from "../memory/config-store.js";
 import { isPostgres, query } from "../memory/database.js";
-import { logger, getLogBuffer } from "../config/logger.js";
+import { logger, getLogBuffer, subscribeLogBuffer } from "../config/logger.js";
 import { ClaudeOAuthService } from "../auth/claude-oauth.js";
 import { OpenAIOAuthService } from "../auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "../auth/oauth-singleton.js";
@@ -129,6 +129,7 @@ export class WebConnector implements Connector {
   private pendingQrDataUrl: string | null = null;
   private claudeOAuth: ClaudeOAuthService = claudeOAuthService;
   private openaiOAuth: OpenAIOAuthService = openaiOAuthService;
+  private unsubscribeLogStream: (() => void) | null = null;
   constructor(manager: ConnectorManager) {
     this.manager = manager;
   }
@@ -207,6 +208,12 @@ export class WebConnector implements Connector {
     this.wss = new WebSocketServer({ noServer: true });
     this.sessionWss = new WebSocketServer({ noServer: true });
     this.mainWss = new WebSocketServer({ noServer: true });
+
+    if (!this.unsubscribeLogStream) {
+      this.unsubscribeLogStream = subscribeLogBuffer((entry) => {
+        this.broadcastToAuthenticated({ type: "log_entry", entry });
+      });
+    }
 
     httpServer.on("upgrade", (request: IncomingMessage, socket, head) => {
       if (request.url === "/ws") {
@@ -295,6 +302,7 @@ export class WebConnector implements Connector {
               // (e.g. after F5 or phone unlock). Sending composing:false is equally important
               // so clients that missed a "typing:false" event don't stay stuck on "processing".
               this.send(ws, { type: "typing", composing: this.currentlyTyping });
+              this.handleGetLogs(ws);
             } else {
               this.send(ws, { type: "auth_fail", reason: "Senha incorreta." });
               ws.close();
@@ -1024,6 +1032,11 @@ export class WebConnector implements Connector {
       this.wss.close();
       this.wss = null;
       logger.info("Web connector stopped");
+    }
+
+    if (this.unsubscribeLogStream) {
+      this.unsubscribeLogStream();
+      this.unsubscribeLogStream = null;
     }
   }
 
