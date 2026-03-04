@@ -20,6 +20,8 @@ function escapeHtml(str) {
 function renderText(text) {
   if (!text) return '';
 
+  text = text.trim();
+
   // 1. Escape HTML
   var escaped = text
     .replace(/&/g, '&amp;')
@@ -119,8 +121,8 @@ function renderText(text) {
   closeList();
 
   var finalHtml = result.join('');
-  // Remove trailing <br>s
-  finalHtml = finalHtml.replace(/(<br>\s*)+$/, '');
+  // Remove trailing and leading <br>s
+  finalHtml = finalHtml.replace(/^(<br>\s*)+/, '').replace(/(<br>\s*)+$/, '');
   return finalHtml;
 }
 

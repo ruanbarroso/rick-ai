@@ -444,6 +444,8 @@ export class Agent {
       return "";
     }
 
+    response.content = response.content.trim();
+
     await this.memory.saveMessageByUserId(userId!, "assistant", response.content, response.model, response.tokensUsed, undefined, undefined, undefined, undefined, connectorName);
     this.notifyMainViewers(userId!, "agent", response.content, "text", connectorName);
 

@@ -3667,6 +3667,8 @@ function handleTranscription(audioUrl, transcription) {
 function renderText(text) {
   if (!text) return '';
 
+  text = text.trim();
+
   // 1. Escape HTML
   var escaped = text
     .replace(/&/g, '&amp;')
@@ -3766,8 +3768,8 @@ function renderText(text) {
   closeList();
 
   var finalHtml = result.join('');
-  // Remove <br> extras no final
-  finalHtml = finalHtml.replace(/(<br>\s*)+$/, '');
+  // Remove <br> extras no inicio e no final
+  finalHtml = finalHtml.replace(/^(<br>\s*)+/, '').replace(/(<br>\s*)+$/, '');
   return finalHtml;
 }
 
