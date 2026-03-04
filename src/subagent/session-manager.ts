@@ -856,6 +856,12 @@ export class SessionManager {
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
 
+    const gitIdentity = await this.buildSubagentGitIdentity(session, agentEnv);
+    agentEnv.GIT_AUTHOR_NAME = gitIdentity.name;
+    agentEnv.GIT_COMMITTER_NAME = gitIdentity.name;
+    agentEnv.GIT_AUTHOR_EMAIL = gitIdentity.email;
+    agentEnv.GIT_COMMITTER_EMAIL = gitIdentity.email;
+
     // Resolve upfront credentials from sensitive memory categories (global)
     if (this.memoryService) {
       try {
@@ -879,6 +885,85 @@ export class SessionManager {
     }
 
     return agentEnv;
+  }
+
+  private async buildSubagentGitIdentity(session: SubAgentSession, agentEnv: Record<string, string>): Promise<{ name: string; email: string }> {
+    const fallbackName = (session.variantName || `${config.agentName} Subagent`).trim();
+
+    let host = "localhost";
+    const webBaseUrl = config.webBaseUrl?.trim();
+    if (webBaseUrl) {
+      try {
+        const parsed = new URL(webBaseUrl);
+        if (parsed.hostname) host = parsed.hostname;
+      } catch {
+        // Ignore malformed WEB_BASE_URL and fall back below
+      }
+    }
+
+    if (host === "localhost") {
+      try {
+        const parsedApi = new URL(this.getCurrentApiUrl());
+        if (parsedApi.hostname) host = parsedApi.hostname;
+      } catch {
+        // Keep localhost fallback
+      }
+    }
+
+    const fallback = {
+      name: fallbackName,
+      email: `subagent@${host}`,
+    };
+
+    const githubToken = (agentEnv.RICK_SECRET_GITHUB_TOKEN || process.env.GITHUB_TOKEN || "").trim();
+    if (!githubToken) {
+      return fallback;
+    }
+
+    try {
+      const timeout = AbortSignal.timeout(8000);
+      const profileRes = await fetch("https://api.github.com/user", {
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${githubToken}`,
+          "User-Agent": "rick-ai-subagent",
+        },
+        signal: timeout,
+      });
+
+      if (!profileRes.ok) {
+        return fallback;
+      }
+
+      const profile = await profileRes.json() as { login?: string; name?: string; email?: string | null };
+      const githubName = (profile.name || profile.login || "").trim();
+      let githubEmail = (profile.email || "").trim();
+
+      if (!githubEmail) {
+        const emailRes = await fetch("https://api.github.com/user/emails", {
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${githubToken}`,
+            "User-Agent": "rick-ai-subagent",
+          },
+          signal: timeout,
+        });
+        if (emailRes.ok) {
+          const emails = await emailRes.json() as Array<{ email?: string; primary?: boolean; verified?: boolean }>;
+          const primaryVerified = emails.find((e) => e.primary && e.verified && e.email);
+          const primary = emails.find((e) => e.primary && e.email);
+          const any = emails.find((e) => e.email);
+          githubEmail = (primaryVerified?.email || primary?.email || any?.email || "").trim();
+        }
+      }
+
+      return {
+        name: githubName || fallback.name,
+        email: githubEmail || fallback.email,
+      };
+    } catch {
+      return fallback;
+    }
   }
 
   private async startAgentProcess(session: SubAgentSession): Promise<void> {
