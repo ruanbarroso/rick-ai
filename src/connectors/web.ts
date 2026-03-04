@@ -1042,6 +1042,22 @@ export class WebConnector implements Connector {
         ? await this.openaiOAuth.isConnected(this.adminUserId)
         : { connected: false };
 
+      // Check if GitHub token has push access to the project repo
+      let githubRepoWriteAccess = false;
+      if (githubToken) {
+        try {
+          const repo = "ruanbarroso/rick-ai";
+          const res = await fetch(`https://api.github.com/repos/${repo}`, {
+            headers: { Authorization: `token ${githubToken}`, Accept: "application/vnd.github+json" },
+            signal: AbortSignal.timeout(5000),
+          });
+          if (res.ok) {
+            const data = await res.json() as { permissions?: { push?: boolean } };
+            githubRepoWriteAccess = !!data.permissions?.push;
+          }
+        } catch { /* network error — default to false */ }
+      }
+
       this.send(ws, {
         type: "settings",
         settings: {
@@ -1060,6 +1076,7 @@ export class WebConnector implements Connector {
           devRepoUrl: devRepo,
           githubToken: mask(githubToken),
           githubTokenSet: !!githubToken,
+          githubRepoWriteAccess,
           agentName: config.agentName,
           agentLogo: (await configGet("AGENT_LOGO")) || "",
           webBaseUrl: config.webBaseUrl,

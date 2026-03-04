@@ -4851,7 +4851,7 @@ function populateSettings(settings) {
   }
   var ghTokenSet = !!settings.githubTokenSet;
   githubTokenConfigured = ghTokenSet;
-  githubWriteAccess = ghTokenSet;
+  githubWriteAccess = !!settings.githubRepoWriteAccess;
   setStatusBadge('github-token-status', ghTokenSet);
   setApiKeyInputState('setting-github-token', ghTokenSet);
 
