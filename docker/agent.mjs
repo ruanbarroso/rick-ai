@@ -87,13 +87,13 @@ function emitStatus(message) {
 function emitDone(result) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
-  emit({ type: "done", result });
+  emit({ type: "done", result: redactUserVisibleText(result) });
 }
 
 function emitWaitingUser(result) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
-  emit({ type: "waiting_user", result });
+  emit({ type: "waiting_user", result: redactUserVisibleText(result) });
 }
 
 function emitError(message) {
@@ -133,6 +133,11 @@ const MAX_TOOL_CALLS_PER_TURN = 24;
 const MAX_STEPS_MESSAGE = "Limite maximo de passos desta rodada foi atingido. Parei as ferramentas para evitar loop; se quiser, me diga o proximo foco e eu continuo em uma nova rodada.";
 
 let currentTurnStats = null;
+let currentTurnPolicy = {
+  allowCommit: false,
+  allowPush: false,
+  allowPr: false,
+};
 
 function nextToolCallId() {
   toolCallSequence += 1;
@@ -190,6 +195,100 @@ function looksLikeTechnicalActionRequest(text) {
 function acknowledgesPriorExecution(text) {
   const normalized = String(text || "").toLowerCase();
   return /(ja foi|já foi|etapa anterior|anteriormente|nesta conversa|como eu disse|sem alteracoes pendentes|sem alterações pendentes|nao executei|não executei)/.test(normalized);
+}
+
+function parseTurnPolicy(text) {
+  const normalized = String(text || "").toLowerCase();
+  const allowCommit = /(\bcommit\b|\bcommitar\b)/.test(normalized);
+  const allowPush = /(\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b)/.test(normalized);
+  const allowPr = /(\bpull request\b|\babrir pr\b|\bcriar pr\b|\bgh pr\b)/.test(normalized);
+  return { allowCommit, allowPush, allowPr };
+}
+
+function summarizeCommandInput(input) {
+  if (!input || typeof input !== "object") return "";
+  const cmd = typeof input.command === "string" ? input.command : "";
+  const args = Array.isArray(input.args) ? input.args.map((a) => String(a)) : [];
+  return `${cmd} ${args.join(" ")}`.trim().toLowerCase();
+}
+
+function detectBlockedGitAction(toolName, input) {
+  if (toolName !== "run_command") return null;
+  const commandText = summarizeCommandInput(input);
+  if (!commandText) return null;
+
+  if (/\bgh\s+pr\s+create\b/.test(commandText) && !currentTurnPolicy.allowPr) {
+    return "Bloqueado por politica: so posso criar PR quando voce pedir explicitamente neste turno.";
+  }
+  if (/\bgit\s+push\b/.test(commandText) && !currentTurnPolicy.allowPush) {
+    return "Bloqueado por politica: so posso fazer git push quando voce pedir explicitamente neste turno.";
+  }
+  if (/\bgit\s+commit\b/.test(commandText) && !currentTurnPolicy.allowCommit) {
+    return "Bloqueado por politica: so posso fazer git commit quando voce pedir explicitamente neste turno.";
+  }
+
+  return null;
+}
+
+function trimForReceipt(text, max = 90) {
+  const normalized = redactUserVisibleText(String(text || "")).replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
+}
+
+function collectTurnEvidence(toolName, input) {
+  if (!currentTurnStats) return;
+  currentTurnStats.phase = "executing";
+  currentTurnStats.toolNames.add(toolName);
+
+  const maybePath = input && typeof input === "object"
+    ? (input.path || input.filePath || input.file_path || input.notebook_path)
+    : null;
+  if (typeof maybePath === "string" && maybePath.trim()) {
+    currentTurnStats.changedPaths.add(maybePath.trim());
+  }
+
+  if (toolName === "run_command") {
+    const cmd = trimForReceipt(summarizeCommandInput(input), 120);
+    if (!cmd) return;
+
+    if (currentTurnStats.commands.length < 6) {
+      currentTurnStats.commands.push(cmd);
+    }
+    if (/(npx\s+tsc|npm\s+test|pnpm\s+test|yarn\s+test|bun\s+test|pytest|go\s+test|cargo\s+test|mvn\s+test|gradle\s+test|npm\s+run\s+build|pnpm\s+build|yarn\s+build|eslint|vitest|jest)/.test(cmd)) {
+      if (currentTurnStats.validations.length < 4) {
+        currentTurnStats.validations.push(cmd);
+      }
+    }
+  }
+}
+
+function hasExecutionReceipt(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(evidencias de execucao|evidências de execução|arquivos alterados|comandos executados|validacoes executadas|validações executadas)/.test(normalized);
+}
+
+function buildExecutionReceipt() {
+  if (!currentTurnStats) return "";
+
+  const files = Array.from(currentTurnStats.changedPaths)
+    .map((p) => trimForReceipt(p, 80))
+    .filter(Boolean);
+  const cmds = currentTurnStats.commands.slice(0, 4);
+  const checks = currentTurnStats.validations.slice(0, 3);
+
+  const lines = ["", "Evidencias de execucao:"];
+  if (files.length > 0) lines.push(`- Arquivos alterados: ${files.map((f) => `\`${f}\``).join(", ")}`);
+  if (cmds.length > 0) lines.push(`- Comandos executados: ${cmds.map((c) => `\`${c}\``).join("; ")}`);
+  if (checks.length > 0) {
+    currentTurnStats.phase = "validating";
+    lines.push(`- Validacoes executadas: ${checks.map((c) => `\`${c}\``).join("; ")}`);
+  }
+  if (files.length === 0 && cmds.length === 0) {
+    lines.push(`- Ferramentas executadas: ${Array.from(currentTurnStats.toolNames).join(", ") || "(nenhuma registrada)"}`);
+  }
+
+  return lines.join("\n");
 }
 
 function isMaxStepsError(err) {
@@ -312,7 +411,15 @@ async function runTool(name, input) {
 
 async function runToolWithLifecycle(name, input) {
   if (!currentTurnStats) {
-    currentTurnStats = { toolCalls: 0, toolNames: new Set(), maxStepsReached: false };
+    currentTurnStats = {
+      phase: "planning",
+      toolCalls: 0,
+      toolNames: new Set(),
+      changedPaths: new Set(),
+      commands: [],
+      validations: [],
+      maxStepsReached: false,
+    };
   }
 
   if (currentTurnStats.toolCalls >= MAX_TOOL_CALLS_PER_TURN) {
@@ -328,9 +435,16 @@ async function runToolWithLifecycle(name, input) {
   currentTurnStats.toolCalls += 1;
   currentTurnStats.toolNames.add(name);
 
+  const blockedReason = detectBlockedGitAction(name, input);
+  if (blockedReason) {
+    emitToolCallError(callId, name, Date.now() - started, blockedReason);
+    return blockedReason;
+  }
+
   try {
     const result = await runTool(name, input);
     const output = String(result);
+    collectTurnEvidence(name, input);
     emitToolCallCompleted(callId, name, Date.now() - started, toPreview(output));
     return output;
   } catch (err) {
@@ -1478,7 +1592,16 @@ rl.on("line", async (line) => {
 
   const userText = msg.text;
   await refreshSystemPromptCache();
-  currentTurnStats = { toolCalls: 0, toolNames: new Set(), maxStepsReached: false };
+  currentTurnPolicy = parseTurnPolicy(userText);
+  currentTurnStats = {
+    phase: "planning",
+    toolCalls: 0,
+    toolNames: new Set(),
+    changedPaths: new Set(),
+    commands: [],
+    validations: [],
+    maxStepsReached: false,
+  };
   const imageInputs = await loadImageInputs(msg.images);
   const selectedModelId = isSupportedModelId(msg.model) ? msg.model : DEFAULT_MODEL_ID;
   
@@ -1506,6 +1629,7 @@ rl.on("line", async (line) => {
   if (isSuperseded()) {
     currentAbortController = null;
     currentTurnStats = null;
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
     return;
   }
 
@@ -1597,6 +1721,7 @@ rl.on("line", async (line) => {
             emitWaitingUser();
           }
           currentTurnStats = null;
+          currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
           return;
         }
 
@@ -1663,13 +1788,17 @@ rl.on("line", async (line) => {
   // Check if superseded before emitting response
   if (isSuperseded()) {
     currentTurnStats = null;
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
     return;
   }
 
   if (lastErr) {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");
     currentTurnStats = null;
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
   } else {
+    currentTurnStats.phase = "reporting";
+
     if (
       !currentTurnStats?.maxStepsReached
       && (currentTurnStats?.toolCalls ?? 0) === 0
@@ -1682,6 +1811,16 @@ rl.on("line", async (line) => {
       result = guarded;
     }
 
+    const shouldAppendReceipt =
+      !currentTurnStats?.maxStepsReached
+      && looksLikeTechnicalActionRequest(userText)
+      && (currentTurnStats?.toolCalls ?? 0) > 0
+      && !hasExecutionReceipt(result);
+
+    if (shouldAppendReceipt) {
+      result = `${String(result || "").trim()}${buildExecutionReceipt()}`.trim();
+    }
+
     // Record successful turn in provider-agnostic transcript (for cascade seeding)
     conversationTranscript.push({ role: "user", content: userText });
     if (result && result !== FALLBACK_RESULT) {
@@ -1692,6 +1831,7 @@ rl.on("line", async (line) => {
     // The session stays alive — the host will show the compose bar again.
     emitWaitingUser(result);
     currentTurnStats = null;
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false };
   }
 });
 
