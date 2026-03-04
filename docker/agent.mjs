@@ -227,6 +227,10 @@ REGRAS:
 12. NUNCA envie o output bruto de ferramentas como mensagem para o usuário. Resuma os resultados relevantes em vez de colar output extenso (como variáveis de ambiente, logs longos, etc.). O output das ferramentas já é registrado internamente.
 13. Quando o usuário mencionar um projeto ou repositório por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
 14. Quando o usuário ENSINAR algo útil (URLs, nomes de org, preferências, padrões de projeto), use rick_save_memory para salvar para futuros agentes. Exemplos: URL de organização GitHub, stack tecnológica preferida, convenções de código.
+15. Se o usuário pedir para CORRIGIR, AJUSTAR, REMOVER, ALTERAR comportamento, BUG ou UI, trate como tarefa de código: leia arquivos relevantes, faça a alteração real via ferramenta de edição e valide. Não responda apenas com promessa textual.
+16. NUNCA diga que "corrigiu", "removeu", "ajustou" ou "implementou" sem ter realmente alterado arquivos/estado via ferramentas.
+17. Ao concluir uma alteração técnica, inclua evidência objetiva em 1 frase: arquivo(s) alterado(s) e comando(s) de validação executado(s).
+18. Se não for possível aplicar a mudança (limitação real, erro de permissão, ausência de arquivo, etc.), diga explicitamente que NÃO foi aplicado, explique o motivo e proponha próximo passo.
 
 FERRAMENTAS DISPONÍVEIS: ${toolNames.join(", ")}`;
 
@@ -1105,7 +1109,6 @@ rl.on("line", async (line) => {
     while (attempts < maxAttempts) {
       attempts++;
       try {
-        emitStatus(`Modelo atual: ${provider.name}`);
         emitModelActive(provider.modelId, provider.name);
         result = await provider.fn(userText, signal, imageInputs);
         lastErr = null;
@@ -1117,7 +1120,7 @@ rl.on("line", async (line) => {
           currentAbortController = null;
           // Only emit if this is still the latest generation
           if (!isSuperseded()) {
-            emitWaitingUser("(processamento interrompido)");
+            emitWaitingUser();
           }
           return;
         }
