@@ -1231,11 +1231,15 @@ function sendMessage() {
   var payload = { type: 'message', text: text };
 
   // Show user message immediately and flag to skip server echo
+  var localImageUrls = [];
+  for (var li = 0; li < pendingFiles.length; li++) {
+    if (pendingFiles[li].previewUrl) localImageUrls.push(pendingFiles[li].previewUrl);
+  }
   pendingUserEcho = true;
   if (!hasAudio) {
-    appendMessage(text || '(arquivo)', 'user');
+    appendMessage(text, 'user', 'text', null, localImageUrls.length > 0 ? localImageUrls : null, null);
   } else {
-    appendMessage(text || '(audio)', 'user');
+    appendMessage(text, 'user', 'text', pendingAudio ? pendingAudio.localUrl : null, localImageUrls.length > 0 ? localImageUrls : null, null);
   }
 
   // Build files array

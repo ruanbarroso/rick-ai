@@ -1404,8 +1404,8 @@ Retorne APENAS as linhas de extracao, nada mais.`;
    */
   createWebBridge(webConnector: WebConnector): WebAgentBridge {
     // Wire session message callback so sub-agent messages go to public session pages
-    this.sessionManager.setSessionMessageCallback((sessionId, role, text, messageType) => {
-      webConnector.broadcastToSessionSubscribers(sessionId, role, text, messageType);
+    this.sessionManager.setSessionMessageCallback((sessionId, role, text, messageType, mediaInfo) => {
+      webConnector.broadcastToSessionSubscribers(sessionId, role, text, messageType, mediaInfo);
     });
 
     const bridge: WebAgentBridge = {
@@ -1427,8 +1427,15 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         await this.sessionManager.killSession(sessionId);
       },
 
-      sendToSession: async (sessionId: string, message: string) => {
-        await this.sessionManager.sendToSession(sessionId, message);
+      sendToSession: async (
+        sessionId: string,
+        message: string,
+        images?: import("./llm/types.js").MediaAttachment[],
+        audioUrl?: string,
+        imageUrls?: string[],
+        fileInfos?: Array<{ url: string; name: string; mimeType: string }>
+      ) => {
+        await this.sessionManager.sendToSession(sessionId, message, images, audioUrl, imageUrls, fileInfos);
       },
 
       getConversationHistory: async (userPhone: string, limit?: number, numericUserId?: number) => {

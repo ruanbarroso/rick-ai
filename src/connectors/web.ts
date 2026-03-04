@@ -50,7 +50,14 @@ export interface WebAgentBridge {
   /** Kill a sub-agent session */
   killSession(sessionId: string): Promise<void>;
   /** Send a message to a sub-agent session (follow-up) */
-  sendToSession(sessionId: string, message: string): Promise<void>;
+  sendToSession(
+    sessionId: string,
+    message: string,
+    images?: MediaAttachment[],
+    audioUrl?: string,
+    imageUrls?: string[],
+    fileInfos?: Array<{ url: string; name: string; mimeType: string }>
+  ): Promise<void>;
   /** Get conversation history for a user (uses numericUserId when available for RBAC) */
   getConversationHistory(userPhone: string, limit?: number, numericUserId?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string }>>;
   /** Get message history for a sub-agent session */
@@ -479,12 +486,32 @@ export class WebConnector implements Connector {
 
           if (msg.type === "message" && this.agentBridge) {
             let text = msg.text || "";
+            const imageMedias: MediaAttachment[] = [];
+            const imageUrls: string[] = [];
+            const fileInfos: Array<{ url: string; name: string; mimeType: string }> = [];
+            const fileTexts: string[] = [];
+            let imageAttachmentCount = 0;
+            let attachmentCount = 0;
+            let audioUrl: string | undefined;
+
+            const genId = () => Array.from({ length: 8 }, () =>
+              Math.floor(Math.random() * 256).toString(16).padStart(2, "0")
+            ).join("");
 
             // Handle audio — transcribe via Gemini before forwarding
             if (msg.audio && msg.audioMimeType) {
               try {
                 const buffer = Buffer.from(msg.audio, "base64");
                 const media: MediaAttachment = { data: buffer, mimeType: msg.audioMimeType };
+
+                try {
+                  const id = genId();
+                  await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, msg.audioMimeType]);
+                  audioUrl = `/audio/${id}`;
+                } catch (err) {
+                  logger.error({ err }, "Failed to save audio blob (session viewer)");
+                }
+
                 const gemini = new GeminiProvider();
                 if (gemini.isAvailable()) {
                   const result = await gemini.chat([
@@ -503,8 +530,72 @@ export class WebConnector implements Connector {
               }
             }
 
-            if (text) {
-              await this.handleSessionViewerMessage(sessionId, text);
+            const files: Array<{ base64: string; mimeType: string; name?: string }> = [];
+            if (msg.files && Array.isArray(msg.files)) {
+              for (const f of msg.files) {
+                if (f.base64 && f.mimeType) files.push(f);
+              }
+            }
+
+            for (const f of files) {
+              const buffer = Buffer.from(f.base64, "base64");
+
+              if (f.mimeType.startsWith("image/")) {
+                imageMedias.push({ data: buffer, mimeType: f.mimeType });
+                imageAttachmentCount += 1;
+                attachmentCount += 1;
+                try {
+                  const id = genId();
+                  await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+                  imageUrls.push(`/img/${id}`);
+                } catch (err) {
+                  logger.error({ err }, "Failed to save image blob (session viewer)");
+                }
+              } else if (
+                f.mimeType.startsWith("text/") ||
+                f.mimeType === "application/json" ||
+                f.mimeType === "application/xml" ||
+                f.mimeType === "application/javascript"
+              ) {
+                const content = buffer.toString("utf-8");
+                const fileName = f.name || "arquivo";
+                fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+                attachmentCount += 1;
+                try {
+                  const id = genId();
+                  await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+                  fileInfos.push({ url: `/file/${id}`, name: fileName, mimeType: f.mimeType });
+                } catch (err) {
+                  logger.error({ err }, "Failed to save text file blob (session viewer)");
+                }
+              }
+            }
+
+            let promptText = text;
+            const hasAttachments = attachmentCount > 0 || imageMedias.length > 0;
+            if (!promptText && hasAttachments) {
+              if (imageAttachmentCount > 0 && attachmentCount === imageAttachmentCount) {
+                promptText = imageAttachmentCount > 1
+                  ? `O usuario enviou ${imageAttachmentCount} imagens. Analise e descreva o que voce ve.`
+                  : "O usuario enviou uma imagem. Analise a imagem e descreva o que voce ve.";
+              } else {
+                promptText = "O usuario enviou arquivos anexados. Leia-os e responda com base neles.";
+              }
+            }
+
+            if (fileTexts.length > 0) {
+              promptText = (promptText || "") + fileTexts.join("");
+            }
+
+            if (promptText || imageMedias.length > 0 || audioUrl || fileInfos.length > 0) {
+              await this.handleSessionViewerMessage(
+                sessionId,
+                promptText,
+                imageMedias.length > 0 ? imageMedias : undefined,
+                audioUrl,
+                imageUrls.length > 0 ? imageUrls : undefined,
+                fileInfos.length > 0 ? fileInfos : undefined,
+              );
             }
           }
         } catch (err) {
@@ -1409,11 +1500,21 @@ export class WebConnector implements Connector {
    * Broadcast a message to all public session WebSocket subscribers for a given session.
    * Called by the SessionManager's onSessionMessage callback.
    */
-  broadcastToSessionSubscribers(sessionId: string, role: string, text: string, messageType?: string): void {
+  broadcastToSessionSubscribers(
+    sessionId: string,
+    role: string,
+    text: string,
+    messageType?: string,
+    mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }
+  ): void {
     const subs = this.sessionSubscribers.get(sessionId);
     if (!subs || subs.size === 0) return;
 
-    const payload = JSON.stringify({ type: "message", role, text, messageType: messageType || "text", time: new Date().toISOString() });
+    const msg: Record<string, any> = { type: "message", role, text, messageType: messageType || "text", time: new Date().toISOString() };
+    if (mediaInfo?.audioUrl) msg.audioUrl = mediaInfo.audioUrl;
+    if (mediaInfo?.imageUrls && mediaInfo.imageUrls.length > 0) msg.imageUrls = mediaInfo.imageUrls;
+    if (mediaInfo?.fileInfos && mediaInfo.fileInfos.length > 0) msg.fileInfos = mediaInfo.fileInfos;
+    const payload = JSON.stringify(msg);
     for (const ws of subs) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(payload);
@@ -1478,11 +1579,18 @@ export class WebConnector implements Connector {
   /**
    * Handle a message from a public session viewer — forwards it directly to the sub-agent session.
    */
-  private async handleSessionViewerMessage(sessionId: string, text: string): Promise<void> {
+  private async handleSessionViewerMessage(
+    sessionId: string,
+    text: string,
+    images?: MediaAttachment[],
+    audioUrl?: string,
+    imageUrls?: string[],
+    fileInfos?: Array<{ url: string; name: string; mimeType: string }>
+  ): Promise<void> {
     if (!this.agentBridge) return;
 
     try {
-      await this.agentBridge.sendToSession(sessionId, text);
+      await this.agentBridge.sendToSession(sessionId, text, images, audioUrl, imageUrls, fileInfos);
     } catch (err) {
       logger.warn({ err, sessionId }, "Failed to send message to session from viewer");
       this.broadcastToSessionSubscribers(sessionId, "agent", `Erro: ${(err as Error).message}`);

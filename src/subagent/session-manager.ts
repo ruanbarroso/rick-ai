@@ -181,7 +181,13 @@ export async function resolveSessionsToken(token: string): Promise<number | null
 }
 
 /** Callback for broadcasting messages to public session subscribers (WebSocket viewers). */
-export type SessionMessageCallback = (sessionId: string, role: string, text: string, messageType?: string) => void;
+export type SessionMessageCallback = (
+  sessionId: string,
+  role: string,
+  text: string,
+  messageType?: string,
+  mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }
+) => void;
 
 /**
  * Manages unified sub-agent sessions — container lifecycle, NDJSON stdin/stdout relay.
@@ -583,7 +589,17 @@ export class SessionManager {
     // Persist user message and broadcast to session subscribers
     this.saveSessionMessage(sessionId, "user", message, "text", audioUrl, imageUrls, fileInfos).catch(() => {});
     if (this.onSessionMessage) {
-      this.onSessionMessage(sessionId, "user", message);
+      this.onSessionMessage(
+        sessionId,
+        "user",
+        message,
+        "text",
+        {
+          audioUrl,
+          imageUrls: imageUrls && imageUrls.length > 0 ? imageUrls : undefined,
+          fileInfos: fileInfos && fileInfos.length > 0 ? fileInfos : undefined,
+        },
+      );
     }
 
     // Copy images into the container and collect paths
