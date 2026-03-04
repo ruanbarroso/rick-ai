@@ -342,7 +342,7 @@ export function startHealthServer(port: number): void {
     }
 
     // ==================== AGENT API (JWT-authenticated) ====================
-    // Endpoints for sub-agents (edit sessions, ephemeral sub-agents) to query/write
+    // Endpoints for sub-agents to query/write
     // memories, credentials, config, conversations, semantic search, and LLM tokens.
     // Authentication uses Bearer JWT tokens, NOT the web UI password.
 

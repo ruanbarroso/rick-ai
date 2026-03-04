@@ -587,7 +587,7 @@ export class WhatsAppConnector implements Connector {
 
       const response = await this.manager.handleIncomingMessage(incoming);
 
-      // Send response and track it as AGENT (skip empty — edit mode sends async)
+      // Send response and track it as AGENT (skip empty — sub-agents send async)
       if (response) {
         await this.sendTextMessage(chatJid, response);
       }

@@ -25,7 +25,6 @@ import { resolveSessionsToken, getMainSessionName, getUserSessionsToken } from "
  * - Chat messages (text, audio, image)
  * - Settings management (read/write .env)
  * - Sub-agent session listing
- * - Edit mode activation
  * - WhatsApp QR code forwarding
  */
 
@@ -52,20 +51,12 @@ export interface WebAgentBridge {
   killSession(sessionId: string): Promise<void>;
   /** Send a message to a sub-agent session (follow-up) */
   sendToSession(sessionId: string, message: string): Promise<void>;
-  /** Check if edit mode is active */
-  isEditModeActive(): boolean;
-  /** Start edit mode (returns error message or empty string on success) */
-  startEditMode(connectorName: string, userId: string): Promise<string>;
-  /** Stop edit mode (returns error message or empty string on success) */
-  stopEditMode(): Promise<string>;
   /** Get conversation history for a user (uses numericUserId when available for RBAC) */
   getConversationHistory(userPhone: string, limit?: number, numericUserId?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string }>>;
   /** Get message history for a sub-agent session */
   getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Get the persisted status and variant name of a session from the DB */
   getSessionInfoFromDB(sessionId: string): Promise<{ status: string; variantName: string | null } | null>;
-  /** Get message history for the active edit session */
-  getEditHistory(): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Send audio transcription update to all web clients */
   sendTranscription(audioUrl: string, transcription: string): void;
   /** Clear conversation history for a user (uses numericUserId when available for RBAC) */
@@ -153,7 +144,7 @@ export class WebConnector implements Connector {
   }
 
   /**
-   * Wire up agent bridge for settings/sessions/edit-mode.
+   * Wire up agent bridge for settings and sessions.
    */
   setAgentBridge(bridge: WebAgentBridge): void {
     this.agentBridge = bridge;
@@ -186,13 +177,6 @@ export class WebConnector implements Connector {
     } catch (err) {
       logger.warn({ err }, "Failed to broadcast pending count");
     }
-  }
-
-  /**
-   * Notify web clients of edit mode state change.
-   */
-  notifyEditMode(active: boolean): void {
-    this.broadcastToAuthenticated({ type: "edit_mode", active });
   }
 
   // ==================== Connector interface ====================
@@ -299,20 +283,6 @@ export class WebConnector implements Connector {
               // (e.g. after F5 or phone unlock). Sending composing:false is equally important
               // so clients that missed a "typing:false" event don't stay stuck on "processing".
               this.send(ws, { type: "typing", composing: this.currentlyTyping });
-
-              // Restore edit mode state for reconnecting clients (e.g. after F5)
-              if (this.agentBridge?.isEditModeActive()) {
-                this.send(ws, { type: "edit_mode", active: true });
-                // Also restore edit session message history so F5 doesn't lose it
-                try {
-                  const editHistory = await this.agentBridge.getEditHistory();
-                  if (editHistory.length > 0) {
-                    this.send(ws, { type: "edit_history", messages: editHistory });
-                  }
-                } catch (_) {
-                  // Best-effort: if history load fails, UI is still functional
-                }
-              }
             } else {
               this.send(ws, { type: "auth_fail", reason: "Senha incorreta." });
               ws.close();
@@ -336,12 +306,6 @@ export class WebConnector implements Connector {
               break;
             case "kill_session":
               await this.handleKillSession(ws, msg.sessionId);
-              break;
-            case "start_edit":
-              await this.handleStartEdit(ws);
-              break;
-            case "stop_edit":
-              await this.handleStopEdit(ws);
               break;
             case "get_history":
               await this.handleGetHistory(ws);
@@ -894,7 +858,6 @@ export class WebConnector implements Connector {
     const fileTexts: string[] = [];
     // Generic file attachments (non-image/non-audio) for chat history display
     const fileInfos: Array<{ url: string; name: string; mimeType: string }> = [];
-    const editModeActive = this.agentBridge?.isEditModeActive() ?? false;
     let imageAttachmentCount = 0;
     let attachmentCount = 0;
 
@@ -926,10 +889,6 @@ export class WebConnector implements Connector {
         const content = buffer.toString("utf-8");
         const fileName = f.name || "arquivo";
         fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
-        if (editModeActive) {
-          imageMedias.push({ data: buffer, mimeType: f.mimeType });
-          attachmentCount += 1;
-        }
         logger.info({ type: "text-file", size: buffer.length, mimeType: f.mimeType, name: fileName }, "Web text file received");
         // Também salvar o blob para exibição no histórico com card de arquivo
         try {
@@ -957,10 +916,6 @@ export class WebConnector implements Connector {
       } else {
         // Outros tipos binários: salvar e mostrar como card de arquivo genérico
         const fileName = f.name || "arquivo";
-        if (editModeActive) {
-          imageMedias.push({ data: buffer, mimeType: f.mimeType });
-          attachmentCount += 1;
-        }
         logger.info({ mimeType: f.mimeType, name: fileName }, "Generic file received");
         try {
           const id = genId();
@@ -1087,26 +1042,6 @@ export class WebConnector implements Connector {
         ? await this.openaiOAuth.isConnected(this.adminUserId)
         : { connected: false };
 
-      // Check edit mode access: GitHub token with write access + at least one AI provider
-      let editAccessOk = false;
-      if (githubToken) {
-        const hasProvider = !!(anthropicConn.connected || openaiConn.connected || anthropicKey || openaiKey || geminiKey);
-        if (hasProvider) {
-          try {
-            const targetRepo = devRepo || "ruanbarroso/rick-ai";
-            const ghResp = await fetch(`https://api.github.com/repos/${targetRepo}`, {
-              headers: { Authorization: `token ${githubToken}`, "User-Agent": "Rick-AI-Agent/1.0", Accept: "application/vnd.github.v3+json" },
-              signal: AbortSignal.timeout(8000),
-            });
-            if (ghResp.ok) {
-              const repoInfo = (await ghResp.json()) as Record<string, unknown>;
-              const perms = repoInfo.permissions as { push?: boolean; admin?: boolean } | undefined;
-              editAccessOk = !!(perms?.push || perms?.admin);
-            }
-          } catch { /* network error — assume no access */ }
-        }
-      }
-
       this.send(ws, {
         type: "settings",
         settings: {
@@ -1129,8 +1064,6 @@ export class WebConnector implements Connector {
           agentLogo: (await configGet("AGENT_LOGO")) || "",
           webBaseUrl: config.webBaseUrl,
           whatsappConnected: this.whatsappConnector?.isConnected() || false,
-          editModeActive: this.agentBridge?.isEditModeActive() || false,
-          editAccessOk,
           dbBackend: isPostgres() ? "postgresql" : "sqlite",
         },
       });
@@ -1286,38 +1219,6 @@ export class WebConnector implements Connector {
       logger.error({ err }, "Failed to start blank sub-agent session");
       this.send(ws, { type: "error", text: "Erro ao criar nova sessao de sub-agente." });
     }
-  }
-
-  // ==================== Edit Mode ====================
-
-  private async handleStartEdit(ws: WebSocket): Promise<void> {
-    if (!this.agentBridge) {
-      this.send(ws, { type: "error", text: "Agent nao configurado." });
-      return;
-    }
-
-    const editUserId = this.adminUserId != null ? String(this.adminUserId) : config.ownerPhone;
-    const result = await this.agentBridge.startEditMode(this.name, editUserId);
-    if (result) {
-      // Non-empty result means there was an error message
-      this.send(ws, { type: "error", text: result });
-    }
-    // Success: the Agent will send edit_mode notification via notifyEditMode()
-  }
-
-  private async handleStopEdit(ws: WebSocket): Promise<void> {
-    if (!this.agentBridge) {
-      this.send(ws, { type: "error", text: "Agent nao configurado." });
-      return;
-    }
-
-    const result = await this.agentBridge.stopEditMode();
-    if (result) {
-      this.send(ws, { type: "error", text: result });
-      return;
-    }
-
-    this.notifyEditMode(false);
   }
 
   private async handleConnectWhatsApp(ws: WebSocket): Promise<void> {

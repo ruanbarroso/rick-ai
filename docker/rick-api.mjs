@@ -1,7 +1,7 @@
 /**
  * rick-api.mjs — Shared Rick API client, tool declarations, and tool handlers.
  *
- * Used by both agent.mjs and edit-agent.mjs to avoid code duplication.
+ * Used by agent.mjs to avoid code duplication.
  * Provides:
  *   - rickApiGet() / rickApiPost() for querying the host API
  *   - Agent-specific tool declarations (rick_memory, rick_search, rick_save_memory, web_fetch)

@@ -46,7 +46,7 @@ export function buildToolUseLine(toolName: string, input?: Record<string, unknow
 }
 
 /**
- * Normalize runtime status text into the same terminal format used by edit mode.
+ * Normalize runtime status text into a compact terminal-style format.
  */
 export function normalizeStatusToolLine(text: string): string {
   const m = text.match(/^Executando:\s*(\S+)(?:\s+\((.+)\)|\s+(.+))?\s*$/);

@@ -1,8 +1,7 @@
 #!/bin/sh
 #
 # Safe deploy pipeline for Rick (rick-ai).
-# Called by edit-session.ts after Claude Code edits source code,
-# and by the OTA update/import detached containers in health.ts.
+# Called by the OTA update/import detached containers in health.ts.
 #
 # Runs inside a docker:cli container (Alpine) with docker.sock mounted.
 #
@@ -28,7 +27,7 @@
 
 set -eu
 
-# PROJECT_DIR can be passed as env var from edit-session.ts, fallback to $HOME/rick-ai
+# PROJECT_DIR defaults to $HOME/rick-ai
 PROJECT_DIR="${PROJECT_DIR:-$HOME/rick-ai}"
 STAGING_DIR="${1:-}"
 BACKUP_DIR="$PROJECT_DIR/.deploy-backup"
@@ -131,7 +130,7 @@ log "Staged files applied"
 #
 # Version priority:
 #   1. STAGING_DIR/.rick-version — set by OTA update (has the real new SHA)
-#   2. git — for edit-session deploys where staging doesn't have .rick-version
+#   2. git — fallback when staging doesn't have .rick-version
 #   3. PROJECT_DIR/.rick-version — last resort
 #
 # Mark directory as safe — deploy runs as root inside docker:cli but files

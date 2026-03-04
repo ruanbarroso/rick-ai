@@ -1,5 +1,5 @@
 /**
- * tool-declarations.mjs — Shared tool schemas for sub-agent and edit-agent
+ * tool-declarations.mjs — Shared tool schemas for sub-agent containers
  *
  * Single source of truth for the 5 core tool declarations used by
  * OpenAI and Gemini providers. Agent-specific tools (web_fetch, rick_memory,

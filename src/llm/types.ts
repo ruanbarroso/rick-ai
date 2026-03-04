@@ -41,8 +41,8 @@ export interface ModelConfig {
 
 /**
  * Main session models — Gemini only.
- * Claude and OpenAI are used exclusively in sub-agents and edit-agents
- * (docker/agent.mjs, docker/edit-agent.mjs), not in the main session.
+ * Claude and OpenAI are used exclusively in sub-agents
+ * (docker/agent.mjs), not in the main session.
  */
 export const AVAILABLE_MODELS: ModelConfig[] = [
   {

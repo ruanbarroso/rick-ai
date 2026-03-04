@@ -5,8 +5,8 @@ import { logger } from "../config/logger.js";
 /**
  * Main-session LLM service — Gemini only.
  *
- * Claude and OpenAI are used exclusively in sub-agents and edit-agents
- * (docker/agent.mjs, docker/edit-agent.mjs). The main session always uses
+ * Claude and OpenAI are used exclusively in sub-agents
+ * (docker/agent.mjs). The main session always uses
  * Gemini Flash for direct chat.
  */
 export class LLMService {

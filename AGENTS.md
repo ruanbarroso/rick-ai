@@ -24,11 +24,10 @@ This project has multiple parallel flows that share logic and must stay in sync.
 |------|-------|-----------------|
 | Main session (Gemini / Claude / OpenAI) | `src/llm/providers/*.ts` | `MAIN_LLM_TIMEOUT_MS` in `src/llm/types.ts` |
 | Sub-agent sessions | `docker/agent.mjs` | `LLM_TIMEOUT_MS` in `docker/rick-api.mjs` |
-| Edit agent sessions | `docker/edit-agent.mjs` | `LLM_TIMEOUT_MS` in `docker/rick-api.mjs` |
 
 **Rules:**
 - Timeout values, retry logic, and cascade/fallback behavior must be consistent across all flows. If you change one, check the others.
-- Sub-agent and edit-agent share code via `docker/rick-api.mjs` (Rick API client, tool declarations, tool handler, timeout constants). Do not duplicate that logic.
+- Sub-agent code lives in `docker/rick-api.mjs` (Rick API client, tool declarations, tool handler, timeout constants). Do not duplicate that logic.
 - Command execution timeout (`COMMAND_TIMEOUT` in `docker/tools.mjs`) is intentionally separate from LLM timeouts.
 
 ### Viewer HTML pages
@@ -45,16 +44,16 @@ This project has multiple parallel flows that share logic and must stay in sync.
 
 **Rules:**
 - `session-viewer.html` and `main-session-viewer.html` must both use `/static/render-text.js` for text and media rendering. Do not inline `renderText` or `renderMessageContent` in those files.
-- `web-ui.html` has its own inline `renderText` and `renderMessageContent` with extra features (audio transcription animation, edit-mode handling). These are intentionally separate. If you change the shared `render-text.js`, check whether `web-ui.html` needs the same change.
+- `web-ui.html` has its own inline `renderText` and `renderMessageContent` with extra features (audio transcription animation). These are intentionally separate. If you change the shared `render-text.js`, check whether `web-ui.html` needs the same change.
 - Media rendering (images, audio players, file cards) must be present in all three viewers. If you add a new media type, add it to `render-text.js` and `web-ui.html`.
 - CSS for markdown elements (headings, lists, hr, code-lang, pre code) and media elements (image-message, audio-message, file-attachment) must be present in all viewer `<style>` blocks.
 
 ### Checklist (run mentally before committing)
 
-1. Did I change an LLM timeout, retry, or cascade? → Check all 3 provider flows.
+1. Did I change an LLM timeout, retry, or cascade? → Check both provider flows.
 2. Did I change `renderText` or `renderMessageContent`? → Check `render-text.js` AND `web-ui.html`.
 3. Did I add a new media type or message field? → Update `render-text.js`, `web-ui.html`, and the `appendMessage`/`appendHistoryMessage` functions in both viewers.
-4. Did I change tool declarations or tool handlers in `docker/`? → Ensure `rick-api.mjs` is the single source; do not duplicate in `agent.mjs` or `edit-agent.mjs`.
+4. Did I change tool declarations or tool handlers in `docker/`? → Ensure `rick-api.mjs` is the single source; do not duplicate in `agent.mjs`.
 5. Did I add a new shared static file? → Verify the filename matches the whitelist regex `^[\w-]+\.(css|js)$` in `src/health.ts`.
 
 ## After implementation

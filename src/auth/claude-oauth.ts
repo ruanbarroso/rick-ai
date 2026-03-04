@@ -87,7 +87,7 @@ export class ClaudeOAuthService {
   /**
    * In-memory token cache keyed by userId.
    * Avoids hitting DB and refresh endpoint on every getValidToken() call.
-   * All callers (edit sessions, sub-agents, etc.) share this cache.
+   * All callers (sub-agents, etc.) share this cache.
    */
   private tokenCache = new Map<number, OAuthTokens>();
 

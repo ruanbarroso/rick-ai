@@ -8,7 +8,8 @@ import { ClaudeOAuthService } from "./auth/claude-oauth.js";
 import { OpenAIOAuthService } from "./auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
 import { SessionManager, getSessionVariantName, getUserSessionsToken } from "./subagent/session-manager.js";
-import { EditSession, AuthExpiredCallback, GetFreshTokenCallback, SaveHistoryFn } from "./subagent/edit-session.js";
+
+
 import { classifyTask } from "./subagent/classifier.js";
 import { PendingDelegation } from "./subagent/types.js";
 import type { ConnectorManager } from "./connectors/connector-manager.js";
@@ -32,18 +33,6 @@ export class Agent {
    * Pending delegation waiting for user to provide missing credentials.
    */
   private pendingDelegation: PendingDelegation | null = null;
-
-  /**
-   * Active edit session (/edit mode) — user is directly editing Rick's source.
-   * When active, ALL messages bypass the classifier and go straight to Claude Code.
-   */
-  private editSession: EditSession | null = null;
-
-  /** Tracks whether it's the first message in an edit session (use -p) vs continuation (use --continue) */
-  private editFirstPromptSent = false;
-
-  /** User ID of user in current edit session (for token refresh) */
-  private editUserId: number | null = null;
 
   /**
    * Per-user message processing lock. Serializes handleMessage calls to prevent
@@ -247,125 +236,6 @@ export class Agent {
     let fullText = rawText;
     if (quotedText) {
       fullText = `[Em resposta a: "${quotedText.substring(0, 300)}"]\n\n${rawText}`;
-    }
-
-    // ==================== EDIT MODE ====================
-    // When in edit mode, only /deploy and /publish are recognized as commands.
-    // /exit is no longer a command — exit via 3x click on Evil Morty logo in the web UI.
-    // Everything else goes directly to Claude Code.
-    // Audio is pre-transcribed via Gemini; images are passed via --image flag.
-    if (this.editSession) {
-      // Helper: clear typing indicator before returning quick responses.
-      // The client enables typing locally when sending a message, but the normal
-      // typing:false lives in the finally block below which edit-mode early returns
-      // never reach. Without this, the typing indicator stays stuck forever.
-      const editReturn = async (text: string) => {
-        if (text) {
-          await this.connectorManager.setTyping(connectorName, userPhone, false);
-          if (this.mainTypingCallback) try { this.mainTypingCallback(user.id, false); } catch {}
-        }
-        return text;
-      };
-
-      const lower = fullText.trim().toLowerCase();
-
-      if (lower === "/deploy") {
-        return editReturn(await this.cmdDeploy());
-      }
-      if (lower === "/publish" || lower.startsWith("/publish ")) {
-        const repoArg = fullText.trim().substring("/publish".length).trim() || undefined;
-        return editReturn(await this.cmdPublish(repoArg));
-      }
-
-      // If auth expired, check if user is pasting an OAuth code
-      if (this.editSession.getState() === "auth_expired") {
-        // Check if this looks like a Claude OAuth code (contains # separator)
-        if (fullText.includes("#") && this.claudeOAuth.hasPendingAuth()) {
-          const result = await this.cmdExchangeClaudeCode(user.id, fullText);
-          if (result?.includes("conectado com sucesso")) {
-            // Token exchanged — re-inject into edit session (with admin fallback)
-            const newToken = await this.resolveClaudeToken(user.id);
-            if (newToken && this.editSession) {
-              let refreshToken: string | undefined;
-              try {
-                const { query: dbQuery } = await import("./memory/db.js");
-                const r = await dbQuery(
-                  `SELECT refresh_token FROM oauth_tokens WHERE provider = 'claude' AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`,
-                );
-                refreshToken = r.rows[0]?.refresh_token;
-              } catch (_) { /* ignore */ }
-
-              await this.editSession.refreshCredentials(newToken, refreshToken);
-              return ""; // refreshCredentials will send its own message and retry
-            }
-          }
-          return editReturn(result || "Erro ao trocar codigo OAuth.");
-        }
-
-        return editReturn("Token do Claude expirou. Cole o codigo OAuth para continuar.");
-      }
-
-      // Proxy everything else to Claude Code
-      if (this.editSession.getState() === "deploying") {
-        return editReturn("Deploy em andamento... Aguarde.");
-      }
-      if (this.editSession.getState() !== "ready") {
-        return editReturn("Aguarde, o Claude Code ainda esta processando...");
-      }
-
-      // Audio: pre-transcribe with Gemini and fold into text
-      // Collect all non-audio attachments to forward to edit session.
-      let editMedias: MediaAttachment[] = [];
-      if (media?.mimeType.startsWith("audio/")) {
-        const transcription = await this.transcribeAudioWithGemini(media);
-        const prefix = fullText.trim() ? `${fullText.trim()}\n\n` : "";
-        fullText = `${prefix}[Áudio transcrito: "${transcription}"]`;
-        editMedias = imageMedias ?? []; // keep attachments sent alongside audio
-        // Send transcription to frontend so "Processando audio..." is replaced
-        if (audioUrl && this.webBridge) {
-          this.webBridge.sendTranscription(audioUrl, transcription);
-        }
-      } else {
-        // Keep primary non-audio attachment (if any), plus additional attachments.
-        if (media) editMedias.push(media);
-        if (imageMedias && imageMedias.length > 0) {
-          for (const m of imageMedias) {
-            if (!editMedias.includes(m)) editMedias.push(m);
-          }
-        }
-      }
-
-      logger.info(
-        { editMediaCount: editMedias.length, editMediaMimes: editMedias.map((m) => m.mimeType), textLen: fullText.length },
-        "Edit mode: forwarding to Claude Code"
-      );
-
-      // Save user message to edit session history (persists across F5 reloads)
-      const editSessionIdForSave = this.editSession.id;
-      try {
-        const { query: dbSaveUser } = await import("./memory/db.js");
-        const editImageUrlsJson = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
-        const editFileInfosJson = fileInfos && fileInfos.length > 0 ? JSON.stringify(fileInfos) : null;
-        await dbSaveUser(
-          `INSERT INTO session_messages (session_id, role, content, message_type, audio_url, image_urls, file_infos) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [editSessionIdForSave, "user", fullText, "text", audioUrl || null, editImageUrlsJson, editFileInfosJson]
-        );
-      } catch (err) {
-        logger.warn({ err }, "Failed to save edit session user message");
-      }
-
-      // First message uses -p, subsequent use --continue
-      if (!this.editFirstPromptSent) {
-        this.editFirstPromptSent = true;
-        this.editSession.sendPrompt(fullText, editMedias.length > 0 ? editMedias : undefined).catch((err) => {
-          logger.error({ err }, "Edit session prompt failed");
-        });
-      } else {
-        this.editSession.sendContinue(fullText, editMedias.length > 0 ? editMedias : undefined).catch((err) => {
-          logger.error({ err }, "Edit session continue failed");
-        });
-      }
-      return ""; // Response will come async from Claude Code stream
     }
 
     // ==================== AUDIO TRANSCRIPTION ====================
@@ -1196,213 +1066,7 @@ Conta: ${result.email || "conectada"}
 O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado automaticamente.`;
   }
 
-  // ==================== EDIT MODE COMMANDS ====================
 
-  private async cmdStartEdit(userId: number, connectorName: string): Promise<string> {
-    if (this.editSession) {
-      return "Voce ja esta no modo de edicao.";
-    }
-
-    // Require GITHUB_TOKEN with write access — needed for publish/deploy
-    const githubToken = process.env.GITHUB_TOKEN;
-    if (!githubToken) {
-      return "Configure o GitHub Token nas configuracoes antes de entrar no modo de edicao.";
-    }
-
-    // Validate write access before spinning up a container
-    const targetRepo = process.env.DEV_REPO_URL || "ruanbarroso/rick-ai";
-    try {
-      const ghResp = await fetch(`https://api.github.com/repos/${targetRepo}`, {
-        headers: {
-          Authorization: `token ${githubToken}`,
-          "User-Agent": "Rick-AI-Agent/1.0",
-          Accept: "application/vnd.github.v3+json",
-        },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!ghResp.ok) {
-        const body = (await ghResp.json().catch(() => ({}))) as Record<string, unknown>;
-        const msg = typeof body.message === "string" ? body.message : ghResp.statusText;
-        return `GitHub Token invalido ou sem acesso ao repositorio *${targetRepo}* (HTTP ${ghResp.status}: ${msg}).\n\nVerifique o token nas configuracoes.`;
-      }
-      const repoInfo = (await ghResp.json()) as Record<string, unknown>;
-      const perms = repoInfo.permissions as { push?: boolean; admin?: boolean } | undefined;
-      if (!perms?.push && !perms?.admin) {
-        return `O GitHub Token nao tem permissao de escrita no repositorio *${targetRepo}*.\n\nO token precisa de "Contents: Read and Write".`;
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return `Falha ao validar GitHub Token: ${msg}`;
-    }
-
-    // Provider priority: Claude → OpenAI → Gemini Pro (with admin fallback)
-    const claudeToken = await this.resolveClaudeToken(userId);
-    let activeProvider: import("./subagent/edit-session.js").EditProvider = "claude";
-    if (!claudeToken) {
-      const gptToken = await this.resolveOpenAIToken(userId);
-      if (gptToken) {
-        activeProvider = "openai";
-      } else if (config.gemini?.apiKey) {
-        activeProvider = "gemini";
-      } else {
-        return (
-          "Nenhum modelo disponivel para o modo de edicao.\n\n" +
-          "Configure um provedor de IA (Claude, GPT ou Gemini) nas configuracoes."
-        );
-      }
-    }
-
-    // Auth expired callback: tries to refresh token, if fails sends OAuth link
-    const authExpiredCb: AuthExpiredCallback = async () => {
-      logger.info({ userId }, "Edit session auth expired — attempting refresh");
-
-      // Try automatic refresh first (with admin fallback)
-      const newToken = await this.resolveClaudeToken(userId);
-      if (newToken) {
-        // Refresh worked — re-inject into container.
-        // Look up refresh_token for the admin user (id=1) since that's where OAuth is stored.
-        let refreshToken: string | undefined;
-        try {
-          const { query: dbQuery } = await import("./memory/db.js");
-          const r = await dbQuery(
-            `SELECT refresh_token FROM oauth_tokens WHERE provider = 'claude' AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`,
-          );
-          refreshToken = r.rows[0]?.refresh_token;
-        } catch (_) { /* ignore */ }
-
-        if (this.editSession) {
-          await this.editSession.refreshCredentials(newToken, refreshToken);
-        }
-        return true;
-      }
-
-      // Refresh failed — need re-auth. Send OAuth link.
-      const { authUrl } = this.claudeOAuth.startAuth();
-      await this.connectorManager.sendMessage(
-        connectorName, String(userId),
-        `*Token do Claude expirou!*\n\n` +
-        `A sessao de edicao continua ativa — so preciso de um novo token.\n\n` +
-        `1. Abra este link:\n${authUrl}\n\n` +
-        `2. Cole o codigo aqui (formato \`codigo#state\`).\n\n` +
-        `Apos colar, vou retomar de onde parei automaticamente.`
-      );
-      return false;
-    };
-
-    // Proactive token refresh callback — called before each Claude invocation (with admin fallback)
-    const getFreshTokenCb: GetFreshTokenCallback = async () => {
-      const token = await this.resolveClaudeToken(userId);
-      if (!token) return null;
-
-      let refreshToken: string | undefined;
-      try {
-        const { query: dbQuery } = await import("./memory/db.js");
-        const r = await dbQuery(
-          `SELECT refresh_token FROM oauth_tokens WHERE provider = 'claude' AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`,
-        );
-        refreshToken = r.rows[0]?.refresh_token;
-      } catch (_) { /* ignore */ }
-
-      return { accessToken: token, refreshToken };
-    };
-
-    // Persists assistant messages from Claude Code into session_messages table so they
-    // survive F5 reloads. Uses this.editSession?.id (set before sendPrompt/sendContinue).
-    // Note: must NOT go to the main conversations table — edit history is isolated.
-    const saveHistoryCb: SaveHistoryFn = async (text: string, type: "text" | "tool_use" = "text") => {
-      const sid = this.editSession?.id;
-      if (!sid) return;
-      try {
-        const { query: dbSave } = await import("./memory/db.js");
-        await dbSave(
-          `INSERT INTO session_messages (session_id, role, content, message_type) VALUES ($1, $2, $3, $4)`,
-          [sid, "assistant", text, type]
-        );
-      } catch (err) {
-        logger.warn({ err }, "Failed to save edit session assistant message");
-      }
-    };
-
-    // Clean up agent state when the edit session closes (deploy success or /exit from within session)
-    const onCloseCb = () => {
-      // Delete persisted messages for this edit session from DB
-      const sid = this.editSession?.id;
-      if (sid) {
-        import("./memory/db.js").then(({ query: dbDel }) => {
-          dbDel(`DELETE FROM session_messages WHERE session_id = $1`, [sid]).catch(() => {});
-        }).catch(() => {});
-      }
-      this.editSession = null;
-      this.editFirstPromptSent = false;
-      this.editUserId = null;
-    };
-
-    const session = new EditSession(
-      this.connectorManager,
-      connectorName,
-      String(userId),
-      authExpiredCb,
-      getFreshTokenCb,
-      saveHistoryCb,
-      onCloseCb,
-      this.memory,
-      activeProvider,
-    );
-
-    // Build env for the container — inject all available provider credentials
-    // so edit-agent can cascade Claude -> GPT -> Gemini when needed.
-    const env: Record<string, string> = {};
-
-    // Gemini as last resort
-    if (config.gemini?.apiKey) env.GEMINI_API_KEY = config.gemini.apiKey;
-
-    // Claude credentials
-    if (claudeToken) {
-      env.CLAUDE_CODE_OAUTH_TOKEN = claudeToken;
-      try {
-        const { query } = await import("./memory/db.js");
-        const result = await query(
-          `SELECT refresh_token FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
-          [userId]
-        );
-        if (result.rows[0]?.refresh_token) {
-          env.CLAUDE_REFRESH_TOKEN = result.rows[0].refresh_token;
-        }
-      } catch (_) { /* ignore */ }
-    }
-
-    // OpenAI credentials (OAuth token or API key, with admin fallback)
-    const gptToken = await this.resolveOpenAIToken(userId);
-    if (gptToken) {
-      env.OPENAI_ACCESS_TOKEN = gptToken.accessToken;
-      if (gptToken.accountId) env.OPENAI_ACCOUNT_ID = gptToken.accountId;
-    } else if (config.openai?.apiKey) {
-      env.OPENAI_API_KEY = config.openai.apiKey;
-    }
-
-    // GitHub — pass token so edit mode can clone private repos
-    if (process.env.GITHUB_TOKEN) env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-
-    // Agent name — so edit mode uses the correct name
-    env.AGENT_NAME = config.agentName;
-
-    // Set this.editSession BEFORE start() so that saveHistoryCb (which reads
-    // this.editSession?.id) can persist the welcome message to session_messages.
-    // If start() throws, we reset the state in the catch block.
-    this.editSession = session;
-    this.editFirstPromptSent = false;
-    this.editUserId = userId;
-    try {
-      await session.start(env);
-      return ""; // Welcome message is sent by EditSession.start()
-    } catch (err) {
-      this.editSession = null;
-      this.editFirstPromptSent = false;
-      this.editUserId = null;
-      logger.error({ err }, "Failed to start edit session");
-      return `Erro ao iniciar modo de edicao: ${(err as Error).message}`;
-    }
-  }
 
   /**
    * Transcribe an audio MediaAttachment using Gemini.
@@ -1422,52 +1086,6 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
       logger.error({ err }, "Audio transcription via Gemini failed");
       return "[erro ao transcrever áudio]";
     }
-  }
-
-  private async cmdExitEdit(): Promise<string> {
-    if (!this.editSession) {
-      return "Voce nao esta no modo de edicao.";
-    }
-
-    await this.editSession.close();
-    this.editSession = null;
-    this.editFirstPromptSent = false;
-    this.editUserId = null;
-    return "*Modo de edicao encerrado.* Todas as mudancas foram descartadas.";
-  }
-
-  private async cmdDeploy(): Promise<string> {
-    if (!this.editSession) {
-      return "Voce nao esta no modo de edicao.";
-    }
-
-    if (this.editSession.getState() === "deploying") {
-      return "Deploy ja esta em andamento...";
-    }
-
-    // Deploy runs async — it'll send progress updates via the callback
-    this.editSession.deploy().catch((err) => {
-      logger.error({ err }, "Deploy failed");
-    });
-
-    return ""; // Progress messages come from deploy pipeline
-  }
-
-  private async cmdPublish(repo?: string): Promise<string> {
-    if (!this.editSession) {
-      return "Voce nao esta no modo de edicao.";
-    }
-
-    if (this.editSession.getState() === "deploying" || this.editSession.getState() === "publishing") {
-      return "Deploy/publish ja esta em andamento...";
-    }
-
-    // Publish runs async — it'll send progress updates via the callback
-    this.editSession.publish(repo).catch((err) => {
-      logger.error({ err }, "Publish failed");
-    });
-
-    return ""; // Progress messages come from publish pipeline
   }
 
   // ==================== AUTO-EXTRACTION ====================
@@ -1789,7 +1407,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
 
   /**
    * Create a WebAgentBridge for the web connector to access
-   * sessions, edit mode, and other agent internals.
+   * sessions and other agent internals.
    */
   createWebBridge(webConnector: WebConnector): WebAgentBridge {
     // Wire session message callback so sub-agent messages go to public session pages
@@ -1820,28 +1438,6 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         await this.sessionManager.sendToSession(sessionId, message);
       },
 
-      isEditModeActive: () => {
-        return this.editSession !== null;
-      },
-
-      startEditMode: async (connectorName: string, userId: string) => {
-        const result = await this.cmdStartEdit(Number(userId), connectorName);
-        if (result === "") {
-          // Success — notify web clients
-          webConnector.notifyEditMode(true);
-          return "";
-        }
-        return result; // Error message
-      },
-
-      stopEditMode: async () => {
-        const result = await this.cmdExitEdit();
-        if (result.startsWith("*Modo de edicao encerrado.*")) {
-          return "";
-        }
-        return result;
-      },
-
       getConversationHistory: async (userPhone: string, limit?: number, numericUserId?: number) => {
         // Always use user_id-based history
         return this.memory.getConversationHistoryByUserId(numericUserId!, limit);
@@ -1853,46 +1449,6 @@ Retorne APENAS as linhas de extracao, nada mais.`;
 
       getSessionInfoFromDB: async (sessionId: string) => {
         return this.sessionManager.getSessionInfoFromDB(sessionId);
-      },
-
-      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>> => {
-        if (!this.editSession) return [];
-        try {
-          const { query: dbQuery } = await import("./memory/db.js");
-          const result = await dbQuery(
-            `SELECT role, content, created_at, message_type, audio_url, image_urls, file_infos FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
-            [this.editSession.id]
-          );
-          return result.rows.map((row: any) => {
-            const msg: { role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> } = {
-              role: row.role,
-              content: row.content,
-              created_at: row.created_at,
-            };
-            if (row.message_type) msg.message_type = row.message_type;
-            if (row.audio_url) msg.audio_url = row.audio_url;
-            if (row.image_urls) {
-              try {
-                const parsed = JSON.parse(row.image_urls);
-                msg.image_urls = Array.isArray(parsed) ? parsed : [row.image_urls];
-              } catch {
-                msg.image_urls = [row.image_urls];
-              }
-            }
-            if (row.file_infos) {
-              try {
-                const parsed = JSON.parse(row.file_infos);
-                msg.file_infos = Array.isArray(parsed) ? parsed : undefined;
-              } catch {
-                // Ignore malformed JSON
-              }
-            }
-            return msg;
-          });
-        } catch (err) {
-          logger.warn({ err }, "Failed to load edit session history");
-          return [];
-        }
       },
 
       sendTranscription: (audioUrl: string, transcription: string) => {

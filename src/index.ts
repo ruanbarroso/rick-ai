@@ -14,7 +14,8 @@ import { WhatsAppConnector } from "./connectors/whatsapp.js";
 import { WebConnector } from "./connectors/web.js";
 import { UserService } from "./auth/user-service.js";
 import { closeVectorPool } from "./memory/vector-db.js";
-import { EditSession } from "./subagent/edit-session.js";
+
+
 import { startHealthServer, setHealthy, registerAgentApiServices, registerSessionKiller } from "./health.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -111,10 +112,6 @@ async function main() {
   // First sessions can then reuse the ready image instead of triggering a cold build.
   agent.warmupSubagentImage();
 
-  // Warm up edit-mode image as well.
-  // Edit mode is strict: if version changed, sessions wait for rebuild completion.
-  EditSession.warmupImage();
-
   // Register services for the sub-agent read-only API (/api/agent/*)
   registerAgentApiServices(memory, vectorMemory);
 
@@ -139,12 +136,6 @@ async function main() {
   });
 
   logger.info("Agent initialized with ConnectorManager");
-
-  // 8b. Clean up orphaned edit-session containers from previous runs
-  EditSession.cleanupOrphans().catch((err) => {
-    logger.warn({ err }, "Failed to clean up orphaned edit sessions on startup");
-  });
-  const stopReaper = EditSession.startReaper();
 
   // 9. Register connectors
   const whatsapp = new WhatsAppConnector(connectorManager, memory, userService);
@@ -180,9 +171,9 @@ async function main() {
   const STALE_SESSION_INTERVAL = 5 * 60 * 1000;   // 5 minutes
   const dockerCleanupTimer = setInterval(async () => {
     try {
-      // Prune stopped containers (not edit-session — those are handled by the reaper)
+      // Prune stopped containers
       await execFileAsync("docker", ["container", "prune", "-f"], { timeout: 30_000 });
-      // Prune dangling images (old subagent/edit/agent rebuilds)
+      // Prune dangling images (old subagent/agent rebuilds)
       await execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 });
       // Prune build cache older than 24h
       await execFileAsync("docker", ["builder", "prune", "-f", "--filter", "until=24h"], { timeout: 30_000 });
@@ -204,7 +195,6 @@ async function main() {
   // 11. Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, "Shutting down...");
-    stopReaper();
     clearInterval(dockerCleanupTimer);
     clearInterval(staleSessionTimer);
     diskMonitor?.stop();

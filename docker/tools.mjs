@@ -1,8 +1,8 @@
 /**
- * tools.mjs — Shared tool implementations for sub-agent and edit-agent
+ * tools.mjs — Shared tool implementations for sub-agent containers
  *
  * Single source of truth for workspace helpers and tool execution.
- * Both agent.mjs and edit-agent.mjs import from this module.
+ * Imported by agent.mjs.
  */
 
 import {

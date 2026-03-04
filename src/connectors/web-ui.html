@@ -149,13 +149,6 @@
     cursor: pointer;
   }
 
-  .sidebar.edit-mode .session-item,
-  .sidebar.edit-mode .session-kill,
-  .sidebar.edit-mode .new-session-btn {
-    pointer-events: none;
-    opacity: 0.4;
-  }
-
   .sidebar-header-text {
     flex: 1;
     min-width: 0;
@@ -360,23 +353,6 @@
   .new-session-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
-  }
-
-  /* Edit mode pulsing on main session */
-  .session-item.edit-mode-active {
-    background: rgba(239, 68, 68, 0.15);
-    border-left-color: var(--danger);
-    animation: editPulse 2s infinite;
-  }
-
-  @keyframes editPulse {
-    0%, 100% { box-shadow: inset 0 0 0 0 rgba(239, 68, 68, 0); }
-    50% { box-shadow: inset 0 0 8px 0 rgba(239, 68, 68, 0.3); }
-  }
-
-  /* Edit mode on sidebar */
-  .sidebar.edit-mode .sidebar-header {
-    background: #3b1111;
   }
 
   /* Settings gear button in sidebar header */
@@ -799,23 +775,6 @@
     height: 22px;
     fill: currentColor;
   }
-
-  .edit-mode-btn {
-    display: none;
-    padding: 6px 12px;
-    border-radius: 8px;
-    border: 1px solid var(--danger);
-    background: transparent;
-    color: var(--danger);
-    cursor: pointer;
-    font-size: 0.78rem;
-    font-weight: 600;
-    flex-shrink: 0;
-    transition: background 0.15s, color 0.15s;
-  }
-
-  .edit-mode-btn:hover { background: var(--danger); color: white; }
-  .edit-mode-btn.visible { display: inline-block; }
 
   /* Messages */
   .messages {
@@ -2195,8 +2154,6 @@
           <div class="sidebar-subtitle" id="header-status">Conectando...</div>
         </div>
         <div class="sidebar-header-actions">
-          <!-- Edit mode is entered via 3x click on agent logo (easter egg) -->
-          <span id="edit-mode-btn" style="display:none"></span>
           <button class="users-btn-header" id="users-btn-desktop" onclick="openUsers()" title="Usuarios">
             <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
             <span class="users-badge hidden" id="users-badge-desktop">0</span>
@@ -2335,11 +2292,11 @@
         <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
       </div>
       <div class="settings-section-body">
-        <!-- Version info (clickable for easter egg) -->
+        <!-- Version info -->
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
           <div>
             <span class="settings-label" style="margin-bottom:2px;">Versao instalada</span>
-            <div id="version-current" style="font-size:0.85rem;color:var(--text-secondary);cursor:default;user-select:none;" onclick="versionEasterEgg()">
+            <div id="version-current" style="font-size:0.85rem;color:var(--text-secondary);cursor:default;user-select:none;">
               Carregando...
             </div>
           </div>
@@ -2364,20 +2321,6 @@
           <button class="settings-action-btn primary" onclick="onVersionPrimaryClick()" id="btn-check-updates">
             Verificar atualizacoes
           </button>
-        </div>
-
-        <!-- Export/Import (hidden, revealed by easter egg) -->
-        <div id="version-dev-tools" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
-          <span class="settings-label" style="font-size:0.75rem;opacity:0.6;">Ferramentas de desenvolvimento</span>
-          <div class="settings-btn-row" style="margin-top:8px;">
-            <button class="settings-action-btn" onclick="exportCode()" id="btn-export-code">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Exportar
-            </button>
-            <button class="settings-action-btn" onclick="document.getElementById('import-code-input').click()" id="btn-import-code">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Importar
-            </button>
-            <input type="file" id="import-code-input" accept=".tar.gz,.tgz,.zip" style="display:none" onchange="importCode(this)">
-          </div>
         </div>
 
         <!-- Status area (shared by all operations) -->
@@ -2644,23 +2587,6 @@
       </div>
     </div>
 
-    <!-- Dev Repository (EASTER EGG) -->
-    <div class="settings-section" id="dev-repo-section" style="display:none;">
-      <div class="settings-section-header collapsed" onclick="toggleSection(this)">
-        <h3>Dev Repository</h3>
-        <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
-      </div>
-      <div class="settings-section-body collapsed">
-        <p class="settings-hint">Repositorio de desenvolvimento — modo de edicao</p>
-        <span class="settings-label">GitHub Repository URL</span>
-        <input type="text" class="settings-input" id="setting-dev-repo-url" placeholder="https://github.com/user/repo">
-
-        <div class="settings-btn-row">
-          <button class="settings-action-btn primary" onclick="saveDevRepo()">Salvar</button>
-        </div>
-      </div>
-    </div>
-
   </div>
 </div>
 
@@ -2735,8 +2661,6 @@
 <script>
 // ==================== DEFAULT AVATAR SVG (base64) ====================
 var DEFAULT_AVATAR = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><clipPath id="c"><circle cx="50" cy="50" r="50"/></clipPath></defs><g clip-path="url(#c)"><rect width="100" height="100" fill="#1a1a2e"/><ellipse cx="50" cy="62" rx="32" ry="36" fill="#F5D6B8"/><ellipse cx="50" cy="95" rx="28" ry="18" fill="#C8C8C8"/><path d="M18 42 Q20 15 32 18 Q34 5 44 12 Q48 2 55 10 Q60 0 66 8 Q72 2 74 14 Q82 10 80 22 Q90 20 84 35 Q78 38 70 38 Q60 32 50 34 Q40 32 30 38 Q22 38 18 42Z" fill="#8EC8D8"/><path d="M22 44 Q24 28 34 26 Q36 16 44 20 Q48 12 54 18 Q58 8 64 14 Q70 8 72 20 Q78 16 78 28 Q86 26 82 38 Q76 42 68 40 Q58 36 50 38 Q42 36 32 40 Q24 42 22 44Z" fill="#A8D8EA"/><ellipse cx="38" cy="52" rx="12" ry="13" fill="white"/><ellipse cx="62" cy="52" rx="12" ry="13" fill="white"/><circle cx="40" cy="52" r="5" fill="#2a1a0a"/><circle cx="64" cy="52" r="5" fill="#2a1a0a"/><circle cx="42" cy="50" r="2" fill="white"/><circle cx="66" cy="50" r="2" fill="white"/><path d="M26 43 Q34 38 42 42 Q50 40 58 42 Q66 38 74 43" stroke="#444" stroke-width="2.5" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="60" rx="2.5" ry="1.5" fill="#D4A88C"/><path d="M38 70 Q44 76 50 74 Q56 76 62 70" stroke="#C4756A" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M42 74 Q44 76 50 74 Q56 76 58 74" fill="#8B3A3A"/><path d="M54 74 Q55 80 56 88" stroke="#A8D8EA" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.7"/><circle cx="56" cy="90" rx="2.5" ry="3" fill="#A8D8EA" opacity="0.5"/></g></svg>');
-var EVIL_MORTY_AVATAR = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><clipPath id="c"><circle cx="50" cy="50" r="50"/></clipPath></defs><g clip-path="url(#c)"><rect width="100" height="100" fill="#15192a"/><ellipse cx="50" cy="63" rx="31" ry="35" fill="#f0c7a8"/><ellipse cx="50" cy="96" rx="30" ry="18" fill="#f6d24a"/><path d="M22 36 Q24 18 36 18 Q48 15 50 22 Q52 15 64 18 Q76 18 78 36 Q68 34 58 38 Q50 41 42 38 Q32 34 22 36Z" fill="#6b4f2e"/><path d="M32 43 Q40 38 50 41 Q60 38 68 43" stroke="#3a2a1a" stroke-width="2.6" fill="none" stroke-linecap="round"/><ellipse cx="38" cy="53" rx="10" ry="11" fill="#fff"/><ellipse cx="62" cy="53" rx="10" ry="11" fill="#fff"/><circle cx="39" cy="53" r="4.5" fill="#1a1a1a"/><circle cx="63" cy="53" r="4.5" fill="#1a1a1a"/><path d="M44 60 Q50 64 56 60" stroke="#b67666" stroke-width="2" fill="none"/><rect x="55" y="44" width="18" height="16" rx="2" fill="#111" opacity="0.95"/><path d="M38 71 Q50 77 62 71" stroke="#7a3f35" stroke-width="2.2" fill="none"/><rect x="18" y="84" width="64" height="20" fill="#f6d24a"/></g></svg>');
-
 // ==================== AGENT IDENTITY (dynamic) ====================
 var agentName = 'Rick';
 var agentAvatar = DEFAULT_AVATAR;
@@ -2771,50 +2695,25 @@ fetch('/api/identity')
   .catch(function() {});
 
 var sidebarAvatarEl = document.getElementById('sidebar-avatar');
-sidebarAvatarEl.addEventListener('mouseenter', function() {
-  avatarHovering = true;
-  avatarClickCount = 0;
-  if (avatarClickTimer) {
-    clearTimeout(avatarClickTimer);
-    avatarClickTimer = null;
-  }
-});
-sidebarAvatarEl.addEventListener('mouseleave', function() {
-  avatarHovering = false;
-  avatarClickCount = 0;
-  if (avatarClickTimer) {
-    clearTimeout(avatarClickTimer);
-    avatarClickTimer = null;
-  }
-});
 sidebarAvatarEl.addEventListener('click', function() {
-  // Silently ignore if edit access not available (no token, no write access, no provider).
-  // editAccessOk is pre-validated server-side and sent with the settings response.
-  if (!editAccessOk && !editModeActive) return;
-  if (!avatarHovering) return;
+  if (!githubWriteAccess) return;
   avatarClickCount++;
   if (avatarClickTimer) clearTimeout(avatarClickTimer);
   avatarClickTimer = setTimeout(function() {
     avatarClickCount = 0;
     avatarClickTimer = null;
-  }, 1200);
+  }, 600);
   if (avatarClickCount >= 3) {
     avatarClickCount = 0;
     if (avatarClickTimer) {
       clearTimeout(avatarClickTimer);
       avatarClickTimer = null;
     }
-    toggleEditModeDirect();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'message', text: 'Faça checkout no projeto https://github.com/ruanbarroso/rick-ai e me dê um resumo do estado atual do código' }));
+    }
   }
 });
-
-function updateAvatarInteractivity() {
-  // Avatar is always interactive — server validates permissions on start_edit.
-  sidebarAvatarEl.classList.remove('avatar-disabled');
-  sidebarAvatarEl.title = '';
-}
-
-updateAvatarInteractivity();
 
 // ==================== STATE ====================
 var ws = null;
@@ -2839,13 +2738,9 @@ var currentSessionId = 'main';
 var sessionMessages = { main: [] };
 var ephemeralSessions = [];
 var sessionsPollTimer = null;
-var editModeActive = false;
-var easterEggUnlocked = false;
-var devRepoConfigured = false;
 var oauthConnected = false;
-var providerConnectedForEdit = false;
 var githubTokenConfigured = false;
-var editAccessOk = false;
+var githubWriteAccess = false;
 var whatsappConnected = false;
 var currentSettings = {};
 var pendingUserCount = 0;
@@ -2854,10 +2749,8 @@ var selectedUserId = null;
 
 
 var blockedSectionCollapsed = true;
-var avatarHovering = false;
 var avatarClickCount = 0;
 var avatarClickTimer = null;
-// (removed pendingEditToggleAction — no confirm modal needed)
 var providerModes = { anthropic: 'oauth', openai: 'oauth' };
 var pendingOAuth = { provider: null, authUrl: '' };
 var oauthPopup = null;
@@ -3050,7 +2943,7 @@ function handleServerMessage(msg) {
       updateStatus('Online');
       requestSessions();
       startSessionPolling();
-      // Fetch settings to know provider connection status (avatar interactivity, edit mode)
+      // Fetch settings to know provider connection status
       ws.send(JSON.stringify({ type: 'get_settings' }));
       // Load conversation history
       ws.send(JSON.stringify({ type: 'get_history' }));
@@ -3071,7 +2964,7 @@ function handleServerMessage(msg) {
       break;
 
     case 'message':
-      var sid = msg.sessionId || (editModeActive ? 'edit' : 'main');
+      var sid = msg.sessionId || 'main';
       var from = msg.from === 'agent' ? 'agent' : 'user';
       var echoImageUrls = msg.imageUrls || (msg.imageUrl ? [msg.imageUrl] : null);
       var echoFileInfos = msg.fileInfos || null;
@@ -3236,15 +3129,6 @@ function handleServerMessage(msg) {
       updateEphemeralSessions(msg.sessions || []);
       break;
 
-    case 'edit_history':
-      loadEditHistory(msg.messages || []);
-      break;
-
-    case 'edit_mode':
-      editModeActive = !!msg.active;
-      updateEditModeUI();
-      break;
-
     case 'logs':
       renderLogs(msg.entries || []);
       break;
@@ -3288,12 +3172,6 @@ function handleServerMessage(msg) {
       break;
 
     case 'error':
-      if (editModeTransitioning) {
-        hideLoadingModal();
-        editModeTransitioning = false;
-        // Revert to actual state
-        applyEditModeVisuals(editModeActive);
-      }
       appendMessageToDOM('Erro: ' + (msg.text || 'desconhecido'), 'agent');
       break;
 
@@ -3370,25 +3248,21 @@ function updateEphemeralSessions(sessions) {
   // Update main session active state
   var mainItem = document.getElementById('session-main');
   if (currentSessionId === 'main') {
-    mainItem.className = 'session-item active' + (editModeActive ? ' edit-mode-active' : '');
+    mainItem.className = 'session-item active';
   } else {
-    mainItem.className = 'session-item' + (editModeActive ? ' edit-mode-active' : '');
+    mainItem.className = 'session-item';
   }
 }
 
 function switchSession(sessionId) {
-  if (editModeActive) {
-    showToast('Sessoes bloqueadas durante o modo de edicao');
-    return;
-  }
   currentSessionId = sessionId;
 
   // Update sidebar active states
   var mainItem = document.getElementById('session-main');
   if (sessionId === 'main') {
-    mainItem.className = 'session-item active' + (editModeActive ? ' edit-mode-active' : '');
+    mainItem.className = 'session-item active';
   } else {
-    mainItem.className = 'session-item' + (editModeActive ? ' edit-mode-active' : '');
+    mainItem.className = 'session-item';
   }
 
   // Update ephemeral items
@@ -3403,7 +3277,7 @@ function switchSession(sessionId) {
   }
 
   // If no local messages for this session, request from server
-  if (sessionId !== 'main' && sessionId !== 'edit' && (!sessionMessages[sessionId] || sessionMessages[sessionId].length === 0)) {
+  if (sessionId !== 'main' && (!sessionMessages[sessionId] || sessionMessages[sessionId].length === 0)) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'get_session_history', sessionId: sessionId }));
     }
@@ -3428,10 +3302,6 @@ function confirmClearHistory() {
 }
 
 function startNewSubAgent() {
-  if (editModeActive) {
-    showToast('Sessoes bloqueadas durante o modo de edicao');
-    return;
-  }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     showToast('Conexao offline');
     return;
@@ -3446,10 +3316,6 @@ function startNewSubAgent() {
 }
 
 function killSession(sessionId) {
-  if (editModeActive) {
-    showToast('Sessoes bloqueadas durante o modo de edicao');
-    return;
-  }
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'kill_session', sessionId: sessionId }));
   }
@@ -3543,38 +3409,6 @@ function loadHistory(messages) {
   }
 }
 
-// Restores edit session messages after F5 reload (populated from session_messages table)
-function loadEditHistory(messages) {
-  sessionMessages['edit'] = [];
-  for (var j = 0; j < messages.length; j++) {
-    var ehMsg = messages[j];
-    var ehFrom = ehMsg.role === 'assistant' ? 'agent' : 'user';
-    var ehTime = ehMsg.created_at ? new Date(ehMsg.created_at) : new Date();
-    var ehEntry = { text: ehMsg.content, from: ehFrom, time: ehTime };
-    if (ehMsg.message_type) ehEntry.messageType = ehMsg.message_type;
-    if (ehMsg.audio_url) ehEntry.audioUrl = ehMsg.audio_url;
-    if (ehMsg.image_urls) {
-      try {
-        var parsedUrls = JSON.parse(ehMsg.image_urls);
-        ehEntry.imageUrls = Array.isArray(parsedUrls) ? parsedUrls : [ehMsg.image_urls];
-      } catch (e) {
-        ehEntry.imageUrls = [ehMsg.image_urls];
-      }
-    }
-    if (ehMsg.file_infos) {
-      try {
-        var parsedFi = Array.isArray(ehMsg.file_infos) ? ehMsg.file_infos : JSON.parse(ehMsg.file_infos);
-        if (parsedFi && parsedFi.length > 0) ehEntry.fileInfos = parsedFi;
-      } catch (e) { /* ignore */ }
-    }
-    sessionMessages['edit'].push(ehEntry);
-  }
-  // Re-render if we're currently viewing the edit session
-  if (currentSessionId === 'edit') {
-    renderSessionMessages('edit');
-  }
-}
-
 // formatToolLine() and makeToolUseBlock() are loaded from /static/tool-blocks.js
 
 function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType, fileInfos) {
@@ -3652,7 +3486,7 @@ function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
   var hasImages = imageUrls && imageUrls.length > 0;
   var hasFileInfos = fileInfos && fileInfos.length > 0;
 
-  // Extract transcription from [Áudio transcrito: "..."] tag — present in edit mode after F5 reload
+  // Extract transcription from [Áudio transcrito: "..."] tag — present in saved content after reload
   var audioTranscricao = null;
   if (text) {
     var transcricaoMatch = text.match(/\[Áudio transcrito:\s*"([\s\S]+?)"\]/);
@@ -3683,7 +3517,7 @@ function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
     html += '<div class="audio-message">';
     html += '<audio controls preload="metadata" src="' + audioUrl + '"></audio>';
     if (audioTranscricao) {
-      // Transcription embedded in the saved content (edit mode after F5 reload)
+      // Transcription embedded in the saved content (after page reload)
       html += '<blockquote class="audio-transcription">' + renderText(audioTranscricao) + '</blockquote>';
     } else if (displayText) {
       var isPlaceholder = /^O usuario enviou um audio/i.test(displayText);
@@ -4128,14 +3962,6 @@ async function sendMessage() {
     ws.send(JSON.stringify(payload));
   } else {
     ws.send(JSON.stringify(payload));
-  }
-
-  // Easter egg
-  if (currentSessionId === 'main' && text === 'wubba lubba dub dub') {
-    easterEggUnlocked = true;
-    document.getElementById('dev-repo-section').style.display = 'block';
-    showToast('Portal gun activated! \uD83D\uDD2B');
-    checkEditModeButtonVisibility();
   }
 
   // Cleanup
@@ -4956,14 +4782,6 @@ function populateSettings(settings) {
   if (settings.vectorDatabaseUrl) {
     document.getElementById('setting-vector-database-url').value = settings.vectorDatabaseUrl;
   }
-  if (settings.devRepoUrl) {
-    document.getElementById('setting-dev-repo-url').value = settings.devRepoUrl;
-    devRepoConfigured = true;
-    if (easterEggUnlocked) {
-      document.getElementById('dev-repo-section').style.display = 'block';
-    }
-  }
-
   var geminiConnected = !!settings.geminiApiKeySet;
   var anthropicOAuthConnected = !!settings.anthropicOAuthConnected;
   var openaiOAuthConnected = !!settings.openaiOAuthConnected;
@@ -4974,7 +4792,6 @@ function populateSettings(settings) {
   var openaiAny = openaiOAuthConnected || openaiApiConnected;
 
   oauthConnected = anthropicOAuthConnected || openaiOAuthConnected;
-  providerConnectedForEdit = anthropicAny || openaiAny || geminiConnected;
 
   // One badge per provider header
   setStatusBadge('gemini-connection-status', geminiConnected);
@@ -5028,15 +4845,13 @@ function populateSettings(settings) {
     setProviderMode('openai', providerModes.openai || 'oauth', true);
   }
 
-  updateAvatarInteractivity();
-
   // GitHub token
   if (settings.githubToken) {
     document.getElementById('setting-github-token').value = settings.githubToken;
   }
   var ghTokenSet = !!settings.githubTokenSet;
   githubTokenConfigured = ghTokenSet;
-  editAccessOk = !!settings.editAccessOk;
+  githubWriteAccess = ghTokenSet;
   setStatusBadge('github-token-status', ghTokenSet);
   setApiKeyInputState('setting-github-token', ghTokenSet);
 
@@ -5045,8 +4860,6 @@ function populateSettings(settings) {
     whatsappConnected = !!settings.whatsappConnected;
   }
   updateWhatsAppStatusBadge();
-
-  checkEditModeButtonVisibility();
 }
 
 function setStatusBadge(id, connected) {
@@ -5143,14 +4956,10 @@ function applyAgentIdentity(name, logo) {
   if (loginTitle) loginTitle.textContent = agentName + ' AI';
   var loginAvatar = document.getElementById('login-avatar');
   if (loginAvatar) loginAvatar.src = agentAvatar;
-  // Don't overwrite sidebar avatar/title when edit mode is active —
-  // edit mode sets Evil Morty avatar and "Edit Mode" title which must persist.
-  if (!editModeActive) {
-    var sidebarTitle = document.getElementById('sidebar-title');
-    if (sidebarTitle) sidebarTitle.textContent = agentName + ' AI';
-    var sidebarAvatar = document.getElementById('sidebar-avatar');
-    if (sidebarAvatar) sidebarAvatar.src = agentAvatar;
-  }
+  var sidebarTitle = document.getElementById('sidebar-title');
+  if (sidebarTitle) sidebarTitle.textContent = agentName + ' AI';
+  var sidebarAvatar = document.getElementById('sidebar-avatar');
+  if (sidebarAvatar) sidebarAvatar.src = agentAvatar;
   var mainSession = document.getElementById('main-session-name');
   if (mainSession) mainSession.textContent = agentName.toLowerCase() === 'rick' ? 'Rick C-137' : agentName + ' Alpha';
   var logoPreview = document.getElementById('setting-agent-logo-preview');
@@ -5616,37 +5425,10 @@ var pendingDbSave = null;
 // When set, settings_saved will show combined "Conexao OK. Salvo!" feedback
 var pendingDbSaveConfirm = null;
 
-function saveDevRepo() {
-  var url = document.getElementById('setting-dev-repo-url').value.trim();
-  if (!url) {
-    showToast('Insira a URL do repositorio');
-    return;
-  }
-  devRepoConfigured = true;
-  sendSaveSettings({ devRepoUrl: url });
-  checkEditModeButtonVisibility();
-}
-
 // ==================== VERSION & UPDATES ====================
-
-var versionClickCount = 0;
-var versionClickTimer = null;
-var devToolsRevealed = false;
 
 function getAuthToken() {
   return password || '';
-}
-
-function versionEasterEgg() {
-  versionClickCount++;
-  if (versionClickTimer) clearTimeout(versionClickTimer);
-  versionClickTimer = setTimeout(function() { versionClickCount = 0; }, 1500);
-
-  if (versionClickCount >= 5 && !devToolsRevealed) {
-    devToolsRevealed = true;
-    document.getElementById('version-dev-tools').style.display = 'block';
-    showToast('Dev tools ativadas');
-  }
 }
 
 function loadVersionInfo() {
@@ -5999,130 +5781,6 @@ function codeOpStatus(text, opts) {
   }
 }
 
-function exportCode() {
-  var btn = document.getElementById('btn-export-code');
-  btn.disabled = true;
-      codeOpStatus('Gerando arquivo...', { spinning: true });
-
-  var token = getAuthToken();
-  fetch('/api/code/export?token=' + encodeURIComponent(token))
-    .then(function(resp) {
-      if (!resp.ok) return resp.text().then(function(t) { throw new Error(t || 'Erro ' + resp.status); });
-      // Get filename from Content-Disposition header
-      var cd = resp.headers.get('Content-Disposition') || '';
-      var match = cd.match(/filename="?([^"]+)"?/);
-      var filename = match ? match[1] : 'rick-ai-source.tar.gz';
-      return resp.blob().then(function(blob) {
-        return { blob: blob, filename: filename };
-      });
-    })
-    .then(function(result) {
-      // Trigger download
-      var url = URL.createObjectURL(result.blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = result.filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      var sizeMB = (result.blob.size / (1024 * 1024)).toFixed(1);
-      codeOpStatus('Exportado (' + sizeMB + ' MB)', { success: true });
-    })
-    .catch(function(err) {
-      codeOpStatus('Erro: ' + err.message, { error: true });
-    })
-    .finally(function() {
-      btn.disabled = false;
-    });
-}
-
-function importCode(input) {
-  var file = input.files && input.files[0];
-  if (!file) return;
-  // Reset the input so the same file can be selected again
-  input.value = '';
-
-  if (!file.name.endsWith('.zip') && !file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
-    codeOpStatus('Selecione um arquivo .tar.gz ou .zip', { error: true });
-    return;
-  }
-
-  var sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-  if (!confirm('Importar "' + file.name + '" (' + sizeMB + ' MB)?\n\nIsso vai:\n1. Substituir o codigo-fonte\n2. Rebuild + restart do container\n\nSe o build falhar, rollback automatico.')) {
-    return;
-  }
-
-  var btn = document.getElementById('btn-import-code');
-  var exportBtn = document.getElementById('btn-export-code');
-  btn.disabled = true;
-  exportBtn.disabled = true;
-  codeOpStatus('Enviando (' + sizeMB + ' MB)...', { spinning: true, progress: 0 });
-
-  var token = getAuthToken();
-  var xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/code/import?token=' + encodeURIComponent(token), true);
-  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-
-  xhr.upload.onprogress = function(e) {
-    if (e.lengthComputable) {
-      var pct = Math.round((e.loaded / e.total) * 30); // upload = 0-30%
-      codeOpStatus('Enviando...', { spinning: true, progress: pct });
-    }
-  };
-
-  xhr.onload = function() {
-    if (xhr.status === 200) {
-      try {
-        var resp = JSON.parse(xhr.responseText);
-        codeOpStatus('Deploy concluido! Reconectando...', { success: true, progress: 100, log: resp.log || '' });
-        // The server will restart — try to reconnect
-        setTimeout(function() { location.reload(); }, 3000);
-      } catch(e) {
-        codeOpStatus('Deploy concluido! Reconectando...', { success: true, progress: 100 });
-        setTimeout(function() { location.reload(); }, 3000);
-      }
-    } else {
-      var errText = xhr.responseText;
-      try { errText = JSON.parse(errText).error || errText; } catch(e) {}
-      try {
-        var errResp = JSON.parse(xhr.responseText);
-        codeOpStatus('Falha no deploy: ' + (errResp.error || errText), { error: true, log: errResp.log || '' });
-      } catch(e) {
-        codeOpStatus('Falha no deploy: ' + errText, { error: true });
-      }
-      btn.disabled = false;
-      exportBtn.disabled = false;
-    }
-  };
-
-  xhr.onerror = function() {
-    codeOpStatus('Erro de rede ao enviar ZIP', { error: true });
-    btn.disabled = false;
-    exportBtn.disabled = false;
-  };
-
-  // Start polling for deploy progress after upload
-  xhr.onreadystatechange = function() {
-    if (xhr.readyState === 2) { // headers received = upload done, deploy started
-      codeOpStatus('Deploy em andamento... (build + smoke test)', { spinning: true, progress: 35 });
-      // Poll progress
-      var pollCount = 0;
-      var pollInterval = setInterval(function() {
-        pollCount++;
-        var pct = Math.min(35 + pollCount * 3, 95);
-        if (xhr.readyState === 4) {
-          clearInterval(pollInterval);
-          return;
-        }
-        codeOpStatus('Deploy em andamento... (build + smoke test)', { spinning: true, progress: pct });
-      }, 2000);
-    }
-  };
-
-  xhr.send(file);
-}
-
 function testDatabase(which) {
   var resultEl;
   var url;
@@ -6150,92 +5808,6 @@ function sendSaveSettings(settings) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'save_settings', settings: settings }));
   }
-}
-
-// ==================== EDIT MODE ====================
-function checkEditModeButtonVisibility() {
-  // Edit mode button is no longer shown — edit mode is entered via 3x click on agent logo.
-  // This function is kept as a no-op to avoid breaking callers.
-}
-
-function startEditMode() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'start_edit' }));
-  }
-}
-
-function stopEditMode() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'stop_edit' }));
-  }
-}
-
-var editModeTransitioning = false;
-
-function toggleEditModeDirect() {
-  editModeTransitioning = true;
-
-  if (editModeActive) {
-    editModeActive = false;
-    applyEditModeVisuals(false);
-    showLoadingModal('Desativando...');
-    stopEditMode();
-  } else {
-    // Don't switch UI yet — wait for server confirmation via edit_mode message.
-    // If validation fails (no token, no write access, no provider), the server
-    // returns an error without sending edit_mode, so the UI stays unchanged.
-    showLoadingModal('Ativando...');
-    startEditMode();
-  }
-}
-
-function showLoadingModal(text) {
-  document.getElementById('loading-text').textContent = text || 'Carregando...';
-  document.getElementById('loading-overlay').classList.add('visible');
-  document.getElementById('loading-modal').classList.add('visible');
-}
-
-function hideLoadingModal() {
-  document.getElementById('loading-overlay').classList.remove('visible');
-  document.getElementById('loading-modal').classList.remove('visible');
-}
-
-function applyEditModeVisuals(active) {
-  var sidebar = document.getElementById('sidebar');
-  var mainItem = document.getElementById('session-main');
-  var editBtn = document.getElementById('edit-mode-btn');
-  var sidebarAvatar = document.getElementById('sidebar-avatar');
-  var sidebarTitle = document.getElementById('sidebar-title');
-
-  if (active) {
-    sidebar.classList.add('edit-mode');
-    editBtn.classList.remove('visible');
-    sidebarAvatar.src = EVIL_MORTY_AVATAR;
-    sidebarTitle.textContent = 'Edit Mode';
-    mainItem.className = 'session-item edit-mode-active';
-
-    // Switch to edit session (fresh messages container)
-    if (!sessionMessages['edit']) sessionMessages['edit'] = [];
-    currentSessionId = 'edit';
-    renderSessionMessages('edit');
-  } else {
-    sidebar.classList.remove('edit-mode');
-    checkEditModeButtonVisibility();
-    sidebarAvatar.src = agentAvatar;
-    sidebarTitle.textContent = agentName + ' AI';
-    mainItem.className = 'session-item active';
-
-    // Switch back to main session
-    currentSessionId = 'main';
-    renderSessionMessages('main');
-  }
-}
-
-function updateEditModeUI() {
-  hideLoadingModal();
-  editModeTransitioning = false;
-  // Apply real state from server (in case optimistic was wrong)
-  applyEditModeVisuals(editModeActive);
 }
 
 // ==================== UI HELPERS ====================

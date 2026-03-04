@@ -810,7 +810,7 @@ export class SessionManager {
 
   /**
    * Build environment variables for the Agent API (JWT token + upfront credentials).
-   * Same mechanism as EditSession.buildAgentApiEnv — all sub-agents share the same API.
+   * Build environment variables for the Agent API (JWT token + upfront credentials).
    */
   private async buildAgentApiEnv(session: SubAgentSession): Promise<Record<string, string>> {
     const agentEnv: Record<string, string> = {};
@@ -1171,7 +1171,6 @@ export class SessionManager {
   }
 
   // deleteSessionMessages removed — session messages are now preserved for admin audit.
-  // Only edit session messages are deleted on /exit (handled in agent.ts onCloseCb).
 
   // ==================== IMAGE INJECTION ====================
 

@@ -37,7 +37,6 @@ Built on Oracle Cloud Always Free VMs, Rick orchestrates multiple LLM providers 
 2. If user is **pending** or **blocked**: message is saved for admin visibility, but no LLM processing occurs. New pending users trigger a badge update in the admin's Web UI.
 3. **Agent.handleMessage()** serializes per user (message queue prevents race conditions) and routes it:
    - `/commands` → slash command handler
-   - Edit mode active → Claude Code container
    - Audio → transcribed to text via Gemini, then routed normally
    - Active sub-agent session → relay (continuation, close, or nag)
    - Classification skipped for **business** users (cannot invoke sub-agents)
@@ -82,7 +81,7 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 | Model | Provider | Used For |
 |-------|----------|----------|
 | Gemini 3.0 Flash | Google | Default chat, classifier, audio transcription, memory extraction |
-| Claude Opus 4.6 | Anthropic | Sub-agent primary (via OAuth), edit mode |
+| Claude Opus 4.6 | Anthropic | Sub-agent primary (via OAuth) |
 | GPT-5.3 Codex | OpenAI | Sub-agent fallback (via OAuth) |
 | Gemini 3.1 Pro | Google | Sub-agent fallback |
 
@@ -130,18 +129,6 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 
 Each sub-agent gets a unique variant name assigned sequentially per user. When `AGENT_NAME=Rick`, names come from canonical Rick and Morty characters (Pickle Rick, Evil Rick, Doofus Rick, etc. — 130+ variants). For other agent names, generic suffixes are used (Alpha, Beta, Quantum, Nebula, etc. — 90+ variants). Names are persisted in the `variant_name` column and served to all clients from the server.
 
-### Self-Editing (edit mode)
-
-Rick can edit his own source code. Edit mode is entered via a hidden easter egg: **triple-click on the agent avatar** in the web UI sidebar. Requires a GitHub Token and at least one AI provider (Claude/GPT/Gemini) to be configured.
-
-1. **Enter edit mode** — Triple-click the agent avatar. Creates a staging copy of the repository excluding runtime artifacts and local data (`.git`, `node_modules`, `dist`, `data`, `auth_info`, `.env`), launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-5.3 Codex → Gemini 3.1 Pro**, chosen automatically based on which credentials are available.
-   - `subagent-edit` image is warmed up in background at startup and auto-rebuilt when source hash/version labels differ; edit mode always waits for the current image (never runs with stale image).
-2. Send prompts describing what to change — the active provider edits the files directly inside the isolated container.
-3. `/deploy` — Triggers the deploy pipeline:
-   - Backup current `src/` → build candidate image → smoke test (health-only mode) → swap containers → 60s watchdog → rollback on failure
-4. `/publish [usuario/repo]` — Deploy + push code to GitHub. Defaults to `ruanbarroso/rick-ai`. Resolves GitHub token from Rick's memories, validates write access, runs the full deploy pipeline, then pushes. Push strategy: fast-forward → rebase → `--force-with-lease`.
-5. **Exit edit mode** — Triple-click the Evil Morty avatar (shown while in edit mode). Discards uncommitted changes.
-
 ### Web UI
 
 The Web UI (`https://rick.barroso.tec.br`) provides a full browser-based interface (admin only):
@@ -156,7 +143,6 @@ The Web UI (`https://rick.barroso.tec.br`) provides a full browser-based interfa
 - **OAuth management**: Connect/disconnect Claude and GPT directly from the web
 - **WhatsApp management**: View QR code, disconnect/reconnect WhatsApp
 - **Version management**: Check current version, check for updates from GitHub, install updates (OTA)
-- **Developer tools**: Export/import source code (hidden behind easter egg — 5 rapid clicks on version text)
 
 ### Audio & Image Support
 
@@ -179,14 +165,6 @@ There are no slash commands — all interaction is via natural language. The age
 - **Memories**: "Lembra que meu email é x@y.com", "O que voce sabe sobre mim?"
 - **Sub-agents**: Complex tasks (coding, web research, email) are automatically delegated to sub-agents
 - **OAuth/Settings**: Managed via the web UI settings panel
-- **Edit mode**: Enter/exit via triple-click on the agent avatar (easter egg)
-
-**Edit mode only commands** (used inside edit mode, not in normal conversation):
-
-| Command | Description |
-|---------|-------------|
-| `/deploy` | Deploy staged changes (build + smoke test + swap + watchdog) |
-| `/publish [user/repo]` | Deploy + push to GitHub (default: `ruanbarroso/rick-ai`) |
 
 ### HTTP Endpoints
 
@@ -290,15 +268,12 @@ rick-ai/
 │       ├── classifier.ts              # Gemini Flash task classifier (SELF vs DELEGATE)
 │       ├── types.ts                   # Session/task type definitions
 │       ├── agent-token.ts             # JWT (HS256) token generation/verification for sub-agents
-│       ├── session-manager.ts         # Docker container lifecycle, NDJSON relay
-│       └── edit-session.ts            # Self-editing mode (Claude Code)
+│       └── session-manager.ts         # Docker container lifecycle, NDJSON relay
 ├── docker/
 │   ├── subagent/                      # Unified sub-agent (current)
 │   │   ├── Dockerfile                 # Chromium + Playwright + Node.js image
 │   │   └── agent.mjs                  # Autonomous agent script (LLM cascade + tools)
-│   ├── subagent-edit.Dockerfile       # Multi-provider edit image (Claude→GPT→Gemini, auto-built)
-│   ├── rick-api.mjs                   # Shared: Rick API client, tool declarations, tool handler, timeout constants
-│   └── edit-agent.mjs                 # Entry point: routes to Claude CLI / OpenAI / Gemini API
+│   └── rick-api.mjs                   # Shared: Rick API client, tool declarations, tool handler, timeout constants
 ├── scripts/
 │   └── deploy.sh                      # Safe deploy pipeline (backup → build → smoke → swap → watchdog)
 ├── Dockerfile                         # Main agent image (Node.js 22 + Docker CLI)
@@ -333,11 +308,8 @@ Host Docker (cluster-24g)
 │   ├── Mounts scripts/            # Deploy scripts (read-only)
 │   └── Port 80                    # HTTP + WebSocket (web UI, health, API)
 │
-├── subagent-<id>                  # Ephemeral, created per task (unified)
-│   └── agent.mjs + Playwright + Chromium
-│
-└── subagent-edit-*                # Ephemeral, created per edit session
-    └── edit-agent.mjs (Claude Code CLI / GPT-5.3 Codex / Gemini 3.1 Pro) + Playwright
+└── subagent-<id>                  # Ephemeral, created per task (unified)
+    └── agent.mjs + Playwright + Chromium
 ```
 
 ## Environment Variables
@@ -356,13 +328,13 @@ Host Docker (cluster-24g)
 | `WEB_AUTH_PASSWORD` | No | — | Password for Web UI authentication. Required for Web connector to start. |
 | `WEB_BASE_URL` | No | — | Public base URL for session links (e.g., `https://rick.barroso.tec.br`) |
 | `WEB_PORT` | No | `80` | Port for the HTTP + WebSocket server |
-| `GITHUB_TOKEN` | No | — | GitHub Personal Access Token. Used for version checks (avoids rate limits), `/publish`, and sub-agents. Can also be set via Web UI settings. |
+| `GITHUB_TOKEN` | No | — | GitHub Personal Access Token. Used for version checks (avoids rate limits) and sub-agents. Can also be set via Web UI settings. |
 | `AGENT_NAME` | No | `Rick` | Agent display name |
 | `AGENT_LANGUAGE` | No | `pt-BR` | Agent language |
 | `OWNER_PHONE` | No | — | Owner's phone number for permission checks |
 | `MAX_MEMORY_ITEMS` | No | `1000` | Max structured memories per user |
 | `CONVERSATION_HISTORY_LIMIT` | No | `20` | Max messages in conversation context |
-| `HOST_PROJECT_DIR` | No | `$PWD` | Host path to project dir (for edit mode / deploy). Auto-injected by docker-compose via `$PWD`. |
+| `HOST_PROJECT_DIR` | No | `$PWD` | Host path to project dir (for deploy). Auto-injected by docker-compose via `$PWD`. |
 | `VECTOR_DB_MAX_SIZE_GB` | No | `36` | Max vector DB size in GB before eviction |
 | `DISK_CHECK_INTERVAL_MINUTES` | No | `10` | Disk check interval in minutes |
 | `HEALTH_ONLY` | No | — | When `true`, starts only health server + DB (no connectors). Used by deploy smoke test. |
@@ -419,11 +391,11 @@ memory_embeddings (id, content, category, source, embedding vector(768),
 
 ## Deploy Pipeline
 
-The deploy pipeline (`scripts/deploy.sh`) ensures safe self-editing:
+The deploy pipeline (`scripts/deploy.sh`) ensures safe OTA updates:
 
 ```
 1. Backup managed project tree (all non-artifact files)
-2. Sync staged files from edit session (full tree minus artifacts and local data directories)
+2. Sync staged files (full tree minus artifacts and local data directories)
 3. Build candidate Docker image (TypeScript errors = fail)
 4. Start candidate in HEALTH_ONLY mode on port 8081
 5. Health check (20 attempts, 3s apart)
