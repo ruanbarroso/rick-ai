@@ -5,6 +5,44 @@ function firstStringValue(obj: Record<string, unknown>): string | null {
   return null;
 }
 
+function formatShellCommand(inp: Record<string, unknown>): string | null {
+  if (typeof inp.commandLine === "string" && inp.commandLine.trim()) {
+    return inp.commandLine.trim();
+  }
+
+  const command = typeof inp.command === "string" ? inp.command.trim() : "";
+  const args = Array.isArray(inp.args)
+    ? inp.args.map((a) => String(a)).filter((a) => a.trim().length > 0)
+    : [];
+  if (!command) return null;
+
+  if (command === "bash" && args[0] === "-lc" && typeof args[1] === "string" && args[1].trim()) {
+    return args[1].trim();
+  }
+
+  return args.length > 0 ? `${command} ${args.join(" ")}` : command;
+}
+
+function compactToolError(name: string, message: string): string {
+  let raw = String(message || "erro").trim();
+
+  if (name === "run_command") {
+    raw = raw.replace(/^Sa[ií]da\s+\d+:\s*/i, "").trim();
+
+    const stderrMarker = raw.lastIndexOf("STDERR:");
+    if (stderrMarker >= 0) {
+      raw = raw.slice(stderrMarker + 7).trim();
+    } else {
+      const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const preferred = [...lines].reverse().find((l) => /\berror\b|\bfatal\b|pathspec|not found|permission denied|acesso negado/i.test(l));
+      raw = preferred || lines[lines.length - 1] || raw;
+    }
+  }
+
+  const collapsed = raw.replace(/\s+/g, " ").trim();
+  return collapsed || "erro";
+}
+
 /**
  * Build a standardized tool-use line for terminal blocks.
  * Format: `\n`[tool]` `arg`\n`
@@ -13,10 +51,9 @@ export function buildToolUseLine(toolName: string, input?: Record<string, unknow
   const inp = input ?? {};
   let out = `\n\`[${toolName}]\` `;
 
-  if (typeof inp.command === "string") {
-    out += `\`$ ${inp.command}\`\n`;
-  } else if (typeof inp.commandLine === "string") {
-    out += `\`$ ${inp.commandLine}\`\n`;
+  const shell = formatShellCommand(inp);
+  if (shell) {
+    out += `\`$ ${shell}\`\n`;
   } else if (typeof inp.filePath === "string" || typeof inp.file_path === "string") {
     out += `\`${inp.filePath ?? inp.file_path}\`\n`;
   } else if (typeof inp.notebook_path === "string") {
@@ -88,7 +125,7 @@ export function formatToolLifecycleLine(input: {
     return `\n\`[${name}:ok]\` \`${duration}${suffix}\`\n`;
   }
 
-  const raw = String(input.message || "erro").replace(/\s+/g, " ").trim();
+  const raw = compactToolError(name, String(input.message || "erro"));
   const short = raw.length > 160 ? `${raw.slice(0, 157)}...` : raw;
   return `\n\`[${name}:erro]\` \`${short || "erro"}\`\n`;
 }
