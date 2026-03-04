@@ -39,8 +39,8 @@ interface AuthenticatedClient {
  * Avoids circular imports by using a minimal type.
  */
 export interface WebAgentBridge {
-  /** Get sub-agent sessions for the UI */
-  getSessionsForUI(): Array<{
+  /** Get sub-agent sessions for the UI (optionally filtered by owner user ID) */
+  getSessionsForUI(ownerUserId?: number): Array<{
     id: string;
     state: string;
     taskDescription: string;
@@ -1468,7 +1468,7 @@ export class WebConnector implements Connector {
       return;
     }
 
-    const sessions = this.agentBridge.getSessionsForUI();
+    const sessions = this.agentBridge.getSessionsForUI(this.adminUserId ?? undefined);
     this.send(ws, { type: "sessions", sessions });
   }
 
@@ -1499,7 +1499,7 @@ export class WebConnector implements Connector {
       // Broadcast ack as agent message in the main chat (all authenticated clients)
       this.broadcastToAuthenticated({ type: "message", text: ack, from: "agent" });
       // Broadcast updated sessions list so every open tab refreshes the sidebar
-      const sessions = this.agentBridge.getSessionsForUI();
+      const sessions = this.agentBridge.getSessionsForUI(this.adminUserId ?? undefined);
       this.broadcastToAuthenticated({ type: "sessions", sessions });
     } catch (err) {
       logger.error({ err }, "Failed to start blank sub-agent session");

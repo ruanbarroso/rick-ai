@@ -1414,9 +1414,10 @@ Retorne APENAS as linhas de extracao, nada mais.`;
     });
 
     const bridge: WebAgentBridge = {
-      getSessionsForUI: () => {
+      getSessionsForUI: (ownerUserId?: number) => {
         const sessions = this.sessionManager.getLiveSessions();
         return sessions
+          .filter((s) => ownerUserId == null || s.numericUserId === ownerUserId)
           .map((s) => ({
             id: s.id,
             state: s.state,
