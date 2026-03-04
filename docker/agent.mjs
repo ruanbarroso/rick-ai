@@ -182,6 +182,16 @@ function looksLikeTechnicalCompletion(text) {
   return /(corrigi|ajustei|removi|alterei|refatorei|implementei|adicionei|criei|resolvi|conclui|finalizei|feito|aplicad|deploy|commit)/.test(normalized);
 }
 
+function looksLikeTechnicalActionRequest(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(commit|push|pull request|pr\b|git|corrig|ajust|remov|alter|refator|implemen|adicion|cria|bug|erro|teste|build|codigo|code|arquivo|repo|reposit)/.test(normalized);
+}
+
+function acknowledgesPriorExecution(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(ja foi|já foi|etapa anterior|anteriormente|nesta conversa|como eu disse|sem alteracoes pendentes|sem alterações pendentes|nao executei|não executei)/.test(normalized);
+}
+
 function isMaxStepsError(err) {
   return !!err && (err.code === "MAX_STEPS_REACHED" || err.message === "MAX_STEPS_REACHED");
 }
@@ -1663,7 +1673,9 @@ rl.on("line", async (line) => {
     if (
       !currentTurnStats?.maxStepsReached
       && (currentTurnStats?.toolCalls ?? 0) === 0
+      && looksLikeTechnicalActionRequest(userText)
       && looksLikeTechnicalCompletion(result)
+      && !acknowledgesPriorExecution(result)
     ) {
       const guarded = buildNoExecutionGuardMessage();
       emitProviderError("Sem execucao concreta detectada nesta rodada; resposta final protegida.");
