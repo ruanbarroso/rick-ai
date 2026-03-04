@@ -31,9 +31,26 @@ function looksLikeMcpErrorText(text) {
   if (!normalized) return false;
   return /(^|\n)#+\s*error\b/i.test(normalized)
     || /^error\s*:/i.test(normalized)
+    || /invalid input/i.test(normalized)
+    || /\binvalid_type\b/i.test(normalized)
+    || /"path"\s*:\s*\[\s*"ref"\s*\]/i.test(normalized)
     || /browsertype\.launchpersistentcontext/i.test(normalized)
     || /\bnot found at\b/i.test(normalized)
     || /\beacces\b/i.test(normalized);
+}
+
+function parseValidationErrorArray(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return null;
+    const hasValidation = parsed.some((item) => item && typeof item === "object" && (
+      item.code === "invalid_type"
+      || /invalid input/i.test(String(item.message || ""))
+    ));
+    return hasValidation ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 async function ensureMcpClient() {
@@ -99,6 +116,15 @@ function normalizeResult(result) {
 
   if (looksLikeMcpErrorText(joined)) {
     throw new Error(joined.slice(0, 2000));
+  }
+
+  const bracketStart = joined.indexOf("[");
+  if (bracketStart >= 0) {
+    const maybeArray = joined.slice(bracketStart);
+    const validationErrors = parseValidationErrorArray(maybeArray);
+    if (validationErrors) {
+      throw new Error(JSON.stringify(validationErrors).slice(0, 2000));
+    }
   }
 
   try {

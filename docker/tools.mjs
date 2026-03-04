@@ -99,6 +99,40 @@ export function toolStatusLabel(name, input) {
 // ── Core tool execution (shared by both agents) ─────────────────────────────
 
 const COMMAND_TIMEOUT = 120_000; // 2 minutes
+
+function isPlaywrightRefValidationError(err) {
+  const text = String(err?.message || err || "").toLowerCase();
+  return text.includes("invalid input")
+    || text.includes("invalid_type")
+    || text.includes("\"path\":[\"ref\"]")
+    || text.includes("expected string") && text.includes("ref");
+}
+
+async function callBrowserWithSelectorFallback(action, input = {}) {
+  try {
+    return await callBrowser(action, input);
+  } catch (err) {
+    const selector = typeof input.selector === "string" ? input.selector.trim() : "";
+    if (!selector || !isPlaywrightRefValidationError(err)) {
+      throw err;
+    }
+
+    if (action === "type") {
+      const text = String(input.text ?? "");
+      const submit = !!input.submit;
+      const code = `async (page) => { const el = page.locator(${JSON.stringify(selector)}).first(); await el.waitFor({ state: 'visible' }); await el.fill(${JSON.stringify(text)}); ${submit ? "await el.press('Enter');" : ""} return { ok: true, fallback: 'run_code:type' }; }`;
+      return await callBrowser("run_code", { code });
+    }
+
+    if (action === "click") {
+      const code = `async (page) => { const el = page.locator(${JSON.stringify(selector)}).first(); await el.waitFor({ state: 'visible' }); await el.click(); return { ok: true, fallback: 'run_code:click' }; }`;
+      return await callBrowser("run_code", { code });
+    }
+
+    throw err;
+  }
+}
+
 async function callBrowser(action, payload = {}) {
   if (action === "close") {
     await closePlaywrightMcp();
@@ -205,7 +239,7 @@ export async function executeTool(name, input, extraHandler) {
     }
     case "browser_click": {
       try {
-        const result = await callBrowser("click", { selector: input.selector });
+        const result = await callBrowserWithSelectorFallback("click", { selector: input.selector });
         return redactSecrets(JSON.stringify(result, null, 2));
       } catch (e) {
         return `Erro no browser_click: ${e.message}`;
@@ -213,7 +247,7 @@ export async function executeTool(name, input, extraHandler) {
     }
     case "browser_type": {
       try {
-        const result = await callBrowser("type", {
+        const result = await callBrowserWithSelectorFallback("type", {
           selector: input.selector,
           text: input.text,
           submit: !!input.submit,
