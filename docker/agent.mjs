@@ -75,6 +75,7 @@ function isCurrentSuperseded() {
 function emitMessage(text) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
+  if (shouldSuppressInterimExecutionClaim(text)) return;
   emit({ type: "message", text: redactUserVisibleText(text) });
 }
 
@@ -139,6 +140,7 @@ let currentTurnPolicy = {
   allowPush: false,
   allowPr: false,
   executionRequired: false,
+  expectedActions: { gitPull: false, gitCommit: false, gitPush: false },
   planningOnly: false,
   executionMode: "build",
 };
@@ -205,12 +207,27 @@ function looksLikeTechnicalActionRequest(text) {
 
 function looksLikeExecutionNowRequest(text) {
   const normalized = String(text || "").toLowerCase();
-  return /(execute|executa|executar|pode executar|agora|manda ver|aplica|aplicar|faz|fa[çc]a|segue com a implementa|pode seguir)/.test(normalized);
+  return /(execute|executa|executar|pode executar|agora|manda ver|aplica|aplicar|fa[çc]a|segue com a implementa|pode seguir)/.test(normalized);
 }
 
 function looksLikeConcreteExecutionRequest(text) {
   const normalized = String(text || "").toLowerCase();
-  return /(execute|executa|executar|aplica|aplicar|implement|corrig|ajust|alter|remov|refator|rode|rodar|roda|fa[çc]a|faz|git\s+pull|git\s+commit|git\s+push|checkout|clone|clona|cria\s+pr|abre\s+pr)/.test(normalized);
+  return /(execute|executa|executar|aplica|aplicar|implement|corrig|ajust|alter|remov|refator|rode|rodar|roda|fa[çc]a|git\s+pull|git\s+commit|git\s+push|checkout|clone|clona|cria\s+pr|abre\s+pr)/.test(normalized);
+}
+
+function looksLikeExecutionClaim(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(conclu[ií]d|feito|aplicad|implementei|ajustei|corrigi|executei|push realizado|commit realizado|ja subi|j[aá] est[aá] no remoto|resultado final|o que eu fiz)/.test(normalized)
+    || looksLikeExecutionPromise(normalized)
+    || looksLikeTechnicalCompletion(normalized);
+}
+
+function shouldSuppressInterimExecutionClaim(text) {
+  if (!currentTurnPolicy?.executionRequired) return false;
+  if (currentTurnPolicy.executionMode !== "build") return false;
+  if (!currentTurnStats) return false;
+  if ((currentTurnStats.executedToolCalls ?? 0) > 0) return false;
+  return looksLikeExecutionClaim(text);
 }
 
 function looksLikePlanDraftRequest(text) {
@@ -271,7 +288,21 @@ function parseTurnPolicy(text) {
   const allowPush = explicitAllowPush || (inheritRecentGitPolicy && recentGitPolicy.allowPush);
   const allowPr = explicitAllowPr || (inheritRecentGitPolicy && recentGitPolicy.allowPr);
   const executionRequired = !looksLikePlanDraftRequest(normalized) && looksLikeConcreteExecutionRequest(normalized);
-  return { allowCommit, allowPush, allowPr, executionRequired, planningOnly: false, executionMode: "build" };
+  const expectedActions = {
+    gitPull: /\bgit\s+pull\b|\bpull\s+--rebase\b/.test(normalized),
+    gitCommit: /\bgit\s+commit\b|\bcommit\b|\bcommitar\b/.test(normalized),
+    gitPush: /\bgit\s+push\b|\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b/.test(normalized),
+  };
+  return { allowCommit, allowPush, allowPr, executionRequired, expectedActions, planningOnly: false, executionMode: "build" };
+}
+
+function missingExpectedActions() {
+  if (!currentTurnPolicy?.expectedActions || !currentTurnStats?.completedActions) return [];
+  const missing = [];
+  if (currentTurnPolicy.expectedActions.gitPull && !currentTurnStats.completedActions.gitPull) missing.push("git pull");
+  if (currentTurnPolicy.expectedActions.gitCommit && !currentTurnStats.completedActions.gitCommit) missing.push("git commit");
+  if (currentTurnPolicy.expectedActions.gitPush && !currentTurnStats.completedActions.gitPush) missing.push("git push");
+  return missing;
 }
 
 function buildPlanningOnlyPrompt(userText) {
@@ -391,6 +422,9 @@ function collectTurnEvidence(toolName, input) {
     if (currentTurnStats.commands.length < 6) {
       currentTurnStats.commands.push(cmd);
     }
+    if (/\bgit\s+pull\b|\bpull\s+--rebase\b/.test(cmd)) currentTurnStats.completedActions.gitPull = true;
+    if (/\bgit\s+commit\b/.test(cmd)) currentTurnStats.completedActions.gitCommit = true;
+    if (/\bgit\s+push\b/.test(cmd)) currentTurnStats.completedActions.gitPush = true;
     if (/(npx\s+tsc|npm\s+test|pnpm\s+test|yarn\s+test|bun\s+test|pytest|go\s+test|cargo\s+test|mvn\s+test|gradle\s+test|npm\s+run\s+build|pnpm\s+build|yarn\s+build|eslint|vitest|jest)/.test(cmd)) {
       if (currentTurnStats.validations.length < 4) {
         currentTurnStats.validations.push(cmd);
@@ -620,6 +654,7 @@ async function runToolWithLifecycle(name, input) {
       toolErrors: 0,
       executedToolCalls: 0,
       blockedByPolicyReason: "",
+      completedActions: { gitPull: false, gitCommit: false, gitPush: false },
       lastToolFingerprint: "",
       repeatedToolCount: 0,
       maxStepsReached: false,
@@ -1841,6 +1876,9 @@ rl.on("line", async (line) => {
     ...parsedPolicy,
     executionMode: requestedMode,
     executionRequired: requestedMode === "plan" ? false : parsedPolicy.executionRequired,
+    expectedActions: requestedMode === "plan"
+      ? { gitPull: false, gitCommit: false, gitPush: false }
+      : parsedPolicy.expectedActions,
     planningOnly: requestedMode === "plan" ? true : parsedPolicy.planningOnly,
   };
   currentTurnStats = {
@@ -1856,6 +1894,7 @@ rl.on("line", async (line) => {
     toolErrors: 0,
     executedToolCalls: 0,
     blockedByPolicyReason: "",
+    completedActions: { gitPull: false, gitCommit: false, gitPush: false },
     lastToolFingerprint: "",
     repeatedToolCount: 0,
     maxStepsReached: false,
@@ -1898,7 +1937,7 @@ rl.on("line", async (line) => {
   if (isSuperseded()) {
     currentAbortController = null;
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
     return;
   }
@@ -2009,7 +2048,7 @@ rl.on("line", async (line) => {
             emitWaitingUser();
           }
           currentTurnStats = null;
-          currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
+          currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
           pendingContinuation = null;
           return;
         }
@@ -2077,7 +2116,7 @@ rl.on("line", async (line) => {
   // Check if superseded before emitting response
   if (isSuperseded()) {
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
     return;
   }
@@ -2085,7 +2124,7 @@ rl.on("line", async (line) => {
   if (lastErr) {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
   } else {
     currentTurnStats.phase = "reporting";
@@ -2116,6 +2155,19 @@ rl.on("line", async (line) => {
         result = `Nao executei as acoes tecnicas porque o comando foi bloqueado por politica antes da execucao: ${currentTurnStats.blockedByPolicyReason}`;
       } else {
         result = "Falha operacional: esta rodada exigia execucao, mas o modelo encerrou sem chamar ferramentas. Nenhuma alteracao foi aplicada.";
+      }
+    }
+
+    if (
+      currentTurnPolicy.executionMode === "build"
+      && currentTurnPolicy.executionRequired
+      && !currentTurnStats?.maxStepsReached
+      && (currentTurnStats?.executedToolCalls ?? 0) > 0
+      && !looksLikePlanDraftRequest(turnTaskText)
+    ) {
+      const missing = missingExpectedActions();
+      if (missing.length > 0) {
+        result = `Falha operacional: esta rodada exigia execucao de ${missing.join(", ")}, mas essas acoes nao foram executadas. Nenhuma conclusao tecnica foi assumida.`;
       }
     }
 
@@ -2155,7 +2207,7 @@ rl.on("line", async (line) => {
     // The session stays alive — the host will show the compose bar again.
     emitWaitingUser(maxStepsTriggered ? undefined : result);
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
   }
 });
 
