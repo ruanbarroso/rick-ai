@@ -302,6 +302,10 @@ function detectBlockedGitAction(toolName, input) {
     return "Bloqueado por politica: so posso fazer git commit quando voce pedir explicitamente neste turno.";
   }
 
+  if (/(^|\s)rg(\s|$)/.test(commandText)) {
+    return "Comando bloqueado: `rg` (ripgrep) nao esta disponivel neste ambiente. Use a ferramenta `grep` para busca de conteudo e `glob` para localizar arquivos.";
+  }
+
   return null;
 }
 
@@ -682,6 +686,7 @@ REGRAS:
 11. Seja conciso nas mensagens intermediárias, detalhado no resultado final.
 12. NUNCA envie o output bruto de ferramentas como mensagem para o usuário. Resuma os resultados relevantes em vez de colar output extenso (como variáveis de ambiente, logs longos, etc.). O output das ferramentas já é registrado internamente.
 12.1 Para shell, prefira run_command com commandLine (ex.: "git status && npm test"). Evite chamar apenas "bash" sem comando.
+12.2 NUNCA use \`rg\` via run_command. Para busca de conteúdo use a ferramenta \`grep\`; para localizar arquivos use \`glob\`.
 13. Quando o usuário mencionar um projeto ou repositório por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
 14. Quando o usuário ENSINAR algo útil (URLs, nomes de org, preferências, padrões de projeto), use rick_save_memory para salvar para futuros agentes. Exemplos: URL de organização GitHub, stack tecnológica preferida, convenções de código.
 15. Se o usuário pedir para CORRIGIR, AJUSTAR, REMOVER, ALTERAR comportamento, BUG ou UI, trate como tarefa de código: leia arquivos relevantes, faça a alteração real via ferramenta de edição e valide. Não responda apenas com promessa textual.
