@@ -129,7 +129,8 @@ function emitContextCompacted(removedMessages, summaryChars) {
 
 let toolCallSequence = 0;
 
-const MAX_TOOL_CALLS_PER_TURN = 24;
+const MAX_TOOL_CALLS_PER_TURN = 80;
+const MAX_REPEAT_SAME_TOOL_CALL = 8;
 const MAX_STEPS_MESSAGE = "Limite maximo de passos desta rodada foi atingido. Parei as ferramentas para evitar loop; se quiser, me diga o proximo foco e eu continuo em uma nova rodada.";
 
 let currentTurnStats = null;
@@ -234,6 +235,21 @@ function trimForReceipt(text, max = 90) {
   const normalized = redactUserVisibleText(String(text || "")).replace(/\s+/g, " ").trim();
   if (!normalized) return "";
   return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
+}
+
+function toolFingerprint(name, input) {
+  const base = { name };
+  if (!input || typeof input !== "object") return JSON.stringify(base);
+  const compact = {
+    command: input.command,
+    args: input.args,
+    path: input.path ?? input.filePath ?? input.file_path,
+    pattern: input.pattern,
+    url: input.url,
+    query: input.query,
+    description: input.description,
+  };
+  return JSON.stringify({ ...base, ...compact });
 }
 
 function collectTurnEvidence(toolName, input) {
@@ -418,6 +434,8 @@ async function runToolWithLifecycle(name, input) {
       changedPaths: new Set(),
       commands: [],
       validations: [],
+      lastToolFingerprint: "",
+      repeatedToolCount: 0,
       maxStepsReached: false,
     };
   }
@@ -434,6 +452,21 @@ async function runToolWithLifecycle(name, input) {
   emitToolCallStart(callId, name, input);
   currentTurnStats.toolCalls += 1;
   currentTurnStats.toolNames.add(name);
+
+  const fp = toolFingerprint(name, input);
+  if (currentTurnStats.lastToolFingerprint === fp) {
+    currentTurnStats.repeatedToolCount += 1;
+  } else {
+    currentTurnStats.lastToolFingerprint = fp;
+    currentTurnStats.repeatedToolCount = 1;
+  }
+
+  if (currentTurnStats.repeatedToolCount >= MAX_REPEAT_SAME_TOOL_CALL) {
+    currentTurnStats.maxStepsReached = true;
+    const err = new Error("MAX_STEPS_REACHED");
+    err.code = "MAX_STEPS_REACHED";
+    throw err;
+  }
 
   const blockedReason = detectBlockedGitAction(name, input);
   if (blockedReason) {
@@ -1600,6 +1633,8 @@ rl.on("line", async (line) => {
     changedPaths: new Set(),
     commands: [],
     validations: [],
+    lastToolFingerprint: "",
+    repeatedToolCount: 0,
     maxStepsReached: false,
   };
   const imageInputs = await loadImageInputs(msg.images);
