@@ -19,6 +19,7 @@
  */
 
 import { createInterface } from "readline";
+import { readFile } from "node:fs/promises";
 import { WORKSPACE, listWorkspace, executeTool, toolStatusLabel } from "./tools.mjs";
 import { coreToolDeclarations } from "./tool-declarations.mjs";
 import {
@@ -324,11 +325,16 @@ function seedProviderHistory(providerName) {
 let currentAbortController = null;
 let interruptRequested = false;
 
-async function runGeminiLoop(userText, signal, modelId) {
+async function runGeminiLoop(userText, signal, modelId, imageInputs = []) {
   // Remember history length so we can roll back on error.
   // This prevents dangling user messages that break alternation requirements.
   const historyLenBefore = geminiHistory.length;
-  geminiHistory.push({ role: "user", parts: [{ text: userText }] });
+  const userParts = [];
+  for (const img of imageInputs) {
+    userParts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
+  }
+  userParts.push({ text: userText });
+  geminiHistory.push({ role: "user", parts: userParts });
   let contents = geminiHistory;
 
   try {
@@ -379,6 +385,37 @@ async function runGeminiLoop(userText, signal, modelId) {
 // Codex Responses API endpoint — used when authenticating via OAuth
 // (user's ChatGPT Pro/Plus subscription). Same endpoint opencode uses.
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
+
+function mimeFromImagePath(path) {
+  const lower = String(path || "").toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return "image/png";
+}
+
+async function loadImageInputs(imagePaths) {
+  if (!Array.isArray(imagePaths) || imagePaths.length === 0) return [];
+  const loaded = [];
+  for (const p of imagePaths) {
+    if (!p || typeof p !== "string") continue;
+    try {
+      const bytes = await readFile(p);
+      const mimeType = mimeFromImagePath(p);
+      const base64 = bytes.toString("base64");
+      loaded.push({
+        path: p,
+        mimeType,
+        base64,
+        dataUrl: `data:${mimeType};base64,${base64}`,
+      });
+    } catch (err) {
+      process.stderr.write(`Falha ao carregar imagem ${p}: ${err.message}\n`);
+    }
+  }
+  return loaded;
+}
 
 function parseCodexOutput(data) {
   let text = "";
@@ -478,7 +515,7 @@ async function parseCodexStreamResponse(res, signal) {
   return { text, toolCalls };
 }
 
-async function runOpenAILoop(userText, signal) {
+async function runOpenAILoop(userText, signal, imageInputs = []) {
   const apiKey = process.env.OPENAI_API_KEY ?? "";
   // Prefer dynamically cached token (freshly refreshed from host API) over
   // the static env var which may have expired since container start.
@@ -493,7 +530,7 @@ async function runOpenAILoop(userText, signal) {
   const useCodexApi = !!oauthToken && !apiKey;
 
   if (useCodexApi) {
-    return runOpenAICodexLoop(userText, oauthToken, signal);
+    return runOpenAICodexLoop(userText, oauthToken, signal, imageInputs);
   }
 
   // Standard API key mode — Chat Completions API
@@ -511,7 +548,15 @@ async function runOpenAILoop(userText, signal) {
   openaiHistory.push({ role: "user", content: userText });
   let messages = openaiHistory;
 
+  const visionContent = imageInputs.length > 0
+    ? [
+        { type: "text", text: userText },
+        ...imageInputs.map((img) => ({ type: "image_url", image_url: { url: img.dataUrl } })),
+      ]
+    : null;
+
   try {
+    let firstRequest = true;
     while (true) {
       // Check for interrupt before making LLM call
       if (signal?.aborted || interruptRequested) {
@@ -524,6 +569,10 @@ async function runOpenAILoop(userText, signal) {
         ? AbortSignal.any([timeoutSignal, signal])
         : timeoutSignal;
 
+      const requestMessages = (firstRequest && visionContent)
+        ? [...messages.slice(0, -1), { role: "user", content: visionContent }]
+        : messages;
+
       const res = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         signal: combinedSignal,
@@ -532,8 +581,9 @@ async function runOpenAILoop(userText, signal) {
           Authorization: authHeader,
           ...(process.env.OPENAI_ACCOUNT_ID ? { "OpenAI-Organization": process.env.OPENAI_ACCOUNT_ID } : {}),
         },
-        body: JSON.stringify({ model: "gpt-5.3-codex", messages, tools: openaiTools }),
+        body: JSON.stringify({ model: "gpt-5.3-codex", messages: requestMessages, tools: openaiTools }),
       });
+      firstRequest = false;
 
       if (!res.ok) {
         const errText = await res.text();
@@ -579,7 +629,7 @@ async function runOpenAILoop(userText, signal) {
  * Uses the OpenAI Responses API format (not Chat Completions).
  * Same approach as opencode's codex auth plugin.
  */
-async function runOpenAICodexLoop(userText, oauthToken, signal) {
+async function runOpenAICodexLoop(userText, oauthToken, signal, imageInputs = []) {
   const accountId = process.env.OPENAI_ACCOUNT_ID || "";
 
   // Build Responses API input format
@@ -611,7 +661,10 @@ async function runOpenAICodexLoop(userText, oauthToken, signal) {
     parameters: t.parameters,
   }));
 
+  const visionBlocks = imageInputs.map((img) => ({ type: "input_image", image_url: img.dataUrl }));
+
   try {
+    let firstRequest = true;
     while (true) {
       if (signal?.aborted || interruptRequested) {
         throw new Error("Interrupted");
@@ -632,14 +685,25 @@ async function runOpenAICodexLoop(userText, oauthToken, signal) {
         headers["ChatGPT-Account-Id"] = accountId;
       }
 
+      const requestInput = (firstRequest && visionBlocks.length > 0)
+        ? [
+            ...input.slice(0, -1),
+            {
+              role: "user",
+              content: [{ type: "input_text", text: userText }, ...visionBlocks],
+            },
+          ]
+        : input;
+
       const body = {
         model: "gpt-5.3-codex",
         instructions: SYSTEM_PROMPT,
-        input,
+        input: requestInput,
         tools: responsesTools,
         store: false,
         stream: true,
       };
+      firstRequest = false;
 
       const res = await fetch(CODEX_API_ENDPOINT, {
         method: "POST",
@@ -698,7 +762,7 @@ async function runOpenAICodexLoop(userText, oauthToken, signal) {
 // Same approach as opencode's anthropic-auth plugin.
 const CLAUDE_OAUTH_TOOL_PREFIX = "mcp_";
 
-async function runClaudeLoop(userText, signal) {
+async function runClaudeLoop(userText, signal, imageInputs = []) {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
   // Prefer dynamically cached token (freshly refreshed from host API) over
   // the static env var which may have expired since container start.
@@ -713,7 +777,22 @@ async function runClaudeLoop(userText, signal) {
 
   // Remember history length so we can roll back on error
   const historyLenBefore = claudeHistory.length;
-  claudeHistory.push({ role: "user", content: userText });
+  if (imageInputs.length > 0) {
+    const content = [
+      ...imageInputs.map((img) => ({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: img.mimeType,
+          data: img.base64,
+        },
+      })),
+      { type: "text", text: userText },
+    ];
+    claudeHistory.push({ role: "user", content });
+  } else {
+    claudeHistory.push({ role: "user", content: userText });
+  }
   let messages = claudeHistory;
 
   // For OAuth mode, prefix tool names in existing history's tool_use/tool_result blocks
@@ -933,6 +1012,7 @@ rl.on("line", async (line) => {
   if (msg.type !== "message" || !msg.text) return;
 
   const userText = msg.text;
+  const imageInputs = await loadImageInputs(msg.images);
   const selectedModelId = isSupportedModelId(msg.model) ? msg.model : DEFAULT_MODEL_ID;
   
   // Track generation for this message (if provided by host)
@@ -980,28 +1060,28 @@ rl.on("line", async (line) => {
         modelId: model.id,
         name: model.label,
         seedName: "Claude",
-        fn: (text, sig) => runClaudeLoop(text, sig),
+        fn: (text, sig, imgs) => runClaudeLoop(text, sig, imgs),
       });
     } else if (model.id === "gpt-5.3-codex") {
       cascade.push({
         modelId: model.id,
         name: model.label,
         seedName: "OpenAI",
-        fn: (text, sig) => runOpenAILoop(text, sig),
+        fn: (text, sig, imgs) => runOpenAILoop(text, sig, imgs),
       });
     } else if (model.id === "gemini-3.1-pro") {
       cascade.push({
         modelId: model.id,
         name: model.label,
         seedName: "Gemini",
-        fn: (text, sig) => runGeminiLoop(text, sig, "gemini-3.1-pro"),
+        fn: (text, sig, imgs) => runGeminiLoop(text, sig, "gemini-3.1-pro", imgs),
       });
     } else if (model.id === "gemini-3.0-flash") {
       cascade.push({
         modelId: model.id,
         name: model.label,
         seedName: "Gemini",
-        fn: (text, sig) => runGeminiLoop(text, sig, "gemini-3.0-flash"),
+        fn: (text, sig, imgs) => runGeminiLoop(text, sig, "gemini-3.0-flash", imgs),
       });
     }
   }
@@ -1027,7 +1107,7 @@ rl.on("line", async (line) => {
       try {
         emitStatus(`Modelo atual: ${provider.name}`);
         emitModelActive(provider.modelId, provider.name);
-        result = await provider.fn(userText, signal);
+        result = await provider.fn(userText, signal, imageInputs);
         lastErr = null;
         break;
       } catch (err) {
