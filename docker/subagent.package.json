@@ -1,0 +1,9 @@
+{
+  "name": "rick-subagent-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Runtime dependencies for rick-ai subagent container",
+  "dependencies": {
+    "playwright": "1.55.0"
+  }
+}

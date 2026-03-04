@@ -12,17 +12,21 @@ RUN useradd -m -u 1001 -s /bin/bash agent \
     && mkdir -p /app /ms-playwright \
     && chown -R agent:agent /app /ms-playwright
 
+# Install runtime deps in a cache-friendly layer.
+# Keep this before copying frequently changed agent source files.
+COPY docker/subagent.package.json /app/package.json
+RUN cd /app && npm install --omit=dev
+
+# Install Playwright browsers (used for web browsing tasks)
+# Must run after setting PLAYWRIGHT_BROWSERS_PATH so runtime and install path match.
+RUN cd /app && npx playwright install chromium --with-deps
+
 # Copy agent entry point and shared modules
 COPY docker/tools.mjs /app/tools.mjs
 COPY docker/tool-declarations.mjs /app/tool-declarations.mjs
 COPY docker/rick-api.mjs /app/rick-api.mjs
 COPY docker/browser-agent.mjs /app/browser-agent.mjs
 COPY docker/agent.mjs /app/agent.mjs
-RUN cd /app && npm init -y && npm install playwright@1.55.0 --omit=dev
-
-# Install Playwright browsers (used for web browsing tasks)
-# Must run after setting PLAYWRIGHT_BROWSERS_PATH so runtime and install path match.
-RUN cd /app && npx playwright install chromium --with-deps
 
 RUN chmod -R a+rX /ms-playwright
 RUN chown -R agent:agent /app
