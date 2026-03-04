@@ -400,7 +400,7 @@ export class SessionManager {
    * Look up the persisted status and variant name of a session from the DB.
    * Returns { status, variantName } or null if not found.
    */
-  async getSessionInfoFromDB(sessionId: string): Promise<{ status: string; variantName: string | null } | null> {
+  async getSessionInfoFromDB(sessionId: string): Promise<{ status: string; variantName: string | null; numericUserId: number | null } | null> {
     try {
       const result = await query(
         `SELECT status, variant_name, user_id FROM sub_agent_sessions WHERE id = $1`,
@@ -413,6 +413,7 @@ export class SessionManager {
         return {
           status: row.status,
           variantName,
+          numericUserId: row.user_id ?? null,
         };
       }
       return null;

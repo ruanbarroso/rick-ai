@@ -308,6 +308,115 @@ body {
 
 .model-modal-close:hover { background: var(--surface2); color: var(--text); }
 
+.model-modal-link {
+  margin-top: 10px;
+  width: 100%;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.12);
+  color: #93c5fd;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.model-modal-link:hover { background: rgba(59, 130, 246, 0.18); }
+
+.providers-modal { width: min(520px, 100%); }
+
+.provider-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.12);
+  margin-bottom: 10px;
+}
+
+.provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.provider-name {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.provider-badge {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  color: var(--text2);
+}
+
+.provider-badge.connected {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.provider-badge.fallback {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.provider-email {
+  margin-top: 8px;
+  color: var(--text2);
+  font-size: 0.85rem;
+}
+
+.provider-note {
+  color: var(--text2);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.provider-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.provider-action {
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.provider-action.danger {
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.provider-action.ghost {
+  background: transparent;
+  color: var(--text2);
+}
+
+.oauth-input {
+  width: 100%;
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface2);
+  color: var(--text);
+  outline: none;
+}
+
+.oauth-input:focus { border-color: var(--accent); }
+
 .input-area {
   display: flex;
   align-items: flex-end;
@@ -675,7 +784,47 @@ body {
   <div class="model-modal" role="dialog" aria-modal="true" aria-label="Selecionar modelo">
     <div class="model-modal-title">Selecionar modelo</div>
     <div class="model-options" id="model-options"></div>
+    <button class="model-modal-link" id="providers-link-btn" onclick="openProvidersModal()" style="display:none;">Provedores de IA</button>
     <button class="model-modal-close" onclick="closeModelModal()">Fechar</button>
+  </div>
+</div>
+
+<div class="model-modal-overlay" id="providers-modal-overlay" onclick="if (event.target === this) closeProvidersModal()">
+  <div class="model-modal providers-modal" role="dialog" aria-modal="true" aria-label="Provedores de IA">
+    <div class="model-modal-title">Provedores de IA</div>
+    <div class="provider-card" id="provider-card-anthropic">
+      <div class="provider-head">
+        <div class="provider-name">Anthropic</div>
+        <span class="provider-badge" id="provider-badge-anthropic">Nao configurado</span>
+      </div>
+      <div class="provider-email" id="provider-email-anthropic" style="display:none;"></div>
+      <div class="provider-actions">
+        <button class="provider-action" id="provider-action-anthropic" onclick="toggleProviderOAuth('anthropic')">Conectar</button>
+      </div>
+    </div>
+    <div class="provider-card" id="provider-card-openai">
+      <div class="provider-head">
+        <div class="provider-name">OpenAI</div>
+        <span class="provider-badge" id="provider-badge-openai">Nao configurado</span>
+      </div>
+      <div class="provider-email" id="provider-email-openai" style="display:none;"></div>
+      <div class="provider-actions">
+        <button class="provider-action" id="provider-action-openai" onclick="toggleProviderOAuth('openai')">Conectar</button>
+      </div>
+    </div>
+    <button class="model-modal-close" onclick="closeProvidersModal()">Fechar</button>
+  </div>
+</div>
+
+<div class="model-modal-overlay" id="oauth-input-modal-overlay" onclick="if (event.target === this) closeOAuthInputModal()">
+  <div class="model-modal oauth-input-modal" role="dialog" aria-modal="true" aria-label="Conectar provedor">
+    <div class="model-modal-title" id="oauth-input-title">Conectar provedor</div>
+    <div class="provider-note" id="oauth-input-help"></div>
+    <input type="text" class="oauth-input" id="oauth-input" placeholder="Cole o codigo ou URL de callback">
+    <div class="provider-actions">
+      <button class="provider-action" onclick="submitOAuthInput()">Conectar</button>
+      <button class="provider-action ghost" onclick="closeOAuthInputModal()">Cancelar</button>
+    </div>
   </div>
 </div>
 
@@ -745,6 +894,12 @@ var availableModels = [
   { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
   { id: 'gemini-3.0-flash', label: 'Gemini 3.0 Flash' }
 ];
+var canManageProviders = false;
+var pendingOAuthProvider = null;
+var providerStatus = {
+  anthropic: { connected: false, source: 'none', email: null },
+  openai: { connected: false, source: 'none', email: null }
+};
 
 document.title = sessionName;
 document.getElementById('header-name').textContent = sessionName;
@@ -773,6 +928,8 @@ function renderModelOptions() {
     html += '<button class="model-option' + active + '" onclick="selectModel(\'' + m.id + '\')">' + escapeHtml(m.label) + '</button>';
   }
   container.innerHTML = html;
+  var linkBtn = document.getElementById('providers-link-btn');
+  if (linkBtn) linkBtn.style.display = canManageProviders ? 'block' : 'none';
 }
 
 function openModelModal() {
@@ -784,6 +941,113 @@ function openModelModal() {
 function closeModelModal() {
   var overlay = document.getElementById('model-modal-overlay');
   if (overlay) overlay.classList.remove('visible');
+}
+
+function openProvidersModal() {
+  if (!canManageProviders) return;
+  closeModelModal();
+  var overlay = document.getElementById('providers-modal-overlay');
+  if (overlay) overlay.classList.add('visible');
+  requestSessionOAuthStatus();
+}
+
+function closeProvidersModal() {
+  var overlay = document.getElementById('providers-modal-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}
+
+function openOAuthInputModal(provider, authUrl) {
+  pendingOAuthProvider = provider;
+  var title = document.getElementById('oauth-input-title');
+  var help = document.getElementById('oauth-input-help');
+  var input = document.getElementById('oauth-input');
+  if (title) title.textContent = provider === 'openai' ? 'Conectar OpenAI' : 'Conectar Anthropic';
+  if (help) {
+    help.textContent = provider === 'openai'
+      ? 'A autorizacao foi aberta em nova aba. Cole aqui a URL completa de callback.'
+      : 'A autorizacao foi aberta em nova aba. Cole aqui o codigo (ou codigo#state).';
+  }
+  if (input) {
+    input.value = '';
+    input.placeholder = provider === 'openai'
+      ? 'http://localhost:1455/auth/callback?code=...&state=...'
+      : 'codigo#state';
+  }
+  var overlay = document.getElementById('oauth-input-modal-overlay');
+  if (overlay) overlay.classList.add('visible');
+  if (input) setTimeout(function() { input.focus(); }, 0);
+  if (authUrl) {
+    try { window.open(authUrl, '_blank'); } catch (e) {}
+  }
+}
+
+function closeOAuthInputModal() {
+  var overlay = document.getElementById('oauth-input-modal-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}
+
+function submitOAuthInput() {
+  if (!pendingOAuthProvider || !ws || ws.readyState !== WebSocket.OPEN) return;
+  var input = document.getElementById('oauth-input');
+  var value = (input && input.value ? input.value : '').trim();
+  if (!value) return;
+  ws.send(JSON.stringify({ type: 'session_oauth_exchange', provider: pendingOAuthProvider, input: value }));
+}
+
+function requestSessionOAuthStatus() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'get_session_oauth_status' }));
+}
+
+function updateProviderCard(provider, data) {
+  var badge = document.getElementById('provider-badge-' + provider);
+  var email = document.getElementById('provider-email-' + provider);
+  var action = document.getElementById('provider-action-' + provider);
+  if (!badge || !email || !action) return;
+
+  badge.classList.remove('connected', 'fallback');
+  if (data.connected && data.source === 'user') {
+    badge.classList.add('connected');
+    badge.textContent = 'Conectado';
+    action.textContent = 'Desconectar';
+    action.className = 'provider-action danger';
+  } else if (data.connected && data.source === 'admin') {
+    badge.classList.add('fallback');
+    badge.textContent = 'Usando admin';
+    action.textContent = 'Conectar';
+    action.className = 'provider-action';
+  } else {
+    badge.textContent = 'Nao configurado';
+    action.textContent = 'Conectar';
+    action.className = 'provider-action';
+  }
+
+  if (data.email) {
+    email.style.display = 'block';
+    email.textContent = data.email;
+  } else {
+    email.style.display = 'none';
+    email.textContent = '';
+  }
+}
+
+function renderProviderStatus(status) {
+  if (!status) return;
+  canManageProviders = !!status.canManageProviders;
+  providerStatus = status.providers || providerStatus;
+  updateProviderCard('anthropic', providerStatus.anthropic || { connected: false, source: 'none', email: null });
+  updateProviderCard('openai', providerStatus.openai || { connected: false, source: 'none', email: null });
+  renderModelOptions();
+}
+
+function toggleProviderOAuth(provider) {
+  if (!canManageProviders || !ws || ws.readyState !== WebSocket.OPEN) return;
+  var current = providerStatus[provider] || { connected: false, source: 'none' };
+  if (current.connected && current.source === 'user') {
+    ws.send(JSON.stringify({ type: 'session_oauth_disconnect', provider: provider }));
+    return;
+  }
+  ws.send(JSON.stringify({ type: 'session_oauth_start', provider: provider }));
 }
 
 function selectModel(modelId) {
@@ -1100,7 +1364,9 @@ function connect() {
           if (msg.session.preferredModel) {
             selectedModelId = msg.session.preferredModel;
           }
+          canManageProviders = !!msg.session.canManageProviders;
           updateModelButton();
+          renderModelOptions();
           updateHeaderIcon();
           updateSessionState(msg.session.state);
         }
@@ -1115,6 +1381,26 @@ function connect() {
           updateModelButton();
           renderModelOptions();
           closeModelModal();
+        }
+        break;
+
+      case 'session_oauth_status':
+        renderProviderStatus(msg.status || null);
+        break;
+
+      case 'session_oauth_start':
+        if (msg.provider && msg.authUrl) {
+          openOAuthInputModal(msg.provider, msg.authUrl);
+        }
+        break;
+
+      case 'session_oauth_result':
+        if (msg.success) {
+          closeOAuthInputModal();
+          pendingOAuthProvider = null;
+          requestSessionOAuthStatus();
+        } else if (msg.error) {
+          alert(msg.error);
         }
         break;
     }

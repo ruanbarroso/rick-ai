@@ -1418,6 +1418,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
             taskDescription: s.taskDescription,
             variantName: s.variantName,
             preferredModel: s.preferredModel,
+            numericUserId: s.numericUserId,
             createdAt: s.createdAt,
             updatedAt: s.updatedAt,
           }))

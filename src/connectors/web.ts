@@ -46,6 +46,7 @@ export interface WebAgentBridge {
     taskDescription: string;
     variantName?: string;
     preferredModel: SubAgentModelId;
+    numericUserId: number | null;
     createdAt: number;
     updatedAt: number;
   }>;
@@ -65,7 +66,7 @@ export interface WebAgentBridge {
   /** Get message history for a sub-agent session */
   getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Get the persisted status and variant name of a session from the DB */
-  getSessionInfoFromDB(sessionId: string): Promise<{ status: string; variantName: string | null } | null>;
+  getSessionInfoFromDB(sessionId: string): Promise<{ status: string; variantName: string | null; numericUserId: number | null } | null>;
   /** Send audio transcription update to all web clients */
   sendTranscription(audioUrl: string, transcription: string): void;
   /** Clear conversation history for a user (uses numericUserId when available for RBAC) */
@@ -452,12 +453,17 @@ export class WebConnector implements Connector {
           if (session) {
             // Session is live — send history + info
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
+            const canManageProviders = session.numericUserId != null && session.numericUserId !== 1;
             ws.send(JSON.stringify({
               type: "session_info",
               session: {
-                ...session,
+                id: session.id,
+                state: session.state,
+                taskDescription: session.taskDescription,
+                variantName: session.variantName,
                 preferredModel: session.preferredModel || DEFAULT_SUBAGENT_MODEL,
                 availableModels: SUBAGENT_MODELS,
+                canManageProviders,
                 agentName,
               },
             }));
@@ -467,6 +473,7 @@ export class WebConnector implements Connector {
             // Map DB status ('active'|'done'|'killed') to viewer state
             const state = dbInfo?.status === "killed" ? "killed" : "done";
             const variantName = dbInfo?.variantName || undefined;
+            const canManageProviders = dbInfo?.numericUserId != null && dbInfo.numericUserId !== 1;
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
             ws.send(JSON.stringify({
               type: "session_info",
@@ -477,6 +484,7 @@ export class WebConnector implements Connector {
                 variantName,
                 preferredModel: DEFAULT_SUBAGENT_MODEL,
                 availableModels: SUBAGENT_MODELS,
+                canManageProviders,
               },
             }));
           } else {
@@ -495,6 +503,7 @@ export class WebConnector implements Connector {
                 agentName: config.agentName,
                 preferredModel: DEFAULT_SUBAGENT_MODEL,
                 availableModels: SUBAGENT_MODELS,
+                canManageProviders: false,
               },
             }));
           }
@@ -528,6 +537,91 @@ export class WebConnector implements Connector {
             } catch (err) {
               const message = (err as Error).message || "Falha ao atualizar modelo";
               ws.send(JSON.stringify({ type: "error", text: message }));
+            }
+            return;
+          }
+
+          if (msg.type === "get_session_oauth_status") {
+            const status = await this.getSessionOAuthStatus(sessionId);
+            ws.send(JSON.stringify({ type: "session_oauth_status", sessionId, status }));
+            return;
+          }
+
+          if (msg.type === "session_oauth_start" && typeof msg.provider === "string") {
+            try {
+              const resolved = await this.resolveSessionOAuthUser(sessionId);
+              if (!resolved.canManageProviders || resolved.userId == null) {
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Este usuario nao pode configurar provedores aqui." }));
+                return;
+              }
+              if (msg.provider === "anthropic") {
+                const { authUrl, state } = this.claudeOAuth.startAuth();
+                ws.send(JSON.stringify({ type: "session_oauth_start", provider: msg.provider, authUrl, state }));
+                return;
+              }
+              if (msg.provider === "openai") {
+                const { authUrl, state } = this.openaiOAuth.startAuth();
+                ws.send(JSON.stringify({ type: "session_oauth_start", provider: msg.provider, authUrl, state }));
+                return;
+              }
+              ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Provider invalido." }));
+            } catch (err) {
+              logger.error({ err, sessionId, provider: msg.provider }, "Failed to start session OAuth flow");
+              ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Falha ao iniciar OAuth." }));
+            }
+            return;
+          }
+
+          if (msg.type === "session_oauth_exchange" && typeof msg.provider === "string") {
+            try {
+              const resolved = await this.resolveSessionOAuthUser(sessionId);
+              if (!resolved.canManageProviders || resolved.userId == null) {
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Este usuario nao pode configurar provedores aqui." }));
+                return;
+              }
+              if (!msg.input || !String(msg.input).trim()) {
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Entrada vazia." }));
+                return;
+              }
+              if (msg.provider === "anthropic") {
+                const res = await this.claudeOAuth.exchangeCode(resolved.userId, String(msg.input));
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: res.success, error: res.error || null, email: res.email || null }));
+              } else if (msg.provider === "openai") {
+                const res = await this.openaiOAuth.exchangeCallback(resolved.userId, String(msg.input));
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: res.success, error: res.error || null, email: res.email || null }));
+              } else {
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Provider invalido." }));
+              }
+              const status = await this.getSessionOAuthStatus(sessionId);
+              ws.send(JSON.stringify({ type: "session_oauth_status", sessionId, status }));
+            } catch (err) {
+              logger.error({ err, sessionId, provider: msg.provider }, "Failed to exchange session OAuth callback/code");
+              ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Falha ao concluir OAuth." }));
+            }
+            return;
+          }
+
+          if (msg.type === "session_oauth_disconnect" && typeof msg.provider === "string") {
+            try {
+              const resolved = await this.resolveSessionOAuthUser(sessionId);
+              if (!resolved.canManageProviders || resolved.userId == null) {
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Este usuario nao pode configurar provedores aqui." }));
+                return;
+              }
+              if (msg.provider === "anthropic") {
+                await this.claudeOAuth.disconnect(resolved.userId);
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: true }));
+              } else if (msg.provider === "openai") {
+                await this.openaiOAuth.disconnect(resolved.userId);
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: true }));
+              } else {
+                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Provider invalido." }));
+              }
+              const status = await this.getSessionOAuthStatus(sessionId);
+              ws.send(JSON.stringify({ type: "session_oauth_status", sessionId, status }));
+            } catch (err) {
+              logger.error({ err, sessionId, provider: msg.provider }, "Failed to disconnect session OAuth");
+              ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Falha ao desconectar OAuth." }));
             }
             return;
           }
@@ -1467,6 +1561,69 @@ export class WebConnector implements Connector {
       logger.error({ err, sessionId }, "Failed to load session history");
       this.send(ws, { type: "session_history", sessionId, messages: [] });
     }
+  }
+
+  private async resolveSessionOAuthUser(sessionId: string): Promise<{ userId: number | null; canManageProviders: boolean }> {
+    if (!this.agentBridge) return { userId: null, canManageProviders: false };
+
+    const liveSession = this.agentBridge.getSessionsForUI().find((s) => s.id === sessionId);
+    const liveUserId = liveSession?.numericUserId ?? null;
+    if (liveUserId != null) {
+      return { userId: liveUserId, canManageProviders: liveUserId !== 1 };
+    }
+
+    const dbInfo = await this.agentBridge.getSessionInfoFromDB(sessionId);
+    const dbUserId = dbInfo?.numericUserId ?? null;
+    return { userId: dbUserId, canManageProviders: dbUserId != null && dbUserId !== 1 };
+  }
+
+  private async getSessionOAuthStatus(sessionId: string): Promise<{
+    canManageProviders: boolean;
+    providers: {
+      anthropic: { connected: boolean; source: "user" | "admin" | "none"; email: string | null };
+      openai: { connected: boolean; source: "user" | "admin" | "none"; email: string | null };
+    };
+  }> {
+    const resolved = await this.resolveSessionOAuthUser(sessionId);
+    const empty = {
+      canManageProviders: false,
+      providers: {
+        anthropic: { connected: false, source: "none" as const, email: null },
+        openai: { connected: false, source: "none" as const, email: null },
+      },
+    };
+
+    if (!resolved.canManageProviders || resolved.userId == null) {
+      return empty;
+    }
+
+    const adminUserId = 1;
+    const [userClaude, userOpenAI, adminClaude, adminOpenAI] = await Promise.all([
+      this.claudeOAuth.isConnected(resolved.userId),
+      this.openaiOAuth.isConnected(resolved.userId),
+      this.claudeOAuth.isConnected(adminUserId),
+      this.openaiOAuth.isConnected(adminUserId),
+    ]);
+
+    const anthropic = userClaude.connected
+      ? { connected: true, source: "user" as const, email: userClaude.email || null }
+      : adminClaude.connected
+        ? { connected: true, source: "admin" as const, email: adminClaude.email || null }
+        : { connected: false, source: "none" as const, email: null };
+
+    const openai = userOpenAI.connected
+      ? { connected: true, source: "user" as const, email: userOpenAI.email || null }
+      : adminOpenAI.connected
+        ? { connected: true, source: "admin" as const, email: adminOpenAI.email || null }
+        : { connected: false, source: "none" as const, email: null };
+
+    return {
+      canManageProviders: true,
+      providers: {
+        anthropic,
+        openai,
+      },
+    };
   }
 
   private async handleOAuthStart(ws: WebSocket, provider: string): Promise<void> {
