@@ -4,7 +4,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SubAgentSession, SessionState, DEFAULT_SUBAGENT_MODEL, SubAgentModelId, isSubAgentModelId } from "./types.js";
+import { SubAgentSession, SessionState, DEFAULT_SUBAGENT_MODEL, SubAgentModelId, isSubAgentModelId, SubAgentMetricsSnapshot } from "./types.js";
 import type { ConnectorManager } from "../connectors/connector-manager.js";
 import type { MediaAttachment } from "../llm/types.js";
 import { query } from "../memory/database.js";
@@ -13,7 +13,7 @@ import { config } from "../config/env.js";
 import { createAgentToken } from "./agent-token.js";
 import type { MemoryService } from "../memory/memory-service.js";
 import { subagentImageBuilder, SUBAGENT_RUNTIME_IMAGE } from "./subagent-image-builder.js";
-import { normalizeStatusToolLine } from "./tool-status.js";
+import { formatToolLifecycleLine, normalizeStatusToolLine } from "./tool-status.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -199,6 +199,26 @@ export class SessionManager {
   private memoryService: MemoryService | null;
   private onSessionMessage: SessionMessageCallback | null = null;
 
+  private readonly metricsStartedAt = Date.now();
+  private metricsCounters: SubAgentMetricsSnapshot["counters"] = {
+    sessionsCreated: 0,
+    sessionsRecovered: 0,
+    sessionsKilled: 0,
+    sessionsInterrupted: 0,
+    sessionsFailed: 0,
+    turnsCompleted: 0,
+    providerErrors: 0,
+    fallbackUsed: 0,
+    timeoutRetries: 0,
+    authRetries: 0,
+    maxStepsHits: 0,
+    contextCompactions: 0,
+    noExecutionGuards: 0,
+    toolCallsStarted: 0,
+    toolCallsCompleted: 0,
+    toolCallsErrored: 0,
+  };
+
   /** Active child processes for each session (docker exec) */
   private processes = new Map<string, ChildProcess>();
 
@@ -262,6 +282,26 @@ export class SessionManager {
 
   setSessionMessageCallback(cb: SessionMessageCallback): void {
     this.onSessionMessage = cb;
+  }
+
+  getMetricsSnapshot(): SubAgentMetricsSnapshot {
+    const live = this.getLiveSessions();
+    const running = live.filter((s) => s.state === "starting" || s.state === "running");
+    const waiting = live.filter((s) => s.state === "waiting_user");
+    const done = live.filter((s) => s.state === "done");
+    const failed = live.filter((s) => s.state === "failed");
+
+    return {
+      startedAt: this.metricsStartedAt,
+      gauges: {
+        liveSessions: live.length,
+        runningSessions: running.length,
+        waitingUserSessions: waiting.length,
+        doneSessions: done.length,
+        failedSessions: failed.length,
+      },
+      counters: { ...this.metricsCounters },
+    };
   }
 
   // ==================== SESSION RECOVERY ====================
@@ -361,6 +401,7 @@ export class SessionManager {
 
         this.sessions.set(id, session);
         recovered++;
+        this.metricsCounters.sessionsRecovered += 1;
 
         // Start the NDJSON process for recovered session
         this.startAgentProcess(session).catch((err) => {
@@ -540,6 +581,7 @@ export class SessionManager {
     };
 
     this.sessions.set(id, session);
+    this.metricsCounters.sessionsCreated += 1;
 
     // Persist session to DB for audit trail
     if (numericUserId) {
@@ -625,6 +667,7 @@ export class SessionManager {
         logger.info({ sessionId }, "Orphan sub-agent container killed");
       } catch { /* container may not exist */ }
       await this.updateSessionStatus(sessionId, "killed");
+      this.metricsCounters.sessionsKilled += 1;
       return;
     }
 
@@ -656,6 +699,7 @@ export class SessionManager {
     // Persist final state to DB (session_messages are NOT deleted — kept for audit)
     this.updateSessionStatus(sessionId, "killed").catch(() => {});
     this.sessions.delete(sessionId);
+    this.metricsCounters.sessionsKilled += 1;
   }
 
   async killAll(): Promise<number> {
@@ -699,6 +743,7 @@ export class SessionManager {
     this.sendToAgentProcess(sessionId, { type: "interrupt", generation: newGen });
     
     logger.info({ sessionId, generation: newGen }, "Sent interrupt signal to sub-agent");
+    this.metricsCounters.sessionsInterrupted += 1;
     return true;
   }
 
@@ -1017,6 +1062,7 @@ export class SessionManager {
           this.sendToUser(session, `Erro: o sub-agente encerrou inesperadamente (codigo ${code}).`, "error");
         }
         const newState = crashed ? "failed" : "done";
+        if (crashed) this.metricsCounters.sessionsFailed += 1;
         session.state = newState;
         session.updatedAt = Date.now();
         // Notify session viewers of state change
@@ -1098,6 +1144,45 @@ export class SessionManager {
           }
           break;
 
+        case "tool_call":
+          if (msg.event && msg.name) {
+            if (session.state !== "running") {
+              session.state = "running";
+              if (this.onSessionMessage) {
+                this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
+              }
+            }
+
+            if (msg.event === "start") {
+              this.metricsCounters.toolCallsStarted += 1;
+              const toolLine = formatToolLifecycleLine({
+                event: "start",
+                name: msg.name,
+                args: typeof msg.input === "object" && msg.input ? msg.input : {},
+              });
+              this.sendToUser(session, toolLine, "tool_use");
+            } else if (msg.event === "completed") {
+              this.metricsCounters.toolCallsCompleted += 1;
+              const toolLine = formatToolLifecycleLine({
+                event: "completed",
+                name: msg.name,
+                durationMs: typeof msg.durationMs === "number" ? msg.durationMs : undefined,
+                outputPreview: typeof msg.outputPreview === "string" ? msg.outputPreview : undefined,
+              });
+              this.sendToUser(session, toolLine, "tool_use");
+            } else if (msg.event === "error") {
+              this.metricsCounters.toolCallsErrored += 1;
+              const toolLine = formatToolLifecycleLine({
+                event: "error",
+                name: msg.name,
+                message: typeof msg.message === "string" ? msg.message : "erro na ferramenta",
+              });
+              this.sendToUser(session, toolLine, "tool_use");
+            }
+            session.updatedAt = Date.now();
+          }
+          break;
+
         case "model_active":
           if (isSubAgentModelId(msg.modelId)) {
             session.preferredModel = msg.modelId;
@@ -1115,8 +1200,25 @@ export class SessionManager {
 
         case "provider_error":
           if (msg.message) {
+            const message = String(msg.message);
+            this.metricsCounters.providerErrors += 1;
+            if (message.includes("Limite maximo de passos")) this.metricsCounters.maxStepsHits += 1;
+            if (message.includes("Sem execucao concreta detectada")) this.metricsCounters.noExecutionGuards += 1;
             this.sendToUser(session, msg.message, "error");
           }
+          break;
+
+        case "fallback_used":
+          this.metricsCounters.fallbackUsed += 1;
+          break;
+
+        case "provider_retry":
+          if (msg.reason === "timeout") this.metricsCounters.timeoutRetries += 1;
+          if (msg.reason === "auth") this.metricsCounters.authRetries += 1;
+          break;
+
+        case "context_compacted":
+          this.metricsCounters.contextCompactions += 1;
           break;
 
         case "waiting_user":
@@ -1135,6 +1237,7 @@ export class SessionManager {
             this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
           }
           logger.info({ sessionId: session.id }, "Sub-agent waiting for user input");
+          this.metricsCounters.turnsCompleted += 1;
           break;
 
         case "done":

@@ -1825,6 +1825,41 @@
     color: var(--text-muted);
   }
 
+  .subagent-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .subagent-metric-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: rgba(255,255,255,0.01);
+  }
+
+  .subagent-metric-label {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+
+  .subagent-metric-value {
+    display: block;
+    font-size: 0.98rem;
+    color: var(--text);
+    font-weight: 650;
+    letter-spacing: 0.01em;
+  }
+
+  .subagent-metrics-footnote {
+    margin-top: 8px;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+  }
+
   .status-dot {
     width: 8px;
     height: 8px;
@@ -2398,6 +2433,45 @@
           </div>
           <pre id="code-op-log" style="margin-top:8px;display:none;max-height:200px;overflow-y:auto;font-size:0.75rem;background:var(--bg-surface);border-radius:6px;padding:10px;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);border:1px solid var(--border);"></pre>
         </div>
+      </div>
+    </div>
+
+    <!-- Sub-agent Runtime Metrics -->
+    <div class="settings-section">
+      <div class="settings-section-header collapsed" onclick="toggleSection(this)">
+        <h3>Subagente (runtime)</h3>
+        <svg class="chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+      </div>
+      <div class="settings-section-body collapsed">
+        <p class="settings-hint">Telemetria ao vivo do subagente para acompanhar fallback, retries e guardrails.</p>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <span class="settings-label" style="margin:0;">Resumo atual</span>
+          <button class="settings-action-btn" id="subagent-metrics-refresh" onclick="loadSubagentMetrics()" style="padding:5px 10px;font-size:0.76rem;">Atualizar</button>
+        </div>
+
+        <div id="subagent-metrics-status" style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">Carregando...</div>
+
+        <div class="subagent-metrics-grid" id="subagent-metrics-gauges">
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Sessoes ativas</span><span class="subagent-metric-value" id="metric-live-sessions">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Rodando agora</span><span class="subagent-metric-value" id="metric-running-sessions">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Aguardando usuario</span><span class="subagent-metric-value" id="metric-waiting-sessions">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Falhas ativas</span><span class="subagent-metric-value" id="metric-failed-sessions">-</span></div>
+        </div>
+
+        <span class="settings-label" style="margin-top:12px;">Confiabilidade (counters)</span>
+        <div class="subagent-metrics-grid" id="subagent-metrics-counters">
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Fallbacks usados</span><span class="subagent-metric-value" id="metric-fallback-used">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Retries timeout/auth</span><span class="subagent-metric-value" id="metric-retries">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Max steps hits</span><span class="subagent-metric-value" id="metric-max-steps">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">No-exec guard</span><span class="subagent-metric-value" id="metric-no-exec">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Compactions</span><span class="subagent-metric-value" id="metric-compactions">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Provider errors</span><span class="subagent-metric-value" id="metric-provider-errors">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Tool calls ok/erro</span><span class="subagent-metric-value" id="metric-tool-calls">-</span></div>
+          <div class="subagent-metric-card"><span class="subagent-metric-label">Turnos concluidos</span><span class="subagent-metric-value" id="metric-turns">-</span></div>
+        </div>
+
+        <div class="subagent-metrics-footnote" id="subagent-metrics-footnote"></div>
       </div>
     </div>
 
@@ -4568,11 +4642,24 @@ function openSettings() {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'get_settings' }));
   }
+
+  loadSubagentMetrics();
+  if (subagentMetricsTimer) clearInterval(subagentMetricsTimer);
+  subagentMetricsTimer = setInterval(function() {
+    var panel = document.getElementById('settings-panel');
+    if (panel && panel.classList.contains('visible')) {
+      loadSubagentMetrics();
+    }
+  }, 12000);
 }
 
 function closeSettings() {
   document.getElementById('settings-overlay').classList.remove('visible');
   document.getElementById('settings-panel').classList.remove('visible');
+  if (subagentMetricsTimer) {
+    clearInterval(subagentMetricsTimer);
+    subagentMetricsTimer = null;
+  }
 }
 
 // ==================== USERS PANEL ====================
@@ -5497,6 +5584,72 @@ function saveVectorDatabase() {
 var pendingDbSave = null;
 // When set, settings_saved will show combined "Conexao OK. Salvo!" feedback
 var pendingDbSaveConfirm = null;
+var subagentMetricsTimer = null;
+
+function formatMetricsValue(n) {
+  return typeof n === 'number' ? String(n) : '-';
+}
+
+function setMetricsStatus(text, isError) {
+  var el = document.getElementById('subagent-metrics-status');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? 'var(--danger)' : 'var(--text-muted)';
+}
+
+function renderSubagentMetrics(data) {
+  var gauges = data && data.gauges ? data.gauges : {};
+  var counters = data && data.counters ? data.counters : {};
+
+  var setText = function(id, value) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+
+  setText('metric-live-sessions', formatMetricsValue(gauges.liveSessions));
+  setText('metric-running-sessions', formatMetricsValue(gauges.runningSessions));
+  setText('metric-waiting-sessions', formatMetricsValue(gauges.waitingUserSessions));
+  setText('metric-failed-sessions', formatMetricsValue(gauges.failedSessions));
+
+  setText('metric-fallback-used', formatMetricsValue(counters.fallbackUsed));
+  setText('metric-retries', formatMetricsValue((counters.timeoutRetries || 0)) + ' / ' + formatMetricsValue((counters.authRetries || 0)));
+  setText('metric-max-steps', formatMetricsValue(counters.maxStepsHits));
+  setText('metric-no-exec', formatMetricsValue(counters.noExecutionGuards));
+  setText('metric-compactions', formatMetricsValue(counters.contextCompactions));
+  setText('metric-provider-errors', formatMetricsValue(counters.providerErrors));
+  setText('metric-tool-calls', formatMetricsValue(counters.toolCallsCompleted) + ' / ' + formatMetricsValue(counters.toolCallsErrored));
+  setText('metric-turns', formatMetricsValue(counters.turnsCompleted));
+
+  var foot = document.getElementById('subagent-metrics-footnote');
+  if (foot) {
+    var startedAt = data && data.startedAt ? new Date(data.startedAt) : null;
+    var startedText = startedAt && !isNaN(startedAt.getTime()) ? startedAt.toLocaleString('pt-BR') : '-';
+    foot.textContent = 'Inicio da coleta: ' + startedText;
+  }
+}
+
+function loadSubagentMetrics() {
+  var token = getAuthToken();
+  var btn = document.getElementById('subagent-metrics-refresh');
+  if (btn) btn.disabled = true;
+  setMetricsStatus('Atualizando metricas...', false);
+
+  fetch('/api/subagent/metrics?token=' + encodeURIComponent(token))
+    .then(function(resp) {
+      if (!resp.ok) return resp.text().then(function(t) { throw new Error(t || 'Erro ' + resp.status); });
+      return resp.json();
+    })
+    .then(function(data) {
+      renderSubagentMetrics(data || {});
+      setMetricsStatus('Atualizado agora.', false);
+    })
+    .catch(function(err) {
+      setMetricsStatus('Falha ao carregar metricas: ' + err.message, true);
+    })
+    .finally(function() {
+      if (btn) btn.disabled = false;
+    });
+}
 
 // ==================== VERSION & UPDATES ====================
 

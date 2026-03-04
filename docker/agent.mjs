@@ -19,8 +19,9 @@
  */
 
 import { createInterface } from "readline";
-import { readFile } from "node:fs/promises";
-import { WORKSPACE, listWorkspace, executeTool, toolStatusLabel } from "./tools.mjs";
+import { access, readFile, stat } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { WORKSPACE, listWorkspace, executeTool } from "./tools.mjs";
 import { coreToolDeclarations } from "./tool-declarations.mjs";
 import {
   rickApiGet, rickApiPost, agentToolHandler as sharedAgentToolHandler,
@@ -86,6 +87,81 @@ function emitModelActive(modelId, modelName) {
 function emitProviderError(message) {
   if (isCurrentSuperseded()) return;
   emit({ type: "provider_error", message: redactSecrets(message) });
+}
+
+function emitFallbackUsed(providerName, depth) {
+  if (isCurrentSuperseded()) return;
+  emit({ type: "fallback_used", providerName: redactSecrets(providerName), depth });
+}
+
+function emitProviderRetry(providerName, reason) {
+  if (isCurrentSuperseded()) return;
+  emit({ type: "provider_retry", providerName: redactSecrets(providerName), reason });
+}
+
+function emitContextCompacted(removedMessages, summaryChars) {
+  if (isCurrentSuperseded()) return;
+  emit({ type: "context_compacted", removedMessages, summaryChars });
+}
+
+let toolCallSequence = 0;
+
+const MAX_TOOL_CALLS_PER_TURN = 24;
+const MAX_STEPS_MESSAGE = "Limite maximo de passos desta rodada foi atingido. Parei as ferramentas para evitar loop; se quiser, me diga o proximo foco e eu continuo em uma nova rodada.";
+
+let currentTurnStats = null;
+
+function nextToolCallId() {
+  toolCallSequence += 1;
+  return `tool_${toolCallSequence}`;
+}
+
+function toPreview(text, max = 180) {
+  const normalized = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
+}
+
+function emitToolCallStart(callId, name, input) {
+  if (isCurrentSuperseded()) return;
+  emit({ type: "tool_call", event: "start", callId, name, input });
+}
+
+function emitToolCallCompleted(callId, name, durationMs, outputPreview) {
+  if (isCurrentSuperseded()) return;
+  emit({
+    type: "tool_call",
+    event: "completed",
+    callId,
+    name,
+    durationMs,
+    outputPreview: redactSecrets(outputPreview),
+  });
+}
+
+function emitToolCallError(callId, name, durationMs, message) {
+  if (isCurrentSuperseded()) return;
+  emit({
+    type: "tool_call",
+    event: "error",
+    callId,
+    name,
+    durationMs,
+    message: redactSecrets(message),
+  });
+}
+
+function shouldRequireConcreteExecution(userText) {
+  const text = String(userText || "").toLowerCase();
+  return /(corrig|ajust|remov|alter|refator|implemen|adicion|cria|bug|erro|teste|build|commit|pull request|pr|codigo|code|arquivo|repo|reposit)/.test(text);
+}
+
+function isMaxStepsError(err) {
+  return !!err && (err.code === "MAX_STEPS_REACHED" || err.message === "MAX_STEPS_REACHED");
+}
+
+function buildNoExecutionGuardMessage() {
+  return "Ainda nao executei nenhuma ferramenta nesta rodada, entao nao vou afirmar conclusao tecnica. Posso continuar agora executando os passos no repositorio e te trazer evidencias objetivas.";
 }
 
 // ── Provider detection (dynamic — re-evaluated per turn) ────────────────────
@@ -198,6 +274,36 @@ async function runTool(name, input) {
   return executeTool(name, input, (n, i) => sharedAgentToolHandler(n, i, { emitStatus }));
 }
 
+async function runToolWithLifecycle(name, input) {
+  if (!currentTurnStats) {
+    currentTurnStats = { toolCalls: 0, toolNames: new Set(), maxStepsReached: false };
+  }
+
+  if (currentTurnStats.toolCalls >= MAX_TOOL_CALLS_PER_TURN) {
+    currentTurnStats.maxStepsReached = true;
+    const err = new Error("MAX_STEPS_REACHED");
+    err.code = "MAX_STEPS_REACHED";
+    throw err;
+  }
+
+  const callId = nextToolCallId();
+  const started = Date.now();
+  emitToolCallStart(callId, name, input);
+  currentTurnStats.toolCalls += 1;
+  currentTurnStats.toolNames.add(name);
+
+  try {
+    const result = await runTool(name, input);
+    const output = String(result);
+    emitToolCallCompleted(callId, name, Date.now() - started, toPreview(output));
+    return output;
+  } catch (err) {
+    const message = err?.message || String(err || "Erro desconhecido na ferramenta");
+    emitToolCallError(callId, name, Date.now() - started, message);
+    throw err;
+  }
+}
+
 // ── Agent name (used in tool descriptions and system prompt) ────────────────
 const agentName = process.env.AGENT_NAME || "Rick";
 
@@ -207,7 +313,7 @@ const toolDeclarations = [...coreToolDeclarations, ...buildAgentToolDeclarations
 const toolNames = toolDeclarations.map((t) => t.name);
 
 // ── System prompt ───────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `Você é ${agentName} Sub-Agent, um agente autônomo executando dentro de um container Docker.
+const BASE_SYSTEM_PROMPT = `Você é ${agentName} Sub-Agent, um agente autônomo executando dentro de um container Docker.
 
 Sua tarefa é realizar o que o usuário pedir usando as ferramentas disponíveis.
 Você mantém o contexto de toda a conversa — mensagens anteriores do usuário são lembradas.
@@ -232,9 +338,182 @@ REGRAS:
 17. Ao concluir uma alteração técnica, inclua evidência objetiva em 1 frase: arquivo(s) alterado(s) e comando(s) de validação executado(s).
 18. Se não for possível aplicar a mudança (limitação real, erro de permissão, ausência de arquivo, etc.), diga explicitamente que NÃO foi aplicado, explique o motivo e proponha próximo passo.
 19. Em tarefas de código em repositório, antes de alterar arquivos, procure e leia o AGENTS.md do projeto (e qualquer AGENTS.md no caminho da pasta alvo) e siga essas instruções.
-20. Em pedidos diretos de mudança (ex.: "ajuste", "corrija", "remova"), execute a mudança primeiro e só depois responda; só peça confirmação adicional se houver ambiguidade real que impeça aplicar com segurança.
+20. Em pedidos diretos de mudança (ex.: "ajuste", "corrija", "remova"), execute a mudança primeiro e só depois responda; só peça confirmação adicional se houver ambiguidade real que impeça aplicar com segurança.`;
 
-FERRAMENTAS DISPONÍVEIS: ${toolNames.join(", ")}`;
+const PROVIDER_SYSTEM_PROMPTS = {
+  gemini: `Diretrizes de provider (Gemini):
+- Prefira respostas objetivas e chamadas de ferramenta pequenas.
+- Quando houver resultados extensos, forneça um resumo factual do essencial.
+- Em caso de erro de ferramenta, explique a falha e tente uma alternativa segura.`,
+  openai: `Diretrizes de provider (OpenAI/Codex):
+- Em tarefas de código, mantenha execução incremental e verificável.
+- Não invente saídas de comandos; cite somente evidências observadas.
+- Use ferramentas de forma determinística e descreva bloqueios com clareza.`,
+  claude: `Diretrizes de provider (Claude):
+- Seja direto, sem floreio, com foco em execução real.
+- Evite repetição e não reapresente contexto já estabelecido.
+- Ao finalizar, inclua o que foi alterado e como validou.`,
+};
+
+const INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"];
+const PROMPT_CACHE_TTL_MS = 30_000;
+
+let promptCache = {
+  expiresAt: 0,
+  fingerprint: "",
+  instructionsBlock: "",
+  hasGitRepo: false,
+};
+
+let activeSystemPrompts = {
+  gemini: "",
+  openai: "",
+  openaiCodex: "",
+  claude: "",
+  claudeOAuth: "",
+};
+
+async function fileExists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function hasGitRepository() {
+  return fileExists(join(WORKSPACE, ".git"));
+}
+
+async function discoverWorkspaceInstructionFiles() {
+  const found = [];
+  let current = resolve(WORKSPACE);
+
+  while (true) {
+    for (const file of INSTRUCTION_FILES) {
+      const candidate = join(current, file);
+      if (await fileExists(candidate)) {
+        found.push(candidate);
+        break;
+      }
+    }
+
+    if (current === WORKSPACE || current === "/") break;
+    const parent = dirname(current);
+    if (!parent || parent === current) break;
+    current = parent;
+  }
+
+  return found;
+}
+
+async function buildInstructionBundle() {
+  const files = await discoverWorkspaceInstructionFiles();
+  if (files.length === 0) {
+    return { text: "", fingerprint: "none" };
+  }
+
+  const parts = [];
+  const fpParts = [];
+
+  for (const file of files) {
+    let content = "";
+    try {
+      content = (await readFile(file, "utf-8")).trim();
+    } catch {
+      continue;
+    }
+    if (!content) continue;
+
+    parts.push(`Instructions from: ${file}\n${content}`);
+    try {
+      const st = await stat(file);
+      fpParts.push(`${file}:${st.mtimeMs}:${st.size}`);
+    } catch {
+      fpParts.push(`${file}:unknown`);
+    }
+  }
+
+  return {
+    text: parts.join("\n\n"),
+    fingerprint: fpParts.length ? fpParts.join("|") : "none",
+  };
+}
+
+function escapeRegex(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function environmentPrompt(hasGit) {
+  return [
+    "Informacoes do ambiente:",
+    `<env>`,
+    `  Working directory: ${WORKSPACE}`,
+    `  Is directory a git repo: ${hasGit ? "yes" : "no"}`,
+    `  Platform: ${process.platform}`,
+    `  Today's date: ${new Date().toDateString()}`,
+    `</env>`,
+    `<directories>`,
+    `  ${listWorkspace(WORKSPACE).slice(0, 60).join("\n  ")}`,
+    `</directories>`,
+  ].join("\n");
+}
+
+async function refreshSystemPromptCache(force = false) {
+  const now = Date.now();
+  if (!force && now < promptCache.expiresAt) return;
+
+  const [bundle, gitRepo] = await Promise.all([
+    buildInstructionBundle(),
+    hasGitRepository(),
+  ]);
+
+  const cacheChanged = bundle.fingerprint !== promptCache.fingerprint || gitRepo !== promptCache.hasGitRepo;
+  if (cacheChanged || force || !activeSystemPrompts.openai) {
+    const environment = environmentPrompt(gitRepo);
+    const toolsBlock = `FERRAMENTAS DISPONIVEIS: ${toolNames.join(", ")}`;
+    const shared = [BASE_SYSTEM_PROMPT, toolsBlock, environment, bundle.text].filter(Boolean).join("\n\n");
+
+    activeSystemPrompts.gemini = [shared, PROVIDER_SYSTEM_PROMPTS.gemini].join("\n\n");
+    activeSystemPrompts.openai = [shared, PROVIDER_SYSTEM_PROMPTS.openai].join("\n\n");
+    activeSystemPrompts.openaiCodex = activeSystemPrompts.openai;
+    activeSystemPrompts.claude = [shared, PROVIDER_SYSTEM_PROMPTS.claude].join("\n\n");
+    const escapedAgentName = escapeRegex(agentName);
+    activeSystemPrompts.claudeOAuth = activeSystemPrompts.claude
+      .replace(new RegExp(`${escapedAgentName} Sub-Agent`, "g"), "Claude Code")
+      .replace(new RegExp(escapedAgentName, "g"), "Claude");
+
+    promptCache.fingerprint = bundle.fingerprint;
+    promptCache.instructionsBlock = bundle.text;
+    promptCache.hasGitRepo = gitRepo;
+  }
+
+  promptCache.expiresAt = now + PROMPT_CACHE_TTL_MS;
+}
+
+function getGeminiSystemPrompt() {
+  return activeSystemPrompts.gemini || getSharedFallbackPrompt();
+}
+
+function getSharedFallbackPrompt() {
+  return [BASE_SYSTEM_PROMPT, `FERRAMENTAS DISPONIVEIS: ${toolNames.join(", ")}`].join("\n\n");
+}
+
+function getOpenAISystemPrompt() {
+  return activeSystemPrompts.openai || getSharedFallbackPrompt();
+}
+
+function getOpenAICodexInstructions() {
+  return activeSystemPrompts.openaiCodex || getOpenAISystemPrompt();
+}
+
+function getClaudeSystemPrompt(useOAuth = false) {
+  if (useOAuth) {
+    return activeSystemPrompts.claudeOAuth || getSharedFallbackPrompt();
+  }
+  return activeSystemPrompts.claude || getSharedFallbackPrompt();
+}
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -263,7 +542,7 @@ async function callGemini(contents, signal, modelId) {
     body: JSON.stringify({
       contents,
       tools: geminiTools,
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      systemInstruction: { parts: [{ text: getGeminiSystemPrompt() }] },
     }),
   });
 
@@ -299,27 +578,165 @@ let claudeHistory = [];
  */
 const conversationTranscript = [];
 
+// Rolling compacted summary of older transcript messages.
+// Keeps context continuity without letting raw history grow forever.
+let conversationSummary = "";
+
+// Context compaction/pruning knobs.
+const CONTEXT_MAX_ESTIMATED_TOKENS = 70_000;
+const CONTEXT_KEEP_RECENT_MESSAGES = 16; // keep recent 8 user/assistant turns raw
+const CONTEXT_SUMMARY_MAX_CHARS = 12_000;
+const PROVIDER_HISTORY_MAX_CHARS = 220_000;
+
+function estimateTextTokens(value) {
+  // Rough estimate: ~4 chars/token for mixed PT/EN prose and JSON-ish payloads.
+  const chars = typeof value === "number" ? Math.max(0, value) : String(value || "").length;
+  return Math.ceil(chars / 4);
+}
+
+function normalizeForSummary(text, maxLen = 220) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "(vazio)";
+  return normalized.length > maxLen ? `${normalized.slice(0, maxLen)}...` : normalized;
+}
+
+function summarizeTranscriptChunk(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return "";
+  const lines = [];
+  for (const msg of messages) {
+    const who = msg.role === "user" ? "Usuario" : "Agente";
+    lines.push(`- ${who}: ${normalizeForSummary(msg.content)}`);
+  }
+  return lines.join("\n");
+}
+
+function mergeConversationSummary(previousSummary, chunkSummary) {
+  const pieces = [];
+  if (previousSummary) pieces.push(previousSummary.trim());
+  if (chunkSummary) pieces.push(chunkSummary.trim());
+  if (pieces.length === 0) return "";
+
+  const merged = pieces.join("\n");
+  if (merged.length <= CONTEXT_SUMMARY_MAX_CHARS) return merged;
+  // Keep the newest summary content when we hit the cap.
+  return `...\n${merged.slice(-CONTEXT_SUMMARY_MAX_CHARS + 4)}`;
+}
+
+function estimatedContextTokens() {
+  let chars = conversationSummary.length;
+  for (const msg of conversationTranscript) {
+    chars += String(msg.content || "").length;
+  }
+  return estimateTextTokens(chars);
+}
+
+function providerHistoryChars(providerName) {
+  try {
+    if (providerName === "Gemini") return JSON.stringify(geminiHistory).length;
+    if (providerName === "OpenAI") return JSON.stringify(openaiHistory || []).length;
+    if (providerName === "Claude") return JSON.stringify(claudeHistory).length;
+    return 0;
+  } catch {
+    return PROVIDER_HISTORY_MAX_CHARS + 1;
+  }
+}
+
+function injectSummaryForProvider(providerName) {
+  if (!conversationSummary) return;
+
+  const summaryText = `Resumo compacto de contexto anterior (factual):\n${conversationSummary}`;
+
+  if (providerName === "Gemini") {
+    geminiHistory.push({ role: "user", parts: [{ text: summaryText }] });
+    geminiHistory.push({ role: "model", parts: [{ text: "Contexto recebido." }] });
+  } else if (providerName === "OpenAI") {
+    if (!openaiHistory) openaiHistory = [{ role: "system", content: getOpenAISystemPrompt() }];
+    openaiHistory.push({ role: "user", content: summaryText });
+    openaiHistory.push({ role: "assistant", content: "Contexto recebido." });
+  } else if (providerName === "Claude") {
+    claudeHistory.push({ role: "user", content: summaryText });
+    claudeHistory.push({ role: "assistant", content: "Contexto recebido." });
+  }
+}
+
+function rebuildProviderHistoriesFromContext() {
+  geminiHistory = [];
+  openaiHistory = [{ role: "system", content: getOpenAISystemPrompt() }];
+  claudeHistory = [];
+
+  seedProviderHistory("Gemini");
+  seedProviderHistory("OpenAI");
+  seedProviderHistory("Claude");
+}
+
+function compactContextIfNeeded() {
+  let compacted = false;
+  let removedMessages = 0;
+
+  while (
+    conversationTranscript.length > CONTEXT_KEEP_RECENT_MESSAGES &&
+    estimatedContextTokens() > CONTEXT_MAX_ESTIMATED_TOKENS
+  ) {
+    const removableCount = Math.max(1, conversationTranscript.length - CONTEXT_KEEP_RECENT_MESSAGES);
+    const chunk = conversationTranscript.splice(0, removableCount);
+    removedMessages += chunk.length;
+    const chunkSummary = summarizeTranscriptChunk(chunk);
+    conversationSummary = mergeConversationSummary(conversationSummary, chunkSummary);
+    compacted = true;
+  }
+
+  // Safety valve for raw transcript count even if token estimate is low.
+  if (conversationTranscript.length > CONTEXT_KEEP_RECENT_MESSAGES * 2) {
+    const removableCount = conversationTranscript.length - CONTEXT_KEEP_RECENT_MESSAGES * 2;
+    const chunk = conversationTranscript.splice(0, removableCount);
+    removedMessages += chunk.length;
+    const chunkSummary = summarizeTranscriptChunk(chunk);
+    conversationSummary = mergeConversationSummary(conversationSummary, chunkSummary);
+    compacted = true;
+  }
+
+  if (compacted) {
+    rebuildProviderHistoriesFromContext();
+    emitContextCompacted(removedMessages, conversationSummary.length);
+    return;
+  }
+
+  // Prune provider-specific histories if they grew too much (tool loops can bloat them).
+  const shouldPruneProviderHistory =
+    providerHistoryChars("Gemini") > PROVIDER_HISTORY_MAX_CHARS
+    || providerHistoryChars("OpenAI") > PROVIDER_HISTORY_MAX_CHARS
+    || providerHistoryChars("Claude") > PROVIDER_HISTORY_MAX_CHARS;
+
+  if (shouldPruneProviderHistory) {
+    rebuildProviderHistoriesFromContext();
+    emitContextCompacted(0, conversationSummary.length);
+  }
+}
+
 /**
  * Seed a provider's history with the conversation transcript (if empty).
  * Called before starting a provider loop when the provider has no history
  * but we have context from other providers' successful turns.
  */
 function seedProviderHistory(providerName) {
-  if (conversationTranscript.length === 0) return;
+  if (conversationTranscript.length === 0 && !conversationSummary) return;
 
   if (providerName === "Gemini" && geminiHistory.length === 0) {
+    injectSummaryForProvider("Gemini");
     for (const m of conversationTranscript) {
       const role = m.role === "user" ? "user" : "model";
       geminiHistory.push({ role, parts: [{ text: m.content }] });
     }
   } else if (providerName === "OpenAI" && (!openaiHistory || openaiHistory.length <= 1)) {
     // openaiHistory[0] is the system message; only seed if no conversation yet
-    if (!openaiHistory) openaiHistory = [{ role: "system", content: SYSTEM_PROMPT }];
+    if (!openaiHistory) openaiHistory = [{ role: "system", content: getOpenAISystemPrompt() }];
+    injectSummaryForProvider("OpenAI");
     for (const m of conversationTranscript) {
       const role = m.role === "user" ? "user" : "assistant";
       openaiHistory.push({ role, content: m.content });
     }
   } else if (providerName === "Claude" && claudeHistory.length === 0) {
+    injectSummaryForProvider("Claude");
     for (const m of conversationTranscript) {
       const role = m.role === "user" ? "user" : "assistant";
       claudeHistory.push({ role, content: m.content });
@@ -366,8 +783,7 @@ async function runGeminiLoop(userText, signal, modelId, imageInputs = []) {
         if (signal?.aborted || interruptRequested) {
           throw new Error("Interrupted");
         }
-        emitStatus(toolStatusLabel(tc.name, tc.input));
-        const result = await runTool(tc.name, tc.input);
+        const result = await runToolWithLifecycle(tc.name, tc.input);
         toolResults.push({ name: tc.name, result: String(result) });
       }
 
@@ -546,9 +962,9 @@ async function runOpenAILoop(userText, signal, imageInputs = []) {
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
 
-  if (!openaiHistory) {
-    openaiHistory = [{ role: "system", content: SYSTEM_PROMPT }];
-  }
+    if (!openaiHistory) {
+      openaiHistory = [{ role: "system", content: getOpenAISystemPrompt() }];
+    }
   // Remember history length so we can roll back on error
   const historyLenBefore = openaiHistory.length;
   openaiHistory.push({ role: "user", content: userText });
@@ -617,8 +1033,7 @@ async function runOpenAILoop(userText, signal, imageInputs = []) {
         if (signal?.aborted || interruptRequested) {
           throw new Error("Interrupted");
         }
-        emitStatus(toolStatusLabel(tc.name, tc.input));
-        const result = await runTool(tc.name, tc.input);
+        const result = await runToolWithLifecycle(tc.name, tc.input);
         messages.push({ role: "tool", tool_call_id: tc.id, content: String(result) });
       }
     }
@@ -642,9 +1057,9 @@ async function runOpenAICodexLoop(userText, oauthToken, signal, imageInputs = []
   const input = [];
   // Add system prompt as developer instructions (Responses API uses top-level `instructions`)
   // Add conversation history from transcript if we have prior context
-  if (!openaiHistory) {
-    openaiHistory = [{ role: "system", content: SYSTEM_PROMPT }];
-  }
+    if (!openaiHistory) {
+      openaiHistory = [{ role: "system", content: getOpenAISystemPrompt() }];
+    }
   const historyLenBefore = openaiHistory.length;
   openaiHistory.push({ role: "user", content: userText });
 
@@ -703,7 +1118,7 @@ async function runOpenAICodexLoop(userText, oauthToken, signal, imageInputs = []
 
       const body = {
         model: "gpt-5.3-codex",
-        instructions: SYSTEM_PROMPT,
+        instructions: getOpenAICodexInstructions(),
         input: requestInput,
         tools: responsesTools,
         store: false,
@@ -738,8 +1153,7 @@ async function runOpenAICodexLoop(userText, oauthToken, signal, imageInputs = []
         if (signal?.aborted || interruptRequested) {
           throw new Error("Interrupted");
         }
-        emitStatus(toolStatusLabel(tc.name, tc.input));
-        const result = await runTool(tc.name, tc.input);
+        const result = await runToolWithLifecycle(tc.name, tc.input);
 
         // Add function call + output to the input for next iteration
         input.push({
@@ -834,10 +1248,7 @@ async function runClaudeLoop(userText, signal, imageInputs = []) {
         ? AbortSignal.any([timeoutSignal, signal])
         : timeoutSignal;
 
-      // Sanitize system prompt for OAuth mode — the server blocks non-Claude branding
-      const systemPrompt = useOAuth
-        ? SYSTEM_PROMPT.replace(/Rick Sub-Agent/g, "Claude Code").replace(/Rick/g, "Claude")
-        : SYSTEM_PROMPT;
+      const systemPrompt = getClaudeSystemPrompt(useOAuth);
 
       // Build URL — OAuth mode requires ?beta=true query param
       const apiUrl = useOAuth
@@ -884,8 +1295,7 @@ async function runClaudeLoop(userText, signal, imageInputs = []) {
         if (signal?.aborted || interruptRequested) {
           throw new Error("Interrupted");
         }
-        emitStatus(toolStatusLabel(tb.name, tb.input));
-        const result = await runTool(tb.name, tb.input);
+        const result = await runToolWithLifecycle(tb.name, tb.input);
         toolResults.push({ type: "tool_result", tool_use_id: tb.id, content: String(result) });
       }
 
@@ -992,6 +1402,7 @@ rl.on("line", async (line) => {
   // Restore conversation history (sent by host after recovery or process restart).
   // Each entry: { role: "user"|"agent", content: "..." }
   if (msg.type === "history" && Array.isArray(msg.messages)) {
+    await refreshSystemPromptCache();
     for (const m of msg.messages) {
       const role = m.role === "user" ? "user" : "model";
       if (hasGemini()) {
@@ -1000,7 +1411,7 @@ rl.on("line", async (line) => {
       if (hasOpenAI() || hasClaude()) {
         const oaRole = m.role === "user" ? "user" : "assistant";
         if (hasOpenAI()) {
-          if (!openaiHistory) openaiHistory = [{ role: "system", content: SYSTEM_PROMPT }];
+          if (!openaiHistory) openaiHistory = [{ role: "system", content: getOpenAISystemPrompt() }];
           openaiHistory.push({ role: oaRole, content: m.content });
         }
         if (hasClaude()) {
@@ -1011,6 +1422,7 @@ rl.on("line", async (line) => {
       const transcriptRole = m.role === "user" ? "user" : "assistant";
       conversationTranscript.push({ role: transcriptRole, content: m.content });
     }
+    compactContextIfNeeded();
     emit({ type: "history_loaded", count: msg.messages.length });
     return;
   }
@@ -1018,6 +1430,8 @@ rl.on("line", async (line) => {
   if (msg.type !== "message" || !msg.text) return;
 
   const userText = msg.text;
+  await refreshSystemPromptCache();
+  currentTurnStats = { toolCalls: 0, toolNames: new Set(), maxStepsReached: false };
   const imageInputs = await loadImageInputs(msg.images);
   const selectedModelId = isSupportedModelId(msg.model) ? msg.model : DEFAULT_MODEL_ID;
   
@@ -1038,9 +1452,13 @@ rl.on("line", async (line) => {
   // This is async but runs quickly (parallel fetches with 5s timeout).
   await refreshLLMTokens();
 
+  // Keep context/history bounded before selecting provider cascade.
+  compactContextIfNeeded();
+
   // Check if superseded after token refresh
   if (isSuperseded()) {
     currentAbortController = null;
+    currentTurnStats = null;
     return;
   }
 
@@ -1116,6 +1534,13 @@ rl.on("line", async (line) => {
         lastErr = null;
         break;
       } catch (err) {
+        if (isMaxStepsError(err)) {
+          emitProviderError(MAX_STEPS_MESSAGE);
+          result = MAX_STEPS_MESSAGE;
+          lastErr = null;
+          break;
+        }
+
         // Check if this was an interrupt (not a provider failure)
         if (err.message === "Interrupted" || signal.aborted || interruptRequested) {
           // Interrupted by user — emit waiting_user so UI shows compose bar
@@ -1124,6 +1549,7 @@ rl.on("line", async (line) => {
           if (!isSuperseded()) {
             emitWaitingUser();
           }
+          currentTurnStats = null;
           return;
         }
 
@@ -1141,6 +1567,7 @@ rl.on("line", async (line) => {
           // Retry on timeout — the LLM may just be slow this time
           process.stderr.write(`Provedor ${provider.name} timeout (tentativa ${attempts}/${maxAttempts}), retentando...\n`);
           emitStatus(`${provider.name} demorou — retentando...`);
+          emitProviderRetry(provider.name, "timeout");
           // Need a fresh AbortController for the retry (the old one's signal may be timed out)
           currentAbortController = new AbortController();
           signal = currentAbortController.signal;
@@ -1161,6 +1588,7 @@ rl.on("line", async (line) => {
           attempts--; // don't consume a timeout-retry slot for auth refresh
           process.stderr.write(`Provedor ${provider.name} auth error, force-refreshing token...\n`);
           emitStatus(`${provider.name} token expirado — renovando...`);
+          emitProviderRetry(provider.name, "auth");
           // Force refresh bypasses the host's cache and DB expiry check,
           // using the refresh-token flow to get a genuinely new access token.
           await refreshLLMTokens({ force: true });
@@ -1175,27 +1603,42 @@ rl.on("line", async (line) => {
         break; // Move to next provider
       }
     }
-    if (!lastErr) break; // Success — stop cascade
+    if (!lastErr) {
+      if (providerIndex > 0) {
+        emitFallbackUsed(provider.name, providerIndex);
+      }
+      break; // Success — stop cascade
+    }
   }
 
   currentAbortController = null;
 
   // Check if superseded before emitting response
   if (isSuperseded()) {
+    currentTurnStats = null;
     return;
   }
 
   if (lastErr) {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");
+    currentTurnStats = null;
   } else {
+    if (shouldRequireConcreteExecution(userText) && (currentTurnStats?.toolCalls ?? 0) === 0) {
+      const guarded = buildNoExecutionGuardMessage();
+      emitProviderError("Sem execucao concreta detectada nesta rodada; resposta final protegida.");
+      result = guarded;
+    }
+
     // Record successful turn in provider-agnostic transcript (for cascade seeding)
     conversationTranscript.push({ role: "user", content: userText });
     if (result && result !== FALLBACK_RESULT) {
       conversationTranscript.push({ role: "assistant", content: result });
     }
+    compactContextIfNeeded();
     // Signal that we're done processing this turn but ready for more input.
     // The session stays alive — the host will show the compose bar again.
     emitWaitingUser(result);
+    currentTurnStats = null;
   }
 });
 

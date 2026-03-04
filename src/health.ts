@@ -10,6 +10,7 @@ import { configGet } from "./memory/config-store.js";
 import { verifyAgentToken, type AgentTokenPayload } from "./subagent/agent-token.js";
 import { isSensitiveCategory } from "./memory/crypto.js";
 import { resolveSessionsToken, getSessionVariantName, getMainSessionName } from "./subagent/session-manager.js";
+import type { SubAgentMetricsSnapshot } from "./subagent/types.js";
 import type { MemoryService } from "./memory/memory-service.js";
 import type { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
@@ -130,6 +131,7 @@ export let httpServer: Server | null = null;
 let registeredMemoryService: MemoryService | null = null;
 let registeredVectorMemory: VectorMemoryService | null = null;
 let registeredKillSession: ((sessionId: string) => Promise<void>) | null = null;
+let registeredSubagentMetrics: (() => SubAgentMetricsSnapshot) | null = null;
 
 /**
  * Register services for the sub-agent Agent API (read + write).
@@ -155,6 +157,10 @@ export function registerSessionKiller(killFn: (sessionId: string) => Promise<voi
   registeredKillSession = killFn;
 }
 
+export function registerSubagentMetrics(getter: () => SubAgentMetricsSnapshot): void {
+  registeredSubagentMetrics = getter;
+}
+
 export function startHealthServer(port: number): void {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.url === "/health" && req.method === "GET") {
@@ -168,6 +174,7 @@ export function startHealthServer(port: number): void {
         whatsapp: state.whatsappConnected,
         postgres: state.postgresConnected,
         pgvector: state.pgvectorConnected,
+        subagent: registeredSubagentMetrics ? registeredSubagentMetrics().gauges : null,
       });
 
       res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
@@ -338,6 +345,17 @@ export function startHealthServer(port: number): void {
     if (req.url?.startsWith("/api/update") && req.method === "POST") {
       if (!authenticateRequest(req, res)) return;
       await handleUpdate(req, res);
+      return;
+    }
+
+    // ==================== SUB-AGENT METRICS ====================
+    if (req.url?.startsWith("/api/subagent/metrics") && req.method === "GET") {
+      if (!authenticateRequest(req, res)) return;
+      if (!registeredSubagentMetrics) {
+        jsonResponse(res, 503, { error: "Metricas de subagente indisponiveis" });
+        return;
+      }
+      jsonResponse(res, 200, registeredSubagentMetrics());
       return;
     }
 

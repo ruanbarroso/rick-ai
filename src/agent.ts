@@ -8,6 +8,7 @@ import { ClaudeOAuthService } from "./auth/claude-oauth.js";
 import { OpenAIOAuthService } from "./auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
 import { SessionManager, getSessionVariantName, getUserSessionsToken } from "./subagent/session-manager.js";
+import type { SubAgentMetricsSnapshot } from "./subagent/types.js";
 
 
 import { classifyTask } from "./subagent/classifier.js";
@@ -130,6 +131,10 @@ export class Agent {
 
   async killSession(sessionId: string): Promise<void> {
     return this.sessionManager.killSession(sessionId);
+  }
+
+  getSubagentMetrics(): SubAgentMetricsSnapshot {
+    return this.sessionManager.getMetricsSnapshot();
   }
 
   /**

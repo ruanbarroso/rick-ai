@@ -86,3 +86,33 @@ export interface SubAgentSession {
   createdAt: number;
   updatedAt: number;
 }
+
+/** Runtime telemetry snapshot for sub-agent reliability/rollout monitoring. */
+export interface SubAgentMetricsSnapshot {
+  startedAt: number;
+  gauges: {
+    liveSessions: number;
+    runningSessions: number;
+    waitingUserSessions: number;
+    doneSessions: number;
+    failedSessions: number;
+  };
+  counters: {
+    sessionsCreated: number;
+    sessionsRecovered: number;
+    sessionsKilled: number;
+    sessionsInterrupted: number;
+    sessionsFailed: number;
+    turnsCompleted: number;
+    providerErrors: number;
+    fallbackUsed: number;
+    timeoutRetries: number;
+    authRetries: number;
+    maxStepsHits: number;
+    contextCompactions: number;
+    noExecutionGuards: number;
+    toolCallsStarted: number;
+    toolCallsCompleted: number;
+    toolCallsErrored: number;
+  };
+}

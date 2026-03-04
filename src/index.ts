@@ -16,7 +16,7 @@ import { UserService } from "./auth/user-service.js";
 import { closeVectorPool } from "./memory/vector-db.js";
 
 
-import { startHealthServer, setHealthy, registerAgentApiServices, registerSessionKiller } from "./health.js";
+import { startHealthServer, setHealthy, registerAgentApiServices, registerSessionKiller, registerSubagentMetrics } from "./health.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -117,6 +117,7 @@ async function main() {
 
   // Register session killer for the public sessions API
   registerSessionKiller((sessionId) => agent.killSession(sessionId));
+  registerSubagentMetrics(() => agent.getSubagentMetrics());
 
   // Wire welcome message sender: UserService → ConnectorManager
   userService.setWelcomeSender(async (connector, externalId, text) => {

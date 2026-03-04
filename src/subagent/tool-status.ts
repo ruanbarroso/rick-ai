@@ -63,3 +63,30 @@ export function normalizeStatusToolLine(text: string): string {
   }
   return buildToolUseLine(tool, { filePath: arg });
 }
+
+export function formatToolLifecycleLine(input: {
+  event: "start" | "completed" | "error";
+  name: string;
+  args?: Record<string, unknown>;
+  durationMs?: number;
+  outputPreview?: string;
+  message?: string;
+}): string {
+  const name = input.name || "tool";
+
+  if (input.event === "start") {
+    return buildToolUseLine(name, input.args ?? {});
+  }
+
+  if (input.event === "completed") {
+    const duration = typeof input.durationMs === "number" && input.durationMs >= 0
+      ? `${Math.round(input.durationMs)}ms`
+      : "ok";
+    const suffix = input.outputPreview ? ` · ${input.outputPreview}` : "";
+    return `\n\`[${name}:ok]\` \`${duration}${suffix}\`\n`;
+  }
+
+  const raw = String(input.message || "erro").replace(/\s+/g, " ").trim();
+  const short = raw.length > 160 ? `${raw.slice(0, 157)}...` : raw;
+  return `\n\`[${name}:erro]\` \`${short || "erro"}\`\n`;
+}

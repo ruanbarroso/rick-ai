@@ -122,6 +122,8 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 - **Tools**: Browser (Playwright + headless Chromium), shell commands, file I/O, HTTP fetch, read-only PostgreSQL access
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
 - **Context rotation**: Automatic summarization when context window fills up
+- **Prompt layering**: System prompt is composed from a shared base + provider-specific overlay + runtime environment block + project instructions loaded from `AGENTS.md`/`CLAUDE.md` in the workspace
+- **Execution guardrails**: Per-turn max tool-step cap prevents endless loops; for code-change requests, the sub-agent refuses to claim technical completion when no tool execution happened in that turn
 - **Credential injection**: OAuth tokens and stored passwords injected at runtime (never in task descriptions). Sensitive memories are pre-resolved and injected as `RICK_SECRET_*` env vars (decrypted, no encryption key exposed).
 - **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick's read-only API for memories, credentials, semantic search, conversations, and config — all scoped to the owner's data.
 - **Session recovery**: Running containers are recovered after Rick restarts
@@ -141,6 +143,7 @@ The Web UI (`https://rick.barroso.tec.br`) provides a full browser-based interfa
 - **Public session viewer**: Shareable link (`/s/:sessionId`) for real-time sub-agent output
 - **Public sessions dashboard**: Per-user sessions list (`/u/:token`) with all sessions ordered by last activity, linking to individual session viewers
 - **Settings panel**: View/edit API keys, database URLs, agent config — all persisted via config store
+- **Sub-agent runtime dashboard**: In Settings, live counters/gauges for fallback depth, retries, max-steps guard hits, tool-call outcomes, and active/waiting sessions
 - **OAuth management**: Connect/disconnect Claude and GPT directly from the web
 - **WhatsApp management**: View QR code, disconnect/reconnect WhatsApp
 - **Version management**: Check current version, check for updates from GitHub, install updates (OTA)
@@ -171,7 +174,7 @@ There are no slash commands — all interaction is via natural language. The age
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/health` | GET | None | Health check (JSON: status, uptime, WhatsApp/Postgres/pgvector) |
+| `/health` | GET | None | Health check (JSON: status, uptime, WhatsApp/Postgres/pgvector + subagent gauges) |
 | `/` | GET | None | Web UI (single HTML page) |
 | `/m/:token` | GET | None | Public main-session viewer (per-user, text + audio + files) |
 | `/s/:sessionId` | GET | None | Public sub-agent session viewer |
@@ -184,6 +187,7 @@ There are no slash commands — all interaction is via natural language. The age
 | `/api/code/export` | GET | Token | Download source as tar.gz |
 | `/api/code/import` | POST | Token | Upload archive + deploy with rollback |
 | `/api/update` | POST | Token | Download latest from GitHub + deploy with rollback |
+| `/api/subagent/metrics` | GET | Token | Sub-agent runtime telemetry (fallbacks, retries, tool lifecycle counters, context compaction, guardrails) |
 | `/api/agent/config` | GET | JWT | Sub-agent: operational config (name, language, owner) |
 | `/api/agent/memories` | GET | JWT | Sub-agent: list memories (decrypted). Optional `?category=x` |
 | `/api/agent/memory` | GET | JWT | Sub-agent: get specific memory. `?category=x&key=y` |
