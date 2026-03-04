@@ -1,7 +1,7 @@
 /**
  * tool-declarations.mjs — Shared tool schemas for sub-agent containers
  *
- * Single source of truth for the 5 core tool declarations used by
+ * Single source of truth for the core tool declarations used by
  * OpenAI and Gemini providers. Agent-specific tools (web_fetch, rick_memory,
  * rick_search) are added by agent.mjs on top of these.
  */
@@ -63,6 +63,81 @@ export const coreToolDeclarations = [
         args: { type: "array", items: { type: "string" } },
       },
       required: ["command"],
+    },
+  },
+  {
+    name: "browser_navigate",
+    description: "Navega para uma URL no navegador headless",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "URL completa para abrir" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "browser_snapshot",
+    description: "Captura estado atual da pagina (titulo, URL, texto e links)",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "browser_click",
+    description: "Clica no primeiro elemento que corresponde ao seletor CSS",
+    parameters: {
+      type: "object",
+      properties: {
+        selector: { type: "string", description: "Seletor CSS do elemento" },
+      },
+      required: ["selector"],
+    },
+  },
+  {
+    name: "browser_type",
+    description: "Preenche texto em um campo identificado por seletor CSS",
+    parameters: {
+      type: "object",
+      properties: {
+        selector: { type: "string", description: "Seletor CSS do campo" },
+        text: { type: "string", description: "Texto para preencher" },
+        submit: { type: "boolean", description: "Pressiona Enter apos preencher" },
+      },
+      required: ["selector", "text"],
+    },
+  },
+  {
+    name: "browser_wait_for",
+    description: "Espera por um tempo ou por texto aparecer/desaparecer",
+    parameters: {
+      type: "object",
+      properties: {
+        time: { type: "number", description: "Tempo em segundos" },
+        text: { type: "string", description: "Texto que deve aparecer" },
+        textGone: { type: "string", description: "Texto que deve desaparecer" },
+      },
+    },
+  },
+  {
+    name: "browser_screenshot",
+    description: "Tira screenshot da pagina atual e salva no workspace",
+    parameters: {
+      type: "object",
+      properties: {
+        filename: { type: "string", description: "Nome do arquivo (ex: tela.png)" },
+        fullPage: { type: "boolean", description: "Captura pagina inteira" },
+        type: { type: "string", description: "png ou jpeg" },
+      },
+    },
+  },
+  {
+    name: "browser_close",
+    description: "Fecha navegador e limpa a sessao atual",
+    parameters: {
+      type: "object",
+      properties: {},
     },
   },
 ];

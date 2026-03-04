@@ -13,8 +13,9 @@ import {
   mkdirSync,
 } from "fs";
 import { join, relative } from "path";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
+import { createInterface } from "readline";
 
 const execFileAsync = promisify(execFile);
 
@@ -98,6 +99,83 @@ export function toolStatusLabel(name, input) {
 // ── Core tool execution (shared by both agents) ─────────────────────────────
 
 const COMMAND_TIMEOUT = 120_000; // 2 minutes
+const BROWSER_TIMEOUT = 120_000;
+
+let browserWorker = null;
+let browserReqId = 0;
+const browserPending = new Map();
+
+function ensureBrowserWorker() {
+  if (browserWorker && !browserWorker.killed) return browserWorker;
+
+  const proc = spawn("node", ["/app/browser-agent.mjs"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  const rl = createInterface({ input: proc.stdout, terminal: false });
+  rl.on("line", (line) => {
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return;
+    }
+    const pending = browserPending.get(msg.id);
+    if (!pending) return;
+    browserPending.delete(msg.id);
+    if (msg.ok) {
+      pending.resolve(msg.result);
+    } else {
+      pending.reject(new Error(msg.error || "browser worker error"));
+    }
+  });
+
+  proc.stderr.on("data", () => {
+    // browser worker diagnostics are intentionally ignored from tool output
+  });
+
+  proc.on("exit", () => {
+    for (const [, pending] of browserPending) {
+      pending.reject(new Error("browser worker finalizado"));
+    }
+    browserPending.clear();
+    browserWorker = null;
+  });
+
+  browserWorker = proc;
+  return proc;
+}
+
+async function callBrowser(action, payload = {}, timeoutMs = BROWSER_TIMEOUT) {
+  const proc = ensureBrowserWorker();
+  const id = ++browserReqId;
+
+  return await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      browserPending.delete(id);
+      reject(new Error(`browser timeout: ${action}`));
+    }, timeoutMs);
+
+    browserPending.set(id, {
+      resolve: (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      },
+      reject: (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      },
+    });
+
+    try {
+      proc.stdin.write(JSON.stringify({ id, action, payload }) + "\n");
+    } catch (err) {
+      clearTimeout(timeout);
+      browserPending.delete(id);
+      reject(err);
+    }
+  });
+}
 
 /**
  * Execute a tool by name. Returns a string result.
@@ -152,6 +230,74 @@ export async function executeTool(name, input, extraHandler) {
       } catch (e) {
         const raw = `Saída ${e.code ?? 1}:\n${e.stdout ?? ""}\n${e.stderr ?? ""}`.trim();
         return redactSecrets(raw);
+      }
+    }
+    case "browser_navigate": {
+      try {
+        const result = await callBrowser("navigate", { url: input.url });
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_navigate: ${e.message}`;
+      }
+    }
+    case "browser_snapshot": {
+      try {
+        const result = await callBrowser("snapshot", {});
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_snapshot: ${e.message}`;
+      }
+    }
+    case "browser_click": {
+      try {
+        const result = await callBrowser("click", { selector: input.selector });
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_click: ${e.message}`;
+      }
+    }
+    case "browser_type": {
+      try {
+        const result = await callBrowser("type", {
+          selector: input.selector,
+          text: input.text,
+          submit: !!input.submit,
+        });
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_type: ${e.message}`;
+      }
+    }
+    case "browser_wait_for": {
+      try {
+        const result = await callBrowser("wait_for", {
+          time: input.time,
+          text: input.text,
+          textGone: input.textGone,
+        });
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_wait_for: ${e.message}`;
+      }
+    }
+    case "browser_screenshot": {
+      try {
+        const result = await callBrowser("screenshot", {
+          filename: input.filename,
+          fullPage: !!input.fullPage,
+          type: input.type,
+        });
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_screenshot: ${e.message}`;
+      }
+    }
+    case "browser_close": {
+      try {
+        const result = await callBrowser("close", {});
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_close: ${e.message}`;
       }
     }
     default: {

@@ -17,7 +17,9 @@ RUN useradd -m -u 1001 -s /bin/bash agent \
 COPY docker/tools.mjs /app/tools.mjs
 COPY docker/tool-declarations.mjs /app/tool-declarations.mjs
 COPY docker/rick-api.mjs /app/rick-api.mjs
+COPY docker/browser-agent.mjs /app/browser-agent.mjs
 COPY docker/agent.mjs /app/agent.mjs
+RUN cd /app && npm init -y && npm install playwright@1.55.0 --omit=dev
 RUN chown -R agent:agent /app
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
