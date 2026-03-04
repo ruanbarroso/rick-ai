@@ -55,14 +55,18 @@ export const coreToolDeclarations = [
   },
   {
     name: "run_command",
-    description: "Executa um comando no workspace (ex: git clone, npm install, npx tsc)",
+    description: "Executa comando no workspace. Use commandLine para shell completa (ex: \"git status && npm test\") ou command+args para argv separado.",
     parameters: {
       type: "object",
       properties: {
         command: { type: "string" },
         args: { type: "array", items: { type: "string" } },
+        commandLine: { type: "string", description: "Comando completo para executar via bash -lc" },
       },
-      required: ["command"],
+      anyOf: [
+        { required: ["command"] },
+        { required: ["commandLine"] },
+      ],
     },
   },
   {

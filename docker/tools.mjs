@@ -220,11 +220,36 @@ export async function executeTool(name, input, extraHandler) {
     }
     case "run_command": {
       try {
-        const { stdout, stderr } = await execFileAsync(
-          input.command,
-          input.args ?? [],
-          { cwd: WORKSPACE, timeout: COMMAND_TIMEOUT }
-        );
+        const rawCommandLine = typeof input.commandLine === "string" ? input.commandLine.trim() : "";
+        const inferredCommandLine =
+          !rawCommandLine
+          && typeof input.command === "string"
+          && !Array.isArray(input.args)
+          && /\s/.test(input.command)
+            ? input.command.trim()
+            : "";
+
+        let stdout = "";
+        let stderr = "";
+
+        if (rawCommandLine || inferredCommandLine) {
+          const shellLine = rawCommandLine || inferredCommandLine;
+          ({ stdout, stderr } = await execFileAsync(
+            "bash",
+            ["-lc", shellLine],
+            { cwd: WORKSPACE, timeout: COMMAND_TIMEOUT }
+          ));
+        } else {
+          if (!input.command || typeof input.command !== "string") {
+            return "Erro no run_command: informe command ou commandLine.";
+          }
+          ({ stdout, stderr } = await execFileAsync(
+            input.command,
+            Array.isArray(input.args) ? input.args : [],
+            { cwd: WORKSPACE, timeout: COMMAND_TIMEOUT }
+          ));
+        }
+
         const raw = (stdout || "") + (stderr ? `\nSTDERR: ${stderr}` : "");
         return redactSecrets(raw);
       } catch (e) {

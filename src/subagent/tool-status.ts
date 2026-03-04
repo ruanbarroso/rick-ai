@@ -15,6 +15,8 @@ export function buildToolUseLine(toolName: string, input?: Record<string, unknow
 
   if (typeof inp.command === "string") {
     out += `\`$ ${inp.command}\`\n`;
+  } else if (typeof inp.commandLine === "string") {
+    out += `\`$ ${inp.commandLine}\`\n`;
   } else if (typeof inp.filePath === "string" || typeof inp.file_path === "string") {
     out += `\`${inp.filePath ?? inp.file_path}\`\n`;
   } else if (typeof inp.notebook_path === "string") {

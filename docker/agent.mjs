@@ -360,6 +360,16 @@ function buildExecutionReceipt() {
   return lines.join("\n");
 }
 
+function looksToolErrorOutput(toolName, output) {
+  const text = String(output || "").trim();
+  if (!text) return false;
+  if (/^Erro\b/i.test(text)) return true;
+  if (toolName === "run_command" && /^Sa[ií]da\s+\d+:/i.test(text)) {
+    return !/^Sa[ií]da\s+0:/i.test(text);
+  }
+  return false;
+}
+
 function isMaxStepsError(err) {
   return !!err && (err.code === "MAX_STEPS_REACHED" || err.message === "MAX_STEPS_REACHED");
 }
@@ -537,7 +547,11 @@ async function runToolWithLifecycle(name, input) {
       const outputPreview = trimForReceipt(output, 90);
       currentTurnStats.executionTrail.push({ name, input: inputPreview, output: outputPreview });
     }
-    emitToolCallCompleted(callId, name, Date.now() - started, toPreview(output));
+    if (looksToolErrorOutput(name, output)) {
+      emitToolCallError(callId, name, Date.now() - started, toPreview(output));
+    } else {
+      emitToolCallCompleted(callId, name, Date.now() - started, toPreview(output));
+    }
     return output;
   } catch (err) {
     const message = err?.message || String(err || "Erro desconhecido na ferramenta");
@@ -573,6 +587,7 @@ REGRAS:
 10. Para pesquisa web: use web_fetch para acessar URLs e extrair informações.
 11. Seja conciso nas mensagens intermediárias, detalhado no resultado final.
 12. NUNCA envie o output bruto de ferramentas como mensagem para o usuário. Resuma os resultados relevantes em vez de colar output extenso (como variáveis de ambiente, logs longos, etc.). O output das ferramentas já é registrado internamente.
+12.1 Para shell, prefira run_command com commandLine (ex.: "git status && npm test"). Evite chamar apenas "bash" sem comando.
 13. Quando o usuário mencionar um projeto ou repositório por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
 14. Quando o usuário ENSINAR algo útil (URLs, nomes de org, preferências, padrões de projeto), use rick_save_memory para salvar para futuros agentes. Exemplos: URL de organização GitHub, stack tecnológica preferida, convenções de código.
 15. Se o usuário pedir para CORRIGIR, AJUSTAR, REMOVER, ALTERAR comportamento, BUG ou UI, trate como tarefa de código: leia arquivos relevantes, faça a alteração real via ferramenta de edição e valide. Não responda apenas com promessa textual.
