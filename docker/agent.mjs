@@ -2050,16 +2050,6 @@ rl.on("line", async (line) => {
       emitProviderError("Guardrail de bloqueio: resposta ajustada para evitar alegacao de falta de acesso sem erro real de ferramenta.");
     }
 
-    if (
-      requestedFullHistory(turnTaskText)
-      && (currentTurnStats?.toolNames?.has("browser_navigate") || currentTurnStats?.toolNames?.has("browser_snapshot"))
-      && !currentTurnStats?.browserAtBottom
-      && looksLikeFullCoverageClaim(result)
-    ) {
-      result = "Ainda nao posso afirmar que li TODAS as mensagens, porque nao cheguei ao fim da rolagem da pagina nesta rodada. Posso continuar agora rolando a sessao (browser_scroll + snapshots) ate o final e te entregar a transcricao completa.";
-      emitProviderError("Guardrail de navegacao: resposta ajustada para evitar alegacao de cobertura total sem rolagem ate o fim.");
-    }
-
     // Record successful turn in provider-agnostic transcript (for cascade seeding)
     conversationTranscript.push({ role: "user", content: turnTaskText });
     if (result && result !== FALLBACK_RESULT) {
