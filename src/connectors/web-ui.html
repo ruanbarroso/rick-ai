@@ -2773,6 +2773,17 @@
   <p id="loading-text" style="color:var(--text-muted);margin-top:12px;margin-bottom:0;">Carregando...</p>
 </div>
 
+<!-- CLEAR HISTORY CONFIRM MODAL -->
+<div class="confirm-overlay" id="clear-history-overlay" onclick="closeClearHistoryModal()"></div>
+<div class="confirm-modal" id="clear-history-modal">
+  <h3>Limpar historico?</h3>
+  <p>Todo o historico da sessao principal sera apagado. Essa acao nao pode ser desfeita.</p>
+  <div class="confirm-actions">
+    <button class="settings-action-btn" onclick="closeClearHistoryModal()">Cancelar</button>
+    <button class="settings-action-btn primary" onclick="executeClearHistory()">Limpar</button>
+  </div>
+</div>
+
 <!-- UPDATE CONFIRM MODAL -->
 <div class="confirm-overlay" id="update-confirm-overlay" onclick="closeUpdateConfirm()"></div>
 <div class="confirm-modal" id="update-confirm-modal">
@@ -3463,7 +3474,15 @@ function openSessionPage(sessionId) {
 }
 
 function confirmClearHistory() {
-  if (!confirm('Limpar todo o historico da sessao principal?')) return;
+  document.getElementById('clear-history-overlay').classList.add('visible');
+  document.getElementById('clear-history-modal').classList.add('visible');
+}
+function closeClearHistoryModal() {
+  document.getElementById('clear-history-overlay').classList.remove('visible');
+  document.getElementById('clear-history-modal').classList.remove('visible');
+}
+function executeClearHistory() {
+  closeClearHistoryModal();
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'clear_history' }));
   }
