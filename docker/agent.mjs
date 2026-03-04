@@ -138,10 +138,17 @@ let currentTurnPolicy = {
   allowCommit: false,
   allowPush: false,
   allowPr: false,
+  executionRequired: false,
   planningOnly: false,
   executionMode: "build",
 };
 let pendingContinuation = null;
+let recentGitPolicy = {
+  allowCommit: false,
+  allowPush: false,
+  allowPr: false,
+  expiresAt: 0,
+};
 
 function nextToolCallId() {
   toolCallSequence += 1;
@@ -201,6 +208,11 @@ function looksLikeExecutionNowRequest(text) {
   return /(execute|executa|executar|pode executar|agora|manda ver|aplica|aplicar|faz|fa[çc]a|segue com a implementa|pode seguir)/.test(normalized);
 }
 
+function looksLikeConcreteExecutionRequest(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(execute|executa|executar|aplica|aplicar|implement|corrig|ajust|alter|remov|refator|rode|rodar|roda|fa[çc]a|faz|git\s+pull|git\s+commit|git\s+push|checkout|clone|clona|cria\s+pr|abre\s+pr)/.test(normalized);
+}
+
 function looksLikePlanDraftRequest(text) {
   const normalized = String(text || "").toLowerCase();
   const asksPlan = /(plano|planejamento|estrategia|estratégia|roadmap|passo a passo|proposta|como faria|o que faria|montar um plano)/.test(normalized);
@@ -220,8 +232,9 @@ function buildForcedExecutionPrompt(baseTaskText) {
 function shouldForceExecutionRetry(taskText, resultText) {
   if (currentTurnPolicy.executionMode !== "build") return false;
   if (currentTurnPolicy.planningOnly) return false;
+  if (!currentTurnPolicy.executionRequired) return false;
   if (currentTurnStats?.maxStepsReached) return false;
-  if ((currentTurnStats?.toolCalls ?? 0) > 0) return false;
+  if ((currentTurnStats?.executedToolCalls ?? 0) > 0) return false;
 
   const requestedExecution = looksLikeTechnicalActionRequest(taskText) || looksLikeExecutionNowRequest(taskText);
   if (!requestedExecution) return false;
@@ -236,10 +249,29 @@ function acknowledgesPriorExecution(text) {
 
 function parseTurnPolicy(text) {
   const normalized = String(text || "").toLowerCase();
-  const allowCommit = /(\bcommit\b|\bcommitar\b)/.test(normalized);
-  const allowPush = /(\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b)/.test(normalized);
-  const allowPr = /(\bpull request\b|\babrir pr\b|\bcriar pr\b|\bgh pr\b)/.test(normalized);
-  return { allowCommit, allowPush, allowPr, planningOnly: false, executionMode: "build" };
+  const explicitAllowCommit = /(\bcommit\b|\bcommitar\b)/.test(normalized);
+  const explicitAllowPush = /(\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b)/.test(normalized);
+  const explicitAllowPr = /(\bpull request\b|\babrir pr\b|\bcriar pr\b|\bgh pr\b)/.test(normalized);
+
+  const hasExplicitGitIntent = explicitAllowCommit || explicitAllowPush || explicitAllowPr;
+  if (hasExplicitGitIntent) {
+    recentGitPolicy = {
+      allowCommit: explicitAllowCommit,
+      allowPush: explicitAllowPush,
+      allowPr: explicitAllowPr,
+      expiresAt: Date.now() + 10 * 60_000,
+    };
+  }
+
+  const inheritRecentGitPolicy = !hasExplicitGitIntent
+    && looksLikeExecutionNowRequest(normalized)
+    && recentGitPolicy.expiresAt > Date.now();
+
+  const allowCommit = explicitAllowCommit || (inheritRecentGitPolicy && recentGitPolicy.allowCommit);
+  const allowPush = explicitAllowPush || (inheritRecentGitPolicy && recentGitPolicy.allowPush);
+  const allowPr = explicitAllowPr || (inheritRecentGitPolicy && recentGitPolicy.allowPr);
+  const executionRequired = !looksLikePlanDraftRequest(normalized) && looksLikeConcreteExecutionRequest(normalized);
+  return { allowCommit, allowPush, allowPr, executionRequired, planningOnly: false, executionMode: "build" };
 }
 
 function buildPlanningOnlyPrompt(userText) {
@@ -293,13 +325,13 @@ function detectBlockedGitAction(toolName, input) {
   if (!commandText) return null;
 
   if (/\bgh\s+pr\s+create\b/.test(commandText) && !currentTurnPolicy.allowPr) {
-    return "Bloqueado por politica: so posso criar PR quando voce pedir explicitamente neste turno.";
+    return "Bloqueado por politica antes da execucao: so posso criar PR quando voce pedir explicitamente neste turno.";
   }
   if (/\bgit\s+push\b/.test(commandText) && !currentTurnPolicy.allowPush) {
-    return "Bloqueado por politica: so posso fazer git push quando voce pedir explicitamente neste turno.";
+    return "Bloqueado por politica antes da execucao: so posso fazer git push quando voce pedir explicitamente neste turno.";
   }
   if (/\bgit\s+commit\b/.test(commandText) && !currentTurnPolicy.allowCommit) {
-    return "Bloqueado por politica: so posso fazer git commit quando voce pedir explicitamente neste turno.";
+    return "Bloqueado por politica antes da execucao: so posso fazer git commit quando voce pedir explicitamente neste turno.";
   }
 
   if (/(^|\s)rg(\s|$)/.test(commandText)) {
@@ -368,7 +400,7 @@ function collectTurnEvidence(toolName, input) {
 }
 
 function buildFallbackCarryoverContext(baseTaskText) {
-  if (!currentTurnStats || (currentTurnStats.toolCalls ?? 0) === 0) {
+  if (!currentTurnStats || (currentTurnStats.executedToolCalls ?? 0) === 0) {
     return baseTaskText;
   }
 
@@ -586,6 +618,8 @@ async function runToolWithLifecycle(name, input) {
       browserScrolled: false,
       browserAtBottom: false,
       toolErrors: 0,
+      executedToolCalls: 0,
+      blockedByPolicyReason: "",
       lastToolFingerprint: "",
       repeatedToolCount: 0,
       maxStepsReached: false,
@@ -629,11 +663,13 @@ async function runToolWithLifecycle(name, input) {
 
   const blockedReason = detectBlockedGitAction(name, input);
   if (blockedReason) {
+    currentTurnStats.blockedByPolicyReason = blockedReason;
     emitToolCallError(callId, name, Date.now() - started, blockedReason);
     return blockedReason;
   }
 
   try {
+    currentTurnStats.executedToolCalls += 1;
     const result = await runTool(name, input);
     const output = String(result);
     collectTurnEvidence(name, input);
@@ -1804,6 +1840,7 @@ rl.on("line", async (line) => {
   currentTurnPolicy = {
     ...parsedPolicy,
     executionMode: requestedMode,
+    executionRequired: requestedMode === "plan" ? false : parsedPolicy.executionRequired,
     planningOnly: requestedMode === "plan" ? true : parsedPolicy.planningOnly,
   };
   currentTurnStats = {
@@ -1817,6 +1854,8 @@ rl.on("line", async (line) => {
     browserScrolled: false,
     browserAtBottom: false,
     toolErrors: 0,
+    executedToolCalls: 0,
+    blockedByPolicyReason: "",
     lastToolFingerprint: "",
     repeatedToolCount: 0,
     maxStepsReached: false,
@@ -1859,7 +1898,7 @@ rl.on("line", async (line) => {
   if (isSuperseded()) {
     currentAbortController = null;
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
     return;
   }
@@ -1928,7 +1967,7 @@ rl.on("line", async (line) => {
       // Avoid false loop detection when the next provider repeats the latest probe command.
       currentTurnStats.lastToolFingerprint = "";
       currentTurnStats.repeatedToolCount = 0;
-      if (currentTurnStats.toolCalls > 0) {
+      if (currentTurnStats.executedToolCalls > 0) {
         emitStatus(`Retomando no ${provider.name} com contexto de execucao da rodada...`);
       }
     }
@@ -1970,7 +2009,7 @@ rl.on("line", async (line) => {
             emitWaitingUser();
           }
           currentTurnStats = null;
-          currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
+          currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
           pendingContinuation = null;
           return;
         }
@@ -2038,7 +2077,7 @@ rl.on("line", async (line) => {
   // Check if superseded before emitting response
   if (isSuperseded()) {
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
     return;
   }
@@ -2046,7 +2085,7 @@ rl.on("line", async (line) => {
   if (lastErr) {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
   } else {
     currentTurnStats.phase = "reporting";
@@ -2056,7 +2095,7 @@ rl.on("line", async (line) => {
       && !currentTurnPolicy.planningOnly
       &&
       !currentTurnStats?.maxStepsReached
-      && (currentTurnStats?.toolCalls ?? 0) === 0
+      && (currentTurnStats?.executedToolCalls ?? 0) === 0
       && looksLikeTechnicalActionRequest(turnTaskText)
       && !looksLikePlanDraftRequest(turnTaskText)
       && looksLikeTechnicalCompletion(result)
@@ -2066,11 +2105,25 @@ rl.on("line", async (line) => {
       result = guarded;
     }
 
+    if (
+      currentTurnPolicy.executionMode === "build"
+      && currentTurnPolicy.executionRequired
+      && !currentTurnStats?.maxStepsReached
+      && (currentTurnStats?.executedToolCalls ?? 0) === 0
+      && !looksLikePlanDraftRequest(turnTaskText)
+    ) {
+      if (currentTurnStats?.blockedByPolicyReason) {
+        result = `Nao executei as acoes tecnicas porque o comando foi bloqueado por politica antes da execucao: ${currentTurnStats.blockedByPolicyReason}`;
+      } else {
+        result = "Falha operacional: esta rodada exigia execucao, mas o modelo encerrou sem chamar ferramentas. Nenhuma alteracao foi aplicada.";
+      }
+    }
+
     const shouldAppendReceipt =
       currentTurnPolicy.executionMode !== "plan"
       && !currentTurnStats?.maxStepsReached
       && looksLikeTechnicalActionRequest(turnTaskText)
-      && (currentTurnStats?.toolCalls ?? 0) > 0
+      && (currentTurnStats?.executedToolCalls ?? 0) > 0
       && !hasExecutionReceipt(result);
 
     if (shouldAppendReceipt) {
@@ -2081,7 +2134,7 @@ rl.on("line", async (line) => {
       currentTurnPolicy.executionMode === "build"
       && looksLikeFakeAccessBlockClaim(result)
       && (currentTurnStats?.toolErrors ?? 0) === 0
-      && (currentTurnStats?.toolCalls ?? 0) === 0
+      && (currentTurnStats?.executedToolCalls ?? 0) === 0
     ) {
       result = "Ainda nao tentei executar ferramentas suficientes nesta rodada para concluir que existe bloqueio real de acesso. Posso executar agora os passos tecnicos e te trazer evidencias objetivas.";
       emitProviderError("Guardrail de bloqueio: resposta ajustada para evitar alegacao de falta de acesso sem erro real de ferramenta.");
@@ -2102,7 +2155,7 @@ rl.on("line", async (line) => {
     // The session stays alive — the host will show the compose bar again.
     emitWaitingUser(maxStepsTriggered ? undefined : result);
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, planningOnly: false, executionMode: "build" };
   }
 });
 
