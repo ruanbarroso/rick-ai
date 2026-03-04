@@ -196,11 +196,30 @@ function looksLikeTechnicalActionRequest(text) {
   return /(commit|push|pull request|pr\b|git|corrig|ajust|remov|alter|refator|implemen|adicion|cria|bug|erro|teste|build|codigo|code|arquivo|repo|reposit)/.test(normalized);
 }
 
-function isPlanningOnlyRequest(text) {
+function looksLikeExecutionNowRequest(text) {
   const normalized = String(text || "").toLowerCase();
-  const asksPlan = /(plano|planejamento|estrategia|estratégia|roadmap|passo a passo|proposta|arquitetura|como faria|o que faria)/.test(normalized);
-  const asksExecutionNow = /(fa[çc]a agora|implemente|corrija|ajuste|edite|altere|rode|execute|aplique)/.test(normalized);
-  return asksPlan && !asksExecutionNow;
+  return /(execute|executa|executar|pode executar|agora|manda ver|aplica|aplicar|faz|fa[çc]a|segue com a implementa|pode seguir)/.test(normalized);
+}
+
+function looksLikeExecutionPromise(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(vou executar|vou aplicar|vou implementar|posso executar|fechado[\s\S]{0,20}execut|entendi[\s\S]{0,30}execut|se voc[eê] confirma|se confirmar|assim que confirmar)/.test(normalized);
+}
+
+function buildForcedExecutionPrompt(baseTaskText) {
+  return `${baseTaskText}\n\n[EXECUCAO_OBRIGATORIA]\nEsta rodada esta em modo BUILD e o usuario pediu execucao agora. Nao responda com promessa, confirmacao ou deferimento. Execute ferramentas imediatamente e so entregue resposta final apos tentar os passos tecnicos.`;
+}
+
+function shouldForceExecutionRetry(taskText, resultText) {
+  if (currentTurnPolicy.executionMode !== "build") return false;
+  if (currentTurnPolicy.planningOnly) return false;
+  if (currentTurnStats?.maxStepsReached) return false;
+  if ((currentTurnStats?.toolCalls ?? 0) > 0) return false;
+
+  const requestedExecution = looksLikeTechnicalActionRequest(taskText) || looksLikeExecutionNowRequest(taskText);
+  if (!requestedExecution) return false;
+
+  return looksLikeExecutionPromise(resultText);
 }
 
 function acknowledgesPriorExecution(text) {
@@ -213,8 +232,7 @@ function parseTurnPolicy(text) {
   const allowCommit = /(\bcommit\b|\bcommitar\b)/.test(normalized);
   const allowPush = /(\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b)/.test(normalized);
   const allowPr = /(\bpull request\b|\babrir pr\b|\bcriar pr\b|\bgh pr\b)/.test(normalized);
-  const planningOnly = isPlanningOnlyRequest(normalized);
-  return { allowCommit, allowPush, allowPr, planningOnly, executionMode: "build" };
+  return { allowCommit, allowPush, allowPr, planningOnly: false, executionMode: "build" };
 }
 
 function buildPlanningOnlyPrompt(userText) {
@@ -1908,11 +1926,18 @@ rl.on("line", async (line) => {
     let attempts = 0;
     let authRetried = false; // auth refresh retry is separate from timeout retries
     const maxAttempts = 1 + MAX_TIMEOUT_RETRIES; // 1 initial + N timeout retries
+    let forcedExecutionRetried = false;
     while (attempts < maxAttempts) {
       attempts++;
       try {
         emitModelActive(provider.modelId, provider.name);
         result = await provider.fn(providerTaskText, signal, imageInputs);
+
+        if (shouldForceExecutionRetry(providerTaskText, result) && !forcedExecutionRetried) {
+          forcedExecutionRetried = true;
+          result = await provider.fn(buildForcedExecutionPrompt(providerTaskText), signal, imageInputs);
+        }
+
         lastErr = null;
         break;
       } catch (err) {
@@ -2016,16 +2041,15 @@ rl.on("line", async (line) => {
 
     if (
       currentTurnPolicy.executionMode !== "plan"
+      && !currentTurnPolicy.planningOnly
       &&
       !currentTurnStats?.maxStepsReached
       && (currentTurnStats?.toolCalls ?? 0) === 0
       && looksLikeTechnicalActionRequest(turnTaskText)
-      && !isPlanningOnlyRequest(turnTaskText)
       && looksLikeTechnicalCompletion(result)
       && !acknowledgesPriorExecution(result)
     ) {
       const guarded = buildNoExecutionGuardMessage();
-      emitProviderError("Sem execucao concreta detectada nesta rodada; resposta final protegida.");
       result = guarded;
     }
 
