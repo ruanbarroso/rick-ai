@@ -21,7 +21,7 @@
 import { createInterface } from "readline";
 import { access, readFile, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { WORKSPACE, listWorkspace, executeTool } from "./tools.mjs";
+import { WORKSPACE, executeTool } from "./tools.mjs";
 import { coreToolDeclarations } from "./tool-declarations.mjs";
 import {
   rickApiGet, rickApiPost, agentToolHandler as sharedAgentToolHandler,
@@ -151,9 +151,9 @@ function emitToolCallError(callId, name, durationMs, message) {
   });
 }
 
-function shouldRequireConcreteExecution(userText) {
-  const text = String(userText || "").toLowerCase();
-  return /(corrig|ajust|remov|alter|refator|implemen|adicion|cria|bug|erro|teste|build|commit|pull request|pr|codigo|code|arquivo|repo|reposit)/.test(text);
+function looksLikeTechnicalCompletion(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(corrigi|ajustei|removi|alterei|refatorei|implementei|adicionei|criei|resolvi|conclui|finalizei|feito|aplicad|deploy|commit)/.test(normalized);
 }
 
 function isMaxStepsError(err) {
@@ -454,9 +454,6 @@ function environmentPrompt(hasGit) {
     `  Platform: ${process.platform}`,
     `  Today's date: ${new Date().toDateString()}`,
     `</env>`,
-    `<directories>`,
-    `  ${listWorkspace(WORKSPACE).slice(0, 60).join("\n  ")}`,
-    `</directories>`,
   ].join("\n");
 }
 
@@ -603,11 +600,30 @@ function normalizeForSummary(text, maxLen = 220) {
 function summarizeTranscriptChunk(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return "";
   const lines = [];
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     const who = msg.role === "user" ? "Usuario" : "Agente";
-    lines.push(`- ${who}: ${normalizeForSummary(msg.content)}`);
+    lines.push(`${i + 1}. [${who}] ${normalizeForSummary(msg.content, 420)}`);
   }
-  return lines.join("\n");
+  return `Transcricao compactada (factual):\n${lines.join("\n")}`;
+}
+
+function capSummaryByLines(text, maxChars) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  if (raw.length <= maxChars) return raw;
+
+  const lines = raw.split("\n");
+  const kept = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    const extra = line.length + (kept.length > 0 ? 1 : 0);
+    if (used + extra > maxChars) break;
+    kept.unshift(line);
+    used += extra;
+  }
+  return kept.join("\n");
 }
 
 function mergeConversationSummary(previousSummary, chunkSummary) {
@@ -617,9 +633,7 @@ function mergeConversationSummary(previousSummary, chunkSummary) {
   if (pieces.length === 0) return "";
 
   const merged = pieces.join("\n");
-  if (merged.length <= CONTEXT_SUMMARY_MAX_CHARS) return merged;
-  // Keep the newest summary content when we hit the cap.
-  return `...\n${merged.slice(-CONTEXT_SUMMARY_MAX_CHARS + 4)}`;
+  return capSummaryByLines(merged, CONTEXT_SUMMARY_MAX_CHARS);
 }
 
 function estimatedContextTokens() {
@@ -644,18 +658,15 @@ function providerHistoryChars(providerName) {
 function injectSummaryForProvider(providerName) {
   if (!conversationSummary) return;
 
-  const summaryText = `Resumo compacto de contexto anterior (factual):\n${conversationSummary}`;
+  const summaryText = `Contexto anterior compacto (nao e resposta do assistente, apenas memoria factual):\n${conversationSummary}`;
 
   if (providerName === "Gemini") {
     geminiHistory.push({ role: "user", parts: [{ text: summaryText }] });
-    geminiHistory.push({ role: "model", parts: [{ text: "Contexto recebido." }] });
   } else if (providerName === "OpenAI") {
     if (!openaiHistory) openaiHistory = [{ role: "system", content: getOpenAISystemPrompt() }];
     openaiHistory.push({ role: "user", content: summaryText });
-    openaiHistory.push({ role: "assistant", content: "Contexto recebido." });
   } else if (providerName === "Claude") {
     claudeHistory.push({ role: "user", content: summaryText });
-    claudeHistory.push({ role: "assistant", content: "Contexto recebido." });
   }
 }
 
@@ -1623,7 +1634,11 @@ rl.on("line", async (line) => {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");
     currentTurnStats = null;
   } else {
-    if (shouldRequireConcreteExecution(userText) && (currentTurnStats?.toolCalls ?? 0) === 0) {
+    if (
+      !currentTurnStats?.maxStepsReached
+      && (currentTurnStats?.toolCalls ?? 0) === 0
+      && looksLikeTechnicalCompletion(result)
+    ) {
       const guarded = buildNoExecutionGuardMessage();
       emitProviderError("Sem execucao concreta detectada nesta rodada; resposta final protegida.");
       result = guarded;
