@@ -26,6 +26,11 @@ function sanitizeEnvKey(raw: string): string | null {
   return sanitized || null;
 }
 
+function isExecutionOperationalFailure(text: string): boolean {
+  const normalized = String(text || "").toLowerCase();
+  return normalized.startsWith("falha operacional: esta rodada exigia execucao");
+}
+
 /**
  * Rick variant names — canonical Rick and Morty character names from the wiki.
  * Used when agentName is "Rick". Excludes "Rick Sanchez" and "Rick C-137" (the main Rick).
@@ -1257,7 +1262,8 @@ export class SessionManager {
           if (msg.result) {
             session.output += msg.result + "\n";
             if (msg.result !== session.lastMessageText) {
-              this.sendToUser(session, msg.result);
+              const messageType = isExecutionOperationalFailure(msg.result) ? "error" : "text";
+              this.sendToUser(session, msg.result, messageType);
             }
           }
           // Notify session viewers of state change

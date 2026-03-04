@@ -1234,6 +1234,10 @@ function appendToolLine(text, timeStr) {
 
 // ==================== MESSAGE RENDERING ====================
 
+function isExecutionFailureText(text) {
+  return String(text || '').toLowerCase().indexOf('falha operacional: esta rodada exigia execucao') === 0;
+}
+
 function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) {
   // System state messages (e.g. {"state":"done"}) — don't render as bubbles
   if (role === 'system' || messageType === 'system') {
@@ -1263,7 +1267,7 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) 
   var typing = document.getElementById('typing-indicator');
 
   var div = document.createElement('div');
-  var cssClass = messageType === 'error' ? 'error' : (role === 'user' ? 'user' : 'agent');
+  var cssClass = (messageType === 'error' || isExecutionFailureText(text)) ? 'error' : (role === 'user' ? 'user' : 'agent');
   div.className = 'message ' + cssClass;
   div.innerHTML = renderMessageContent(text, audioUrl, imageUrls, fileInfos);
 
@@ -1324,7 +1328,7 @@ function appendHistoryMessage(msg) {
   var typing = document.getElementById('typing-indicator');
 
   var div = document.createElement('div');
-  var cssClass = messageType === 'error' ? 'error' : (role === 'user' ? 'user' : 'agent');
+  var cssClass = (messageType === 'error' || isExecutionFailureText(text)) ? 'error' : (role === 'user' ? 'user' : 'agent');
   div.className = 'message ' + cssClass;
   div.innerHTML = renderMessageContent(text, audioUrl, imageUrls, fileInfos);
 

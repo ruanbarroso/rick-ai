@@ -817,6 +817,14 @@
     border-bottom-right-radius: 4px;
   }
 
+  .message.error {
+    align-self: flex-start;
+    background: rgba(220, 38, 38, 0.15);
+    border: 1px solid rgba(220, 38, 38, 0.45);
+    color: #fca5a5;
+    border-bottom-left-radius: 4px;
+  }
+
   .message .time {
     font-size: 0.7rem;
     color: var(--text-muted);
@@ -3561,7 +3569,9 @@ function renderSessionMessages(sessionId) {
       currentToolBlock = null;
 
       var div = document.createElement('div');
-      div.className = 'message ' + m.from;
+      var isFailure = isExecutionFailureText(m.text);
+      var cssClass = (m.messageType === 'error' || isFailure) ? 'error' : m.from;
+      div.className = 'message ' + cssClass;
       div.innerHTML = renderMessageContent(m.text, m.audioUrl, m.imageUrls, m.fileInfos);
 
       var time = document.createElement('div');
@@ -3577,6 +3587,10 @@ function renderSessionMessages(sessionId) {
 }
 
 // ==================== MESSAGES ====================
+function isExecutionFailureText(text) {
+  return String(text || '').toLowerCase().indexOf('falha operacional: esta rodada exigia execucao') === 0;
+}
+
 function loadHistory(messages) {
   // Store in sessionMessages so switching sessions preserves history
   sessionMessages['main'] = [];
@@ -3626,7 +3640,9 @@ function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType, fileIn
 
   // Regular message — any non-tool_use message breaks the terminal grouping
   var div = document.createElement('div');
-  div.className = 'message ' + from;
+  var isFailure = isExecutionFailureText(text);
+  var cssClass = (messageType === 'error' || isFailure) ? 'error' : from;
+  div.className = 'message ' + cssClass;
   div.innerHTML = renderMessageContent(text, audioUrl, imageUrls, fileInfos);
 
   var time = document.createElement('div');
