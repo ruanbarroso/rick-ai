@@ -98,6 +98,67 @@
   letter-spacing: 0.05em;
 }
 
+/* ==================== TABLES ==================== */
+
+.message .table-wrapper {
+  overflow-x: auto;
+  margin: 8px 0;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+.message table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+
+.message table th,
+.message table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  white-space: nowrap;
+}
+
+.message table th {
+  background: rgba(255,255,255,0.06);
+  font-weight: 600;
+  font-size: 0.82em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted, var(--text2, #8899a6));
+  position: sticky;
+  top: 0;
+}
+
+.message table tbody tr:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.message table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Alternating row colors for readability */
+.message table tbody tr:nth-child(even) {
+  background: rgba(255,255,255,0.02);
+}
+
+/* Responsive: allow horizontal scroll on small screens */
+@media (max-width: 640px) {
+  .message .table-wrapper {
+    margin: 6px -4px;
+    border-radius: 6px;
+  }
+  .message table th,
+  .message table td {
+    padding: 4px 8px;
+    font-size: 0.8em;
+  }
+}
+
 /* ==================== MEDIA MESSAGE OVERRIDES ==================== */
 
 .message:has(.audio-message),

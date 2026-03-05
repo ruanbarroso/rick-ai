@@ -65,6 +65,67 @@ function renderText(text) {
     if (inList) { result.push('</' + listType + '>'); inList = false; listType = null; }
   }
 
+  // Helper: check if a line is a markdown table row (starts and ends with |, or starts with |)
+  function isTableRow(ln) {
+    return /^\|.+\|/.test(ln.trim());
+  }
+
+  // Helper: check if a line is a table separator (|---|---|)
+  function isTableSeparator(ln) {
+    return /^\|[\s\-:]+(\|[\s\-:]+)*\|?\s*$/.test(ln.trim());
+  }
+
+  // Helper: parse a table row into cells
+  function parseTableCells(ln) {
+    var trimmed = ln.trim();
+    // Remove leading/trailing pipes
+    if (trimmed.charAt(0) === '|') trimmed = trimmed.substring(1);
+    if (trimmed.charAt(trimmed.length - 1) === '|') trimmed = trimmed.substring(0, trimmed.length - 1);
+    return trimmed.split('|').map(function(cell) { return cell.trim(); });
+  }
+
+  // Helper: render a group of table lines into HTML
+  function renderTable(tableLines) {
+    if (tableLines.length < 2) {
+      // Not enough lines for a table — render as plain text
+      for (var t = 0; t < tableLines.length; t++) {
+        result.push(inlineFmt(tableLines[t]) + '<br>');
+      }
+      return;
+    }
+
+    var headerLine = tableLines[0];
+    var separatorIdx = -1;
+    // Find the separator line (usually line 1)
+    for (var s = 1; s < tableLines.length && s <= 2; s++) {
+      if (isTableSeparator(tableLines[s])) { separatorIdx = s; break; }
+    }
+
+    var hasHeader = separatorIdx > 0;
+    var headerCells = hasHeader ? parseTableCells(headerLine) : [];
+    var dataStart = hasHeader ? separatorIdx + 1 : 0;
+
+    result.push('<div class="table-wrapper"><table>');
+    if (hasHeader) {
+      result.push('<thead><tr>');
+      for (var h = 0; h < headerCells.length; h++) {
+        result.push('<th>' + inlineFmt(headerCells[h]) + '</th>');
+      }
+      result.push('</tr></thead>');
+    }
+    result.push('<tbody>');
+    for (var r = dataStart; r < tableLines.length; r++) {
+      if (isTableSeparator(tableLines[r])) continue; // skip extra separators
+      var cells = parseTableCells(tableLines[r]);
+      result.push('<tr>');
+      for (var c = 0; c < cells.length; c++) {
+        result.push('<td>' + inlineFmt(cells[c]) + '</td>');
+      }
+      result.push('</tr>');
+    }
+    result.push('</tbody></table></div>');
+  }
+
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
 
@@ -72,6 +133,18 @@ function renderText(text) {
     if (/\x00CB\d+\x00/.test(line)) {
       closeList();
       result.push(line.replace(/\x00CB(\d+)\x00/g, function(_, idx) { return codeBlocks[+idx]; }));
+      continue;
+    }
+
+    // Markdown table: collect consecutive table rows
+    if (isTableRow(line)) {
+      closeList();
+      var tableLines = [line];
+      while (i + 1 < lines.length && (isTableRow(lines[i + 1]) || isTableSeparator(lines[i + 1]))) {
+        i++;
+        tableLines.push(lines[i]);
+      }
+      renderTable(tableLines);
       continue;
     }
 
