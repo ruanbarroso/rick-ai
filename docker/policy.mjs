@@ -51,6 +51,11 @@ export function looksLikeFakeAccessBlockClaim(text) {
   return /(nao tenho acesso|não tenho acesso|nao tenho execucao ativa|não tenho execução ativa|nao consigo executar ferramentas|não consigo executar ferramentas|bloqueado por acesso|iframe n[aã]o ficou acess[ií]vel|n[aã]o apareceu no snapshot|bloqueio real|componente interno sem elementos|n[aã]o exp[oõ]e.*elementos|iframe.*n[aã]o.*acess|shadow.*dom.*bloqu|conte[uú]do.*n[aã]o.*vis[ií]vel.*iframe|n[aã]o.*consegui.*acessar.*iframe)/.test(normalized);
 }
 
+export function looksLikeNoExecutionCapabilityClaim(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(nao tenho execucao ativa|não tenho execução ativa|nao consigo executar ferramentas|não consigo executar ferramentas|nao consigo chamar a api daqui|não consigo chamar a api daqui|sem sess[aã]o de navegador ativa|n[aã]o tenho acesso operacional [aà]s ferramentas|n[aã]o tenho acesso direto ao endpoint)/.test(normalized);
+}
+
 export function looksLikeCheckpointPause(text) {
   const normalized = String(text || "").toLowerCase();
   return /(se voc[eê] quiser.*continu|quer que eu (continu|prossig|siga|execut)|devo (continuar|prosseguir|seguir)|posso (continuar|prosseguir|seguir)|deseja que eu (continu|prossig|execut)|gostaria que eu (continu|prossig)|me avise se (quer|deseja|devo)|aguardo sua confirma[cç][aã]o para (continu|prosseg|execut)|caso queira.*continu|s[oó] me (diga|fala|avisa).*continu|quando (quiser|desejar).*continu)/.test(normalized);
@@ -247,10 +252,25 @@ export function shouldStripCheckpointPause(text, policy) {
  */
 export function stripCheckpointPhrases(text) {
   if (!text) return text;
-  // Remove sentences that contain checkpoint-pause language
-  const lines = String(text).split(/\n/);
-  const cleaned = lines.filter(line => !looksLikeCheckpointPause(line));
-  const result = cleaned.join("\n").trim();
+  let cleaned = String(text);
+  const patterns = [
+    /se\s+voc[eê]\s+quiser[^\n.!?]*(?:continu|prossig|seguir|execut)[^\n.!?]*[.!?]?/gi,
+    /quer\s+que\s+eu\s+(?:continu|prossig|siga|execut)[^\n.!?]*[.!?]?/gi,
+    /devo\s+(?:continuar|prosseguir|seguir)[^\n.!?]*[.!?]?/gi,
+    /posso\s+(?:continuar|prosseguir|seguir)[^\n.!?]*[.!?]?/gi,
+    /deseja\s+que\s+eu\s+(?:continu|prossig|execut)[^\n.!?]*[.!?]?/gi,
+    /me\s+avise\s+se\s+(?:quer|deseja|devo)[^\n.!?]*[.!?]?/gi,
+    /aguardo\s+sua\s+confirma[cç][aã]o\s+para\s+(?:continu|prosseg|execut)[^\n.!?]*[.!?]?/gi,
+  ];
+  for (const pattern of patterns) {
+    cleaned = cleaned.replace(pattern, " ");
+  }
+  cleaned = cleaned
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  const result = cleaned;
   // If stripping removed everything, return original (don't produce empty)
   return result.length > 0 ? result : text;
 }

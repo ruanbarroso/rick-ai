@@ -32,7 +32,7 @@ import {
   looksLikeTechnicalCompletion, looksLikeTechnicalActionRequest,
   looksLikeExecutionNowRequest, looksLikeConcreteExecutionRequest,
   looksLikeExecutionClaim, looksLikeExecutionPromise, looksLikePlanDraftRequest,
-  looksLikeFakeAccessBlockClaim, acknowledgesPriorExecution,
+  looksLikeFakeAccessBlockClaim, looksLikeNoExecutionCapabilityClaim, looksLikeCheckpointPause, acknowledgesPriorExecution,
   isContinuationRequest, hasExecutionReceipt,
   summarizeCommandInput,
   detectBlockedCommand, detectPlanningOnlyToolBlock as detectPlanningBlock,
@@ -101,9 +101,7 @@ function emitMessage(text) {
   let emitText = text;
   if (shouldStripCheckpointPause(text, currentTurnPolicy)) {
     emitText = stripCheckpointPhrases(text);
-    if (!emitText || emitText === text) {
-      emitText = text; // no change or empty — keep original
-    }
+    if (!emitText || looksLikeCheckpointPause(emitText)) return;
   }
   emit({ type: "message", text: redactUserVisibleText(emitText) });
 }
@@ -140,6 +138,10 @@ function emitModelActive(modelId, modelName) {
 function emitProviderError(message) {
   if (isCurrentSuperseded()) return;
   emit({ type: "provider_error", message: redactUserVisibleText(message) });
+}
+
+function logInternal(message) {
+  process.stderr.write(`[guardrail] ${String(message || "")}` + "\n");
 }
 
 function emitFallbackUsed(providerName, depth) {
@@ -1960,7 +1962,17 @@ rl.on("line", async (line) => {
       && (currentTurnStats?.executedToolCalls ?? 0) === 0
     ) {
       result = "Ainda nao tentei executar ferramentas suficientes nesta rodada para concluir que existe bloqueio real de acesso. Posso executar agora os passos tecnicos e te trazer evidencias objetivas.";
-      emitProviderError("Guardrail de bloqueio: resposta ajustada para evitar alegacao de falta de acesso sem erro real de ferramenta.");
+      logInternal("bloqueio-sem-evidencia ajustado");
+      postProcessed = true;
+    }
+
+    if (
+      currentTurnPolicy.executionMode === "build"
+      && (currentTurnStats?.executedToolCalls ?? 0) > 0
+      && looksLikeNoExecutionCapabilityClaim(result)
+    ) {
+      result = "Nesta rodada ja executei ferramentas com sucesso. Vou continuar sem interromper ate concluir ou reportar erro real com evidencia objetiva.";
+      logInternal("contradicao de capacidade ajustada apos execucao no turno");
       postProcessed = true;
     }
 
@@ -1970,7 +1982,12 @@ rl.on("line", async (line) => {
       const cleaned = stripCheckpointPhrases(result);
       if (cleaned !== result) {
         result = cleaned;
-        emitProviderError("Guardrail de checkpoint: removidas frases de pausa intermediaria que pediam confirmacao do usuario para continuar.");
+        logInternal("checkpoint-pause removido do resultado final");
+        postProcessed = true;
+      }
+      if (looksLikeCheckpointPause(result)) {
+        result = "Continuando a execucao sem pausas intermediarias."
+          + ((currentTurnStats?.executedToolCalls ?? 0) > 0 ? "" : " Ainda nao executei ferramentas suficientes nesta rodada.");
         postProcessed = true;
       }
     }
