@@ -133,6 +133,7 @@ export interface SubAgentMetricsSnapshot {
     variantName?: string;
     connectorName: string;
     userId: string;
+    sessionsToken?: string;
     createdAt: number;
     updatedAt: number;
   }>;

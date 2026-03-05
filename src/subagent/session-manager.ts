@@ -313,6 +313,7 @@ export class SessionManager {
         variantName: s.variantName,
         connectorName: s.connectorName,
         userId: s.userId,
+        sessionsToken: s.numericUserId != null ? getUserSessionsToken(s.numericUserId) : undefined,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
       })),

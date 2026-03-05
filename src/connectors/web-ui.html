@@ -3292,7 +3292,7 @@ function updateEphemeralSessions(sessions) {
     var name = sessionVariantName(s);
     var desc = s.taskDescription || sessionRoleLabel();
 
-    html += '<div class="session-item" onclick="openSessionPage(\'' + escapeAttr(s.id) + '\')">';
+    html += '<div class="session-item" onclick="openSessionPage(\'' + escapeAttr(s.id) + '\', \'' + escapeAttr(s.sessionsToken || '') + '\')">';
     html += '<div class="session-icon ' + iconClass + '">' + iconSvg + '</div>';
     html += '<div class="session-info">';
     html += '<div class="session-name">' + escapeHtml(name) + '</div>';
@@ -3349,8 +3349,12 @@ function switchSession(sessionId) {
   closeSidebar();
 }
 
-function openSessionPage(sessionId) {
-  window.open('/s/' + encodeURIComponent(sessionId), '_blank');
+function openSessionPage(sessionId, sessionToken) {
+  var url = '/s/' + encodeURIComponent(sessionId);
+  if (sessionToken) {
+    url += '?t=' + encodeURIComponent(sessionToken);
+  }
+  window.open(url, '_blank');
 }
 
 function confirmClearHistory() {
@@ -5385,7 +5389,7 @@ function renderSubagentActiveSessionsModal() {
     var timeText = ts ? new Date(ts).toLocaleString('pt-BR') : '-';
 
     html += '<div class="subagent-session-row">';
-    html +=   '<div class="subagent-session-main" onclick="openSessionPage(\'' + escapeAttr(String(sid)) + '\')" title="Abrir sessao em nova guia">';
+    html +=   '<div class="subagent-session-main" onclick="openSessionPage(\'' + escapeAttr(String(sid)) + '\', \'' + escapeAttr(String(s.sessionsToken || '')) + '\')" title="Abrir sessao em nova guia">';
     html +=     '<div class="subagent-session-title">' + escapeHtml(String(name)) + '</div>';
     if (task) {
       html +=   '<div class="subagent-session-meta">' + escapeHtml(task) + '</div>';

@@ -1445,6 +1445,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
             state: s.state,
             taskDescription: s.taskDescription,
             variantName: s.variantName,
+            sessionsToken: s.numericUserId != null ? getUserSessionsToken(s.numericUserId) : undefined,
             preferredModel: s.preferredModel,
             executionMode: s.executionMode,
             numericUserId: s.numericUserId,

@@ -45,6 +45,7 @@ export interface WebAgentBridge {
     state: string;
     taskDescription: string;
     variantName?: string;
+    sessionsToken?: string;
     preferredModel: SubAgentModelId;
     executionMode: SubAgentExecutionMode;
     numericUserId: number | null;
