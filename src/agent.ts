@@ -33,7 +33,7 @@ export class Agent {
   /**
    * Pending delegation waiting for user to provide missing credentials.
    */
-  private pendingDelegation: PendingDelegation | null = null;
+  private pendingDelegations = new Map<string, PendingDelegation>();
 
   /**
    * Per-user message processing lock. Serializes handleMessage calls to prevent
@@ -55,6 +55,8 @@ export class Agent {
    * Incremented each time a new message arrives for a user.
    */
   private userGenerations = new Map<string, number>();
+
+  private static readonly PENDING_DELEGATION_TTL_MS = 15 * 60 * 1000;
 
   /** Reference to web bridge for sending transcription events etc. */
   private webBridge: WebAgentBridge | null = null;
@@ -207,6 +209,18 @@ export class Agent {
     return generation < currentGen;
   }
 
+  private getPendingDelegationForUser(userId: string): PendingDelegation | null {
+    const pending = this.pendingDelegations.get(userId);
+    if (!pending) return null;
+
+    if (Date.now() - pending.createdAt > Agent.PENDING_DELEGATION_TTL_MS) {
+      this.pendingDelegations.delete(userId);
+      return null;
+    }
+
+    return pending;
+  }
+
   private async handleMessageInternal(msg: IncomingMessage, signal: AbortSignal, generation: number): Promise<string> {
     const { connectorName, userId: userPhone, userName, text: rawText, media, imageMedias, quotedText, audioUrl, imageUrls, fileInfos } = msg;
     const numericUserId = msg.numericUserId;
@@ -285,7 +299,7 @@ export class Agent {
     }
 
     // If there's a pending delegation waiting for credentials, handle it
-    if (this.pendingDelegation && !routingMedia) {
+    if (this.getPendingDelegationForUser(userPhone) && !routingMedia) {
       return this.handlePendingCredential(userPhone, connectorName, fullText, user.id, userRole);
     }
 
@@ -608,14 +622,14 @@ export class Agent {
 
     // If ALL credentials are missing and at least one was hinted, ask the user.
     if (missing.length > 0 && Object.keys(resolved).length === 0) {
-      this.pendingDelegation = {
+      this.pendingDelegations.set(userPhone, {
         userMessage,
         resolvedCredentials: resolved,
         missingCredentials: missing,
         connectorName,
         userId: userPhone,
         createdAt: Date.now(),
-      };
+      });
 
       const missingList = missing.map((m) => `*${m}*`).join(", ");
       // NOTE: user message already saved and notified by handleMessageInternal — no duplicate save here
@@ -755,12 +769,15 @@ export class Agent {
     userId: number,
     userRole: UserRole = "admin"
   ): Promise<string> {
-    const pending = this.pendingDelegation!;
+    const pending = this.getPendingDelegationForUser(userPhone);
+    if (!pending) {
+      return this.handleSimpleChat(userPhone, null, text, undefined, undefined, undefined, undefined, userRole, userId, connectorName);
+    }
 
     // Check if user wants to cancel
     const lower = text.trim().toLowerCase();
     if (lower === "cancelar" || lower === "cancela" || lower === "nao" || lower === "deixa") {
-      this.pendingDelegation = null;
+      this.pendingDelegations.delete(userPhone);
       return "Ok, cancelei a tarefa.";
     }
 
@@ -784,7 +801,7 @@ export class Agent {
     }
 
     // All credentials resolved — proceed with delegation
-    this.pendingDelegation = null;
+    this.pendingDelegations.delete(userPhone);
     return this.delegateToSubAgent(
       userPhone,
       connectorName,

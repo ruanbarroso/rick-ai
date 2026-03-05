@@ -67,6 +67,30 @@ export const coreToolDeclarations = [
     },
   },
   {
+    name: "batch_tools",
+    description: "Executa multiplas ferramentas independentes em paralelo e retorna os resultados agregados. Use apenas quando uma chamada nao depende da outra.",
+    parameters: {
+      type: "object",
+      properties: {
+        calls: {
+          type: "array",
+          description: "Lista de chamadas { name, input } para executar em paralelo",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "Nome da ferramenta" },
+              input: { type: "object", description: "Parametros da ferramenta" },
+            },
+            required: ["name"],
+            additionalProperties: true,
+          },
+        },
+      },
+      required: ["calls"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "browser_navigate",
     description: "Navega para uma URL no navegador headless",
     parameters: {

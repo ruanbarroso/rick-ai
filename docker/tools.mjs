@@ -279,6 +279,35 @@ export async function executeTool(name, input, extraHandler) {
         return redactSecrets(raw);
       }
     }
+    case "batch_tools": {
+      const calls = Array.isArray(input?.calls) ? input.calls : [];
+      if (calls.length === 0) {
+        return "Erro no batch_tools: informe calls com pelo menos uma chamada.";
+      }
+      if (calls.length > 6) {
+        return "Erro no batch_tools: limite de 6 chamadas por lote.";
+      }
+
+      const jobs = calls.map(async (call, index) => {
+        const tool = typeof call?.name === "string" ? call.name : "";
+        const payload = call && typeof call.input === "object" && call.input !== null ? call.input : {};
+        if (!tool) {
+          return { index, tool: "", ok: false, output: "Nome da ferramenta ausente" };
+        }
+        if (tool === "batch_tools") {
+          return { index, tool, ok: false, output: "batch_tools nao pode chamar a si mesma" };
+        }
+        try {
+          const output = await executeTool(tool, payload, extraHandler);
+          return { index, tool, ok: true, output };
+        } catch (e) {
+          return { index, tool, ok: false, output: String(e?.message || e || "erro desconhecido") };
+        }
+      });
+
+      const settled = await Promise.all(jobs);
+      return redactSecrets(JSON.stringify(settled, null, 2));
+    }
     case "browser_navigate": {
       try {
         const result = await callBrowser("navigate", { url: input.url });

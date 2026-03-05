@@ -203,10 +203,15 @@ function emitContextCompacted(removedMessages, summaryChars) {
 }
 
 let toolCallSequence = 0;
+const activeToolCalls = new Map();
 
 const MAX_TOOL_CALLS_PER_TURN = 80;
 const MAX_REPEAT_SAME_TOOL_CALL = 3;
 const MAX_STEPS_MESSAGE = "Limite maximo de passos desta rodada foi atingido. Parei as ferramentas para evitar loop; se quiser, me diga o proximo foco e eu continuo em uma nova rodada.";
+const RETRY_INITIAL_DELAY_MS = 2_000;
+const RETRY_BACKOFF_FACTOR = 2;
+const RETRY_MAX_DELAY_MS = 30_000;
+const MAX_PROVIDER_RETRIES = 2;
 
 let currentTurnStats = null;
 let currentTurnPolicy = {
@@ -476,6 +481,118 @@ function isMaxStepsError(err) {
   return !!err && (err.code === "MAX_STEPS_REACHED" || err.message === "MAX_STEPS_REACHED");
 }
 
+function headersToObject(headers) {
+  const result = {};
+  if (!headers || typeof headers.forEach !== "function") return result;
+  headers.forEach((value, key) => {
+    result[String(key).toLowerCase()] = String(value);
+  });
+  return result;
+}
+
+function parseRetryAfterMs(headers, now = Date.now()) {
+  if (!headers) return undefined;
+  const retryAfterMs = headers["retry-after-ms"];
+  if (retryAfterMs) {
+    const parsed = Number.parseFloat(retryAfterMs);
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+  }
+
+  const retryAfter = headers["retry-after"];
+  if (!retryAfter) return undefined;
+
+  const parsedSeconds = Number.parseFloat(retryAfter);
+  if (!Number.isNaN(parsedSeconds) && parsedSeconds > 0) {
+    return Math.ceil(parsedSeconds * 1000);
+  }
+
+  const parsedDate = Date.parse(retryAfter);
+  if (!Number.isNaN(parsedDate)) {
+    const delay = parsedDate - now;
+    if (delay > 0) return Math.ceil(delay);
+  }
+
+  return undefined;
+}
+
+function backoffDelay(attempt) {
+  const base = RETRY_INITIAL_DELAY_MS * Math.pow(RETRY_BACKOFF_FACTOR, Math.max(0, attempt - 1));
+  const capped = Math.min(base, RETRY_MAX_DELAY_MS);
+  const jitter = Math.floor(capped * 0.2 * Math.random());
+  return capped + jitter;
+}
+
+async function sleepWithAbort(ms, signal) {
+  if (!ms || ms <= 0) return;
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timeout);
+      reject(new Error("Interrupted"));
+    }
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function failActiveToolCalls(message) {
+  const now = Date.now();
+  for (const [callId, call] of activeToolCalls.entries()) {
+    emitToolCallError(callId, call.name, Math.max(0, now - call.startedAt), message);
+    activeToolCalls.delete(callId);
+  }
+}
+
+function buildProviderApiError(provider, status, headers, body) {
+  const text = typeof body === "string" ? body : JSON.stringify(body || {});
+  const message = `${provider} API error ${status}: ${text}`;
+  const err = new Error(message);
+  err.provider = provider;
+  err.status = status;
+  err.headers = headers || {};
+  err.retryAfterMs = parseRetryAfterMs(headers || {});
+  err.isRetryable = status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+  return err;
+}
+
+function classifyRetry(err, attempt) {
+  const timeout = err?.name === "TimeoutError"
+    || (err?.name === "AbortError" && !interruptRequested && !currentAbortController?.signal?.aborted)
+    || err?.message?.includes("timed out")
+    || err?.message?.includes("timeout");
+  if (timeout) {
+    return { reason: "timeout", delayMs: backoffDelay(attempt), auth: false, retryable: true };
+  }
+
+  const auth = err?.status === 401
+    || err?.status === 403
+    || err?.message?.includes("API error 401")
+    || err?.message?.includes("authentication_error")
+    || err?.message?.includes("Invalid bearer token")
+    || err?.message?.includes("invalid_api_key");
+  if (auth) {
+    return { reason: "auth", delayMs: 0, auth: true, retryable: true };
+  }
+
+  const statusRetryable = !!err?.isRetryable;
+  const rateLimited = err?.status === 429 || err?.message?.toLowerCase().includes("rate limit");
+  if (statusRetryable || rateLimited) {
+    const fromHeader = typeof err?.retryAfterMs === "number" && err.retryAfterMs > 0
+      ? err.retryAfterMs
+      : undefined;
+    return {
+      reason: rateLimited ? "rate_limit" : "provider_error",
+      delayMs: fromHeader ?? backoffDelay(attempt),
+      auth: false,
+      retryable: true,
+    };
+  }
+
+  return { reason: "fatal", delayMs: 0, auth: false, retryable: false };
+}
+
 // buildNoExecutionGuardMessage — imported from policy.mjs
 
 // ── Provider detection (dynamic — re-evaluated per turn) ────────────────────
@@ -627,6 +744,7 @@ async function runToolWithLifecycle(name, input) {
   }
 
   emitToolCallStart(callId, name, input);
+  activeToolCalls.set(callId, { name, startedAt: started });
   currentTurnStats.toolCalls += 1;
   currentTurnStats.toolNames.add(name);
 
@@ -643,6 +761,7 @@ async function runToolWithLifecycle(name, input) {
     // Only escalate to MAX_STEPS if total tool calls also exceed the hard cap.
     const warning = `DOOM_LOOP: a mesma ferramenta (${name}) com os mesmos argumentos foi chamada ${MAX_REPEAT_SAME_TOOL_CALL} vezes consecutivas sem progresso. Tente uma abordagem diferente (outro seletor, outro comando, outra ferramenta). Se nao houver alternativa, reporte o problema ao usuario.`;
     emitToolCallError(callId, name, Date.now() - started, warning);
+    activeToolCalls.delete(callId);
     // Reset the counter so the model gets another chance with different args
     currentTurnStats.repeatedToolCount = 0;
     currentTurnStats.lastToolFingerprint = "";
@@ -653,6 +772,7 @@ async function runToolWithLifecycle(name, input) {
   if (blockedReason) {
     currentTurnStats.blockedByPolicyReason = blockedReason;
     emitToolCallError(callId, name, Date.now() - started, blockedReason);
+    activeToolCalls.delete(callId);
     return blockedReason;
   }
 
@@ -676,14 +796,17 @@ async function runToolWithLifecycle(name, input) {
     if (looksToolErrorOutput(name, output)) {
       currentTurnStats.toolErrors += 1;
       emitToolCallError(callId, name, Date.now() - started, toPreview(output));
+      activeToolCalls.delete(callId);
     } else {
       emitToolCallCompleted(callId, name, Date.now() - started, toPreview(output));
+      activeToolCalls.delete(callId);
     }
     return output;
   } catch (err) {
     const message = err?.message || String(err || "Erro desconhecido na ferramenta");
     if (currentTurnStats) currentTurnStats.toolErrors += 1;
     emitToolCallError(callId, name, Date.now() - started, message);
+    activeToolCalls.delete(callId);
     throw err;
   }
 }
@@ -695,6 +818,22 @@ const agentName = process.env.AGENT_NAME || "Rick";
 const toolDeclarations = [...coreToolDeclarations, ...buildAgentToolDeclarations(agentName)];
 
 const toolNames = toolDeclarations.map((t) => t.name);
+const toolNameSet = new Set(toolNames);
+const toolAliasMap = new Map();
+for (const name of toolNames) {
+  toolAliasMap.set(name.toLowerCase(), name);
+  toolAliasMap.set(name.toLowerCase().replace(/[^a-z0-9]/g, ""), name);
+}
+
+function resolveToolName(rawName) {
+  if (!rawName || typeof rawName !== "string") return null;
+  if (toolNameSet.has(rawName)) return { name: rawName, repaired: false };
+  const lower = rawName.toLowerCase();
+  const compact = lower.replace(/[^a-z0-9]/g, "");
+  const normalized = toolAliasMap.get(lower) || toolAliasMap.get(compact) || null;
+  if (!normalized) return null;
+  return { name: normalized, repaired: normalized !== rawName };
+}
 
 // ── System prompt (delegated to prompt.mjs) ────────────────────────────────
 // Prompt construction, instruction file discovery, and caching are in prompt.mjs.
@@ -736,10 +875,10 @@ async function callGemini(contents, signal, modelId) {
     }),
   });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${errText}`);
-  }
+      if (!res.ok) {
+        const errText = await res.text();
+        throw buildProviderApiError("Gemini", res.status, headersToObject(res.headers), errText);
+      }
 
   const data = await res.json();
   const candidate = data.candidates?.[0];
@@ -771,6 +910,7 @@ const conversationTranscript = [];
 // Rolling compacted summary of older transcript messages.
 // Keeps context continuity without letting raw history grow forever.
 let conversationSummary = "";
+let currentTurnObjective = "";
 
 // Context compaction/pruning knobs.
 const CONTEXT_MAX_ESTIMATED_TOKENS = 70_000;
@@ -827,6 +967,17 @@ function mergeConversationSummary(previousSummary, chunkSummary) {
 
   const merged = pieces.join("\n");
   return capSummaryByLines(merged, CONTEXT_SUMMARY_MAX_CHARS);
+}
+
+function latestUserGoal() {
+  for (let i = conversationTranscript.length - 1; i >= 0; i--) {
+    const msg = conversationTranscript[i];
+    if (msg.role === "user" && msg.content) {
+      return normalizeForSummary(msg.content, 320);
+    }
+  }
+  if (currentTurnObjective) return normalizeForSummary(currentTurnObjective, 320);
+  return "";
 }
 
 function estimatedContextTokens() {
@@ -962,6 +1113,13 @@ function compactContextIfNeeded() {
   }
 
   if (compacted) {
+    const goal = latestUserGoal();
+    if (goal) {
+      conversationSummary = mergeConversationSummary(
+        conversationSummary,
+        `Objetivo ativo para continuidade: ${goal}`,
+      );
+    }
     rebuildProviderHistoriesFromContext();
     emitContextCompacted(removedMessages, conversationSummary.length);
     return;
@@ -1055,7 +1213,19 @@ async function runGeminiLoop(userText, signal, modelId, imageInputs = []) {
         if (signal?.aborted || interruptRequested) {
           throw new Error("Interrupted");
         }
-        const result = await runToolWithLifecycle(tc.name, tc.input);
+        const resolved = resolveToolName(tc.name);
+        if (!resolved) {
+          emitStatus(`Ferramenta desconhecida recebida do modelo: ${tc.name}`);
+          toolResults.push({
+            name: tc.name,
+            result: `Ferramenta desconhecida: ${tc.name}. Ferramentas validas: ${toolNames.join(", ")}`,
+          });
+          continue;
+        }
+        if (resolved.repaired) {
+          emitStatus(`Ajustando chamada de ferramenta: ${tc.name} -> ${resolved.name}`);
+        }
+        const result = await runToolWithLifecycle(resolved.name, tc.input);
         toolResults.push({ name: tc.name, result: String(result) });
       }
 
@@ -1281,7 +1451,7 @@ async function runOpenAILoop(userText, signal, imageInputs = []) {
 
       if (!res.ok) {
         const errText = await res.text();
-        throw new Error(`OpenAI API error ${res.status}: ${errText}`);
+        throw buildProviderApiError("OpenAI", res.status, headersToObject(res.headers), errText);
       }
 
       const data = await res.json();
@@ -1307,7 +1477,17 @@ async function runOpenAILoop(userText, signal, imageInputs = []) {
         if (signal?.aborted || interruptRequested) {
           throw new Error("Interrupted");
         }
-        const result = await runToolWithLifecycle(tc.name, tc.input);
+        const resolved = resolveToolName(tc.name);
+        if (!resolved) {
+          const unknown = `Ferramenta desconhecida: ${tc.name}. Ferramentas validas: ${toolNames.join(", ")}`;
+          emitStatus(`Ferramenta desconhecida recebida do modelo: ${tc.name}`);
+          messages.push({ role: "tool", tool_call_id: tc.id, content: unknown });
+          continue;
+        }
+        if (resolved.repaired) {
+          emitStatus(`Ajustando chamada de ferramenta: ${tc.name} -> ${resolved.name}`);
+        }
+        const result = await runToolWithLifecycle(resolved.name, tc.input);
         messages.push({ role: "tool", tool_call_id: tc.id, content: String(result) });
       }
     }
@@ -1409,7 +1589,7 @@ async function runOpenAICodexLoop(userText, oauthToken, signal, imageInputs = []
 
       if (!res.ok) {
         const errText = await res.text();
-        throw new Error(`OpenAI Codex API error ${res.status}: ${errText}`);
+        throw buildProviderApiError("OpenAI Codex", res.status, headersToObject(res.headers), errText);
       }
 
       const { text, toolCalls } = await parseCodexStreamResponse(res, signal);
@@ -1429,7 +1609,27 @@ async function runOpenAICodexLoop(userText, oauthToken, signal, imageInputs = []
         if (signal?.aborted || interruptRequested) {
           throw new Error("Interrupted");
         }
-        const result = await runToolWithLifecycle(tc.name, tc.input);
+        const resolved = resolveToolName(tc.name);
+        if (!resolved) {
+          const unknown = `Ferramenta desconhecida: ${tc.name}. Ferramentas validas: ${toolNames.join(", ")}`;
+          emitStatus(`Ferramenta desconhecida recebida do modelo: ${tc.name}`);
+          input.push({
+            type: "function_call",
+            name: tc.name,
+            arguments: JSON.stringify(tc.input),
+            call_id: tc.callId,
+          });
+          input.push({
+            type: "function_call_output",
+            call_id: tc.callId,
+            output: unknown,
+          });
+          continue;
+        }
+        if (resolved.repaired) {
+          emitStatus(`Ajustando chamada de ferramenta: ${tc.name} -> ${resolved.name}`);
+        }
+        const result = await runToolWithLifecycle(resolved.name, tc.input);
 
         // Add function call + output to the input for next iteration
         input.push({
@@ -1546,7 +1746,7 @@ async function runClaudeLoop(userText, signal, imageInputs = []) {
 
       if (!res.ok) {
         const errText = await res.text();
-        throw new Error(`Claude API error ${res.status}: ${errText}`);
+        throw buildProviderApiError("Claude", res.status, headersToObject(res.headers), errText);
       }
 
       const data = await res.json();
@@ -1573,7 +1773,20 @@ async function runClaudeLoop(userText, signal, imageInputs = []) {
         if (signal?.aborted || interruptRequested) {
           throw new Error("Interrupted");
         }
-        const result = await runToolWithLifecycle(tb.name, tb.input);
+        const resolved = resolveToolName(tb.name);
+        if (!resolved) {
+          emitStatus(`Ferramenta desconhecida recebida do modelo: ${tb.name}`);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: tb.id,
+            content: `Ferramenta desconhecida: ${tb.name}. Ferramentas validas: ${toolNames.join(", ")}`,
+          });
+          continue;
+        }
+        if (resolved.repaired) {
+          emitStatus(`Ajustando chamada de ferramenta: ${tb.name} -> ${resolved.name}`);
+        }
+        const result = await runToolWithLifecycle(resolved.name, tb.input);
         toolResults.push({ type: "tool_result", tool_use_id: tb.id, content: String(result) });
       }
 
@@ -1662,6 +1875,7 @@ rl.on("line", async (line) => {
       interruptRequested = true;
       currentAbortController.abort();
       currentAbortController = null;
+      failActiveToolCalls("Tool execution aborted");
       emitStatus("Operação interrompida pelo usuário");
     }
     return;
@@ -1744,6 +1958,7 @@ rl.on("line", async (line) => {
   const turnTaskText = currentTurnPolicy.planningOnly
     ? buildPlanningOnlyPrompt(baseTurnTaskText)
     : baseTurnTaskText;
+  currentTurnObjective = turnTaskText;
   if (continuation) {
     emitStatus("Retomando tarefa pendente da rodada anterior...");
   }
@@ -1855,7 +2070,7 @@ rl.on("line", async (line) => {
 
     let attempts = 0;
     let authRetried = false; // auth refresh retry is separate from timeout retries
-    const maxAttempts = 1 + MAX_TIMEOUT_RETRIES; // 1 initial + N timeout retries
+    const maxAttempts = 1 + MAX_TIMEOUT_RETRIES + MAX_PROVIDER_RETRIES;
     let forcedExecutionRetried = false;
     while (attempts < maxAttempts) {
       attempts++;
@@ -1912,36 +2127,9 @@ rl.on("line", async (line) => {
         }
 
         lastErr = err;
-        // Detect timeout errors. AbortSignal.timeout() throws TimeoutError; when wrapped
-        // in AbortSignal.any(), it may surface as AbortError with a TimeoutError reason.
-        // We only treat AbortError as timeout if the user did NOT trigger the abort
-        // (interruptRequested is false and currentAbortController.signal is not aborted).
-        const isTimeout = err.name === "TimeoutError"
-          || (err.name === "AbortError" && !interruptRequested && !signal.aborted)
-          || err.message?.includes("timed out")
-          || err.message?.includes("timeout");
+        const retry = classifyRetry(err, attempts);
 
-        if (isTimeout && attempts < maxAttempts) {
-          // Retry on timeout — the LLM may just be slow this time
-          process.stderr.write(`Provedor ${provider.name} timeout (tentativa ${attempts}/${maxAttempts}), retentando...\n`);
-          emitStatus(`${provider.name} demorou — retentando...`);
-          emitProviderRetry(provider.name, "timeout");
-          // Need a fresh AbortController for the retry (the old one's signal may be timed out)
-          currentAbortController = new AbortController();
-          signal = currentAbortController.signal;
-          continue;
-        }
-
-        // Detect auth errors (401) — OAuth token may have expired mid-session.
-        // Refresh the token from the host API and retry this provider once.
-        // Auth retry is tracked separately from timeout retries so both can
-        // fire independently (e.g. timeout → auth error → refreshed success).
-        const isAuthError = err.message?.includes("API error 401")
-          || err.message?.includes("authentication_error")
-          || err.message?.includes("Invalid bearer token")
-          || err.message?.includes("invalid_api_key");
-
-        if (isAuthError && !authRetried) {
+        if (retry.auth && !authRetried) {
           authRetried = true;
           attempts--; // don't consume a timeout-retry slot for auth refresh
           process.stderr.write(`Provedor ${provider.name} auth error, force-refreshing token...\n`);
@@ -1950,6 +2138,20 @@ rl.on("line", async (line) => {
           // Force refresh bypasses the host's cache and DB expiry check,
           // using the refresh-token flow to get a genuinely new access token.
           await refreshLLMTokens({ force: true });
+          continue;
+        }
+
+        if (retry.retryable && attempts < maxAttempts) {
+          const delay = Math.max(0, retry.delayMs || 0);
+          process.stderr.write(`Provedor ${provider.name} ${retry.reason} (tentativa ${attempts}/${maxAttempts}), retentando em ${delay}ms...\n`);
+          emitStatus(`${provider.name} falhou (${retry.reason}) — retentando...`);
+          emitProviderRetry(provider.name, retry.reason);
+          if (delay > 0) {
+            await sleepWithAbort(delay, signal);
+          }
+          // Fresh abort controller for retry after timeout/backoff
+          currentAbortController = new AbortController();
+          signal = currentAbortController.signal;
           continue;
         }
 

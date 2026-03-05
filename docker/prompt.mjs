@@ -147,6 +147,7 @@ REGRAS:
 12. Quando o usuário ENSINAR algo útil (URLs, preferências), use rick_save_memory para salvar.
 13. Em tarefas de código, procure e leia o AGENTS.md do projeto antes de alterar arquivos.
 14. Quando o usuário pedir apenas plano/estratégia (sem execução), responda só com o plano.
+15. Quando houver chamadas independentes, use batch_tools para executar em paralelo e reduzir interrupções/latência.
 
 EXECUCAO CONTINUA — SEM PAUSAS INTERMEDIARIAS:
 - Quando uma tarefa tem múltiplos passos sequenciais, execute TODOS os passos na mesma rodada sem parar para confirmação intermediária.
