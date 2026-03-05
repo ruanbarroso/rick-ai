@@ -125,4 +125,15 @@ export interface SubAgentMetricsSnapshot {
     toolCallsCompleted: number;
     toolCallsErrored: number;
   };
+  /** Summary of live sessions for the active-sessions modal (no credentials). */
+  liveSessionsList?: Array<{
+    id: string;
+    state: SessionState;
+    taskDescription: string;
+    variantName?: string;
+    connectorName: string;
+    userId: string;
+    createdAt: number;
+    updatedAt: number;
+  }>;
 }

@@ -306,6 +306,16 @@ export class SessionManager {
         failedSessions: failed.length,
       },
       counters: { ...this.metricsCounters },
+      liveSessionsList: live.map((s) => ({
+        id: s.id,
+        state: s.state,
+        taskDescription: s.taskDescription,
+        variantName: s.variantName,
+        connectorName: s.connectorName,
+        userId: s.userId,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+      })),
     };
   }
 
