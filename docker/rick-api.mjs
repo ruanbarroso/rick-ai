@@ -98,6 +98,81 @@ export async function rickApiPost(path, body) {
   }
 }
 
+// ── HTML to readable text converter ─────────────────────────────────────────
+
+/**
+ * Convert HTML to readable text with basic Markdown formatting.
+ * Lightweight — no external dependencies.
+ */
+function htmlToReadableText(html) {
+  let text = html;
+
+  // Remove script, style, svg, noscript tags and their content
+  text = text.replace(/<(script|style|svg|noscript)[^>]*>[\s\S]*?<\/\1>/gi, "");
+
+  // Remove HTML comments
+  text = text.replace(/<!--[\s\S]*?-->/g, "");
+
+  // Convert headings to Markdown
+  text = text.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, content) => {
+    const prefix = "#".repeat(parseInt(level));
+    return `\n\n${prefix} ${content.replace(/<[^>]+>/g, "").trim()}\n`;
+  });
+
+  // Convert links to Markdown
+  text = text.replace(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, url, label) => {
+    const cleanLabel = label.replace(/<[^>]+>/g, "").trim();
+    return cleanLabel ? `[${cleanLabel}](${url})` : url;
+  });
+
+  // Convert images to Markdown
+  text = text.replace(/<img[^>]+alt=["']([^"']+)["'][^>]*>/gi, "![$1]");
+  text = text.replace(/<img[^>]*>/gi, "");
+
+  // Convert lists
+  text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_, content) => {
+    return `\n- ${content.replace(/<[^>]+>/g, "").trim()}`;
+  });
+
+  // Convert paragraphs and divs to line breaks
+  text = text.replace(/<\/(p|div|section|article|header|footer|main|aside|nav)>/gi, "\n\n");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<hr\s*\/?>/gi, "\n---\n");
+
+  // Convert code blocks
+  text = text.replace(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/gi, (_, code) => {
+    return `\n\`\`\`\n${code.replace(/<[^>]+>/g, "")}\n\`\`\`\n`;
+  });
+  text = text.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, "`$1`");
+
+  // Convert bold and italic
+  text = text.replace(/<(strong|b)[^>]*>([\s\S]*?)<\/\1>/gi, "**$2**");
+  text = text.replace(/<(em|i)[^>]*>([\s\S]*?)<\/\1>/gi, "*$2*");
+
+  // Strip remaining HTML tags
+  text = text.replace(/<[^>]+>/g, "");
+
+  // Decode common HTML entities
+  text = text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code)))
+    .replace(/&[a-z]+;/gi, " ");
+
+  // Clean up whitespace
+  text = text
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return text;
+}
+
 // ── Agent-specific tool declarations ────────────────────────────────────────
 
 /**
@@ -164,9 +239,30 @@ export async function agentToolHandler(name, input, { emitStatus } = {}) {
   switch (name) {
     case "web_fetch": {
       try {
-        const res = await fetch(input.url, { signal: AbortSignal.timeout(WEB_FETCH_TIMEOUT_MS) });
-        const text = await res.text();
-        return text.length > 20000 ? text.substring(0, 20000) + "\n...(truncado)" : text;
+        const res = await fetch(input.url, {
+          signal: AbortSignal.timeout(WEB_FETCH_TIMEOUT_MS),
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; RickAI/1.0; +https://github.com)" },
+          redirect: "follow",
+        });
+        const contentType = res.headers.get("content-type") || "";
+        const raw = await res.text();
+
+        // Convert HTML to simplified Markdown-like text
+        let text = raw;
+        if (contentType.includes("html") || raw.trimStart().startsWith("<!") || raw.trimStart().startsWith("<html")) {
+          text = htmlToReadableText(raw);
+        }
+
+        // Smart truncation: keep first + last portions
+        const MAX = 30000;
+        if (text.length > MAX) {
+          const keepStart = Math.floor(MAX * 0.7);
+          const keepEnd = MAX - keepStart;
+          text = text.substring(0, keepStart)
+            + `\n\n... [${text.length - MAX} caracteres omitidos] ...\n\n`
+            + text.substring(text.length - keepEnd);
+        }
+        return text;
       } catch (e) {
         return `Erro ao acessar ${input.url}: ${e.message}`;
       }

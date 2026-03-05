@@ -9,11 +9,13 @@
 export const coreToolDeclarations = [
   {
     name: "read_file",
-    description: "Lê o conteúdo de um arquivo do workspace",
+    description: "Le o conteudo de um arquivo do workspace. Suporta offset/limit para arquivos grandes.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "Caminho relativo a /workspace ou absoluto" },
+        offset: { type: "number", description: "Linha inicial (1-indexed). Omita para comecar do inicio." },
+        limit: { type: "number", description: "Numero maximo de linhas a retornar (padrao: 2000)" },
       },
       required: ["path"],
     },
@@ -32,13 +34,14 @@ export const coreToolDeclarations = [
   },
   {
     name: "edit_file",
-    description: "Substitui uma string exata em um arquivo (primeira ocorrência)",
+    description: "Substitui uma string em um arquivo. Usa cascata de estrategias (exata, line-trimmed, indentation-flexible, whitespace-normalized, escape-normalized, block-anchor) para maximizar taxa de sucesso. Use replaceAll para renomear variaveis.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string" },
-        old_string: { type: "string", description: "String exata a ser substituída" },
-        new_string: { type: "string", description: "String de substituição" },
+        old_string: { type: "string", description: "String a ser substituida" },
+        new_string: { type: "string", description: "String de substituicao" },
+        replaceAll: { type: "boolean", description: "Substituir todas as ocorrencias (default false)" },
       },
       required: ["path", "old_string", "new_string"],
     },
@@ -51,6 +54,55 @@ export const coreToolDeclarations = [
       properties: {
         path: { type: "string", description: "Diretório a listar (padrão: /workspace)" },
       },
+    },
+  },
+  {
+    name: "glob",
+    description: "Busca rapida de arquivos por padrao glob. Suporta ** para recursivo, * para wildcard, ? para caractere unico. Ex: '**/*.ts', 'src/**/*.test.js', '*.json'. Use ESTA ferramenta ao inves de find/ls via run_command.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Padrao glob (ex: '**/*.ts', 'src/**/*.tsx')" },
+        path: { type: "string", description: "Diretorio base (padrao: /workspace)" },
+      },
+      required: ["pattern"],
+    },
+  },
+  {
+    name: "grep",
+    description: "Busca rapida de conteudo em arquivos usando regex. Retorna arquivo:linha:conteudo para cada match. Use ESTA ferramenta ao inves de grep/rg via run_command.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Regex para buscar (ex: 'function\\s+handleClick', 'TODO|FIXME')" },
+        path: { type: "string", description: "Diretorio base (padrao: /workspace)" },
+        include: { type: "string", description: "Filtro de arquivo (ex: '*.ts', '*.{js,jsx}')" },
+        maxResults: { type: "number", description: "Maximo de resultados (padrao: 50)" },
+      },
+      required: ["pattern"],
+    },
+  },
+  {
+    name: "todo_write",
+    description: "Cria e gerencia uma lista de tarefas para rastrear progresso em tarefas complexas multi-passo. Use quando a tarefa tem 3+ passos distintos. Marque como in_progress ao iniciar e completed ao terminar cada item.",
+    parameters: {
+      type: "object",
+      properties: {
+        todos: {
+          type: "array",
+          description: "Lista de tarefas atualizada",
+          items: {
+            type: "object",
+            properties: {
+              content: { type: "string", description: "Descricao da tarefa" },
+              status: { type: "string", description: "pending, in_progress, completed ou cancelled" },
+              priority: { type: "string", description: "high, medium ou low" },
+            },
+            required: ["content", "status"],
+          },
+        },
+      },
+      required: ["todos"],
     },
   },
   {

@@ -81,6 +81,18 @@ export function looksLikeFullCoverageClaim(text) {
   return /(li todas as mensagens|todas as mensagens|historico completo|histórico completo|100%|li tudo)/.test(normalized);
 }
 
+/**
+ * Detect when the model stopped mid-task and indicates there are more steps to do.
+ * This triggers automatic continuation in build mode.
+ */
+export function looksLikeIncompleteExecution(text) {
+  const normalized = String(text || "").toLowerCase();
+  // Must NOT look like a final/complete result
+  if (/(conclu[ií]d|finalizado|tudo pronto|tarefa completa|todas as alteracoes|evidencias de execucao)/.test(normalized)) return false;
+  // Must have indicators of incomplete work
+  return /(agora vou|proximo passo|em seguida|depois (vou|preciso|devo)|falta (ainda|apenas)|ainda (preciso|falta|restam)|vou (continuar|prosseguir|seguir)|proxima etapa|na sequencia)/.test(normalized);
+}
+
 export function hasExecutionReceipt(text) {
   const normalized = String(text || "").toLowerCase();
   return /(evidencias de execucao|evidências de execução|arquivos alterados|comandos executados|validacoes executadas|validações executadas)/.test(normalized);

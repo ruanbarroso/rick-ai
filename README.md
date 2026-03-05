@@ -119,9 +119,9 @@ Tables are automatically pruned to prevent unbounded growth:
 All delegated tasks (coding, research, browser automation) are handled by a **single unified sub-agent** container with:
 
 - **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro → Gemini 3.0 Flash (automatic failover on rate limits or errors, with automatic retry on timeout before falling through). The session viewer also lets you pick a primary model per session; the selected model is tried first, then the cascade continues from that point. Claude/OpenAI OAuth can be configured per user directly in the sub-agent session viewer (Gemini remains global); when a user has no personal OAuth, the sub-agent falls back to the admin connection. Providers are re-evaluated per turn, so a session started with only Gemini will automatically gain Claude/GPT access when they are connected later via OAuth. Conversation context is shared across providers via a common transcript, so a cascade switch does not cause amnesia.
-- **Tools**: Browser (Playwright MCP + Chrome channel), shell commands, file I/O, HTTP fetch, read-only PostgreSQL access
+- **Tools**: Browser (Playwright MCP + Chrome channel), shell commands, file I/O (`read_file` with offset/limit, resilient `edit_file` with multi-strategy matching), native `glob`/`grep`, `todo_write`, HTTP fetch with HTML-to-text normalization, read-only PostgreSQL access
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
-- **Context rotation**: Automatic summarization when context window fills up
+- **Context rotation**: Automatic summarization when context window fills up (LLM-assisted summary with fallback to textual compaction)
 - **Prompt layering**: System prompt is composed from a shared base + provider-specific overlay + runtime environment block + project instructions loaded from `AGENTS.md`/`CLAUDE.md` in the workspace
 - **Execution guardrails**: Per-turn max tool-step cap prevents endless loops; for code-change requests, the sub-agent refuses to claim technical completion when no tool execution happened in that turn
 - **Git safety gate**: `git commit`, `git push`, and `gh pr create` are blocked unless explicitly requested in the current user turn

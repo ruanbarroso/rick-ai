@@ -33,7 +33,7 @@ import {
   looksLikeExecutionNowRequest, looksLikeConcreteExecutionRequest,
   looksLikeExecutionClaim, looksLikeExecutionPromise, looksLikePlanDraftRequest,
   looksLikeFakeAccessBlockClaim, looksLikeNoExecutionCapabilityClaim, looksLikeCheckpointPause, acknowledgesPriorExecution,
-  isContinuationRequest, hasExecutionReceipt,
+  isContinuationRequest, hasExecutionReceipt, looksLikeIncompleteExecution,
   summarizeCommandInput,
   detectBlockedCommand, detectPlanningOnlyToolBlock as detectPlanningBlock,
   parseTurnPolicy as parseTurnPolicyPure, missingExpectedActions as missingExpectedActionsPure,
@@ -557,7 +557,34 @@ function buildProviderApiError(provider, status, headers, body) {
   return err;
 }
 
+/**
+ * Detect context overflow errors across multiple providers.
+ * Pattern list inspired by OpenCode's provider/error.ts.
+ */
+function isContextOverflowError(err) {
+  const msg = String(err?.message || "").toLowerCase();
+  const patterns = [
+    // Anthropic
+    "prompt is too long", "context length exceeded", "max_tokens",
+    "maximum context length", "too many tokens",
+    // OpenAI
+    "context_length_exceeded", "maximum context length",
+    "reduce the length of the messages",
+    // Google / Gemini
+    "resource_exhausted", "exceeds the maximum", "context window",
+    "too long", "token limit",
+    // General
+    "request too large", "payload too large",
+  ];
+  return patterns.some(p => msg.includes(p));
+}
+
 function classifyRetry(err, attempt) {
+  // Context overflow — should be handled by compaction, not retry
+  if (isContextOverflowError(err)) {
+    return { reason: "context_overflow", delayMs: 0, auth: false, retryable: true, overflow: true };
+  }
+
   const timeout = err?.name === "TimeoutError"
     || (err?.name === "AbortError" && !interruptRequested && !currentAbortController?.signal?.aborted)
     || err?.message?.includes("timed out")
@@ -864,7 +891,8 @@ async function callGemini(contents, signal, modelId) {
     ? AbortSignal.any([timeoutSignal, signal])
     : timeoutSignal;
 
-  const res = await fetch(`${BASE}:generateContent?key=${apiKey}`, {
+  // Use streaming endpoint for real-time token output
+  const res = await fetch(`${BASE}:streamGenerateContent?alt=sse&key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal: combinedSignal,
@@ -875,22 +903,58 @@ async function callGemini(contents, signal, modelId) {
     }),
   });
 
-      if (!res.ok) {
-        const errText = await res.text();
-        throw buildProviderApiError("Gemini", res.status, headersToObject(res.headers), errText);
+  if (!res.ok) {
+    const errText = await res.text();
+    throw buildProviderApiError("Gemini", res.status, headersToObject(res.headers), errText);
+  }
+
+  // Parse SSE stream
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("Gemini stream sem body de resposta");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const allParts = [];
+
+  while (true) {
+    if (signal?.aborted || interruptRequested) throw new Error("Interrupted");
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+      const rawEvent = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+
+      let dataText = "";
+      for (const line of rawEvent.split("\n")) {
+        if (line.startsWith("data:")) {
+          dataText += line.slice(5).trimStart();
+        }
       }
+      if (!dataText || dataText === "[DONE]") continue;
 
-  const data = await res.json();
-  const candidate = data.candidates?.[0];
-  if (!candidate) throw new Error("Gemini retornou resposta vazia.");
+      let chunk;
+      try { chunk = JSON.parse(dataText); } catch { continue; }
 
-  const parts = candidate.content.parts ?? [];
+      const candidate = chunk.candidates?.[0];
+      if (!candidate?.content?.parts) continue;
+
+      for (const part of candidate.content.parts) {
+        allParts.push(part);
+      }
+    }
+  }
+
   return {
-    texts: parts.filter((p) => p.text).map((p) => p.text),
-    toolCalls: parts
+    texts: allParts.filter((p) => p.text).map((p) => p.text),
+    toolCalls: allParts
       .filter((p) => p.functionCall)
       .map((p) => ({ name: p.functionCall.name, input: p.functionCall.args ?? {} })),
-    modelParts: parts,
+    modelParts: allParts,
   };
 }
 
@@ -930,15 +994,70 @@ function normalizeForSummary(text, maxLen = 220) {
   return normalized.length > maxLen ? `${normalized.slice(0, maxLen)}...` : normalized;
 }
 
-function summarizeTranscriptChunk(messages) {
+/**
+ * Summarize a transcript chunk using LLM (Gemini Flash) when available,
+ * falling back to textual formatting. LLM-powered summarization preserves
+ * semantic intent (the "why") rather than just raw text fragments.
+ */
+async function summarizeTranscriptChunk(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return "";
+
+  // Build raw transcript for both LLM and fallback
   const lines = [];
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     const who = msg.role === "user" ? "Usuario" : "Agente";
     lines.push(`${i + 1}. [${who}] ${normalizeForSummary(msg.content, 420)}`);
   }
-  return `Transcricao compactada (factual):\n${lines.join("\n")}`;
+  const rawTranscript = lines.join("\n");
+
+  // Try LLM-powered summarization via Gemini Flash (fast + cheap)
+  if (hasGemini()) {
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(15_000),
+          body: JSON.stringify({
+            contents: [{
+              role: "user",
+              parts: [{
+                text: `Resuma a seguinte conversa entre Usuario e Agente de forma estruturada e concisa em portugues. Use o formato abaixo:
+
+OBJETIVO: (o que o usuario pediu)
+DESCOBERTAS: (fatos relevantes aprendidos durante a execucao)
+REALIZADO: (o que foi concretamente feito, com evidencias: arquivos alterados, comandos executados)
+ESTADO ATUAL: (onde a tarefa parou — completa, pendente, erro)
+ARQUIVOS RELEVANTES: (lista de arquivos mencionados ou alterados)
+
+Conversa:
+${rawTranscript}`
+              }],
+            }],
+            generationConfig: {
+              maxOutputTokens: 1024,
+              temperature: 0.2,
+            },
+          }),
+        },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const summary = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (summary && summary.trim().length > 20) {
+          return `Resumo compactado (via LLM):\n${summary.trim()}`;
+        }
+      }
+    } catch {
+      // LLM call failed — fall through to textual fallback
+    }
+  }
+
+  // Fallback: textual formatting (original behavior)
+  return `Transcricao compactada (factual):\n${rawTranscript}`;
 }
 
 function capSummaryByLines(text, maxChars) {
@@ -1086,7 +1205,7 @@ function pruneClaudeToolOutputs() {
   }
 }
 
-function compactContextIfNeeded() {
+async function compactContextIfNeeded() {
   let compacted = false;
   let removedMessages = 0;
 
@@ -1097,7 +1216,7 @@ function compactContextIfNeeded() {
     const removableCount = Math.max(1, conversationTranscript.length - CONTEXT_KEEP_RECENT_MESSAGES);
     const chunk = conversationTranscript.splice(0, removableCount);
     removedMessages += chunk.length;
-    const chunkSummary = summarizeTranscriptChunk(chunk);
+    const chunkSummary = await summarizeTranscriptChunk(chunk);
     conversationSummary = mergeConversationSummary(conversationSummary, chunkSummary);
     compacted = true;
   }
@@ -1107,7 +1226,7 @@ function compactContextIfNeeded() {
     const removableCount = conversationTranscript.length - CONTEXT_KEEP_RECENT_MESSAGES * 2;
     const chunk = conversationTranscript.splice(0, removableCount);
     removedMessages += chunk.length;
-    const chunkSummary = summarizeTranscriptChunk(chunk);
+    const chunkSummary = await summarizeTranscriptChunk(chunk);
     conversationSummary = mergeConversationSummary(conversationSummary, chunkSummary);
     compacted = true;
   }
@@ -1653,6 +1772,85 @@ async function runOpenAICodexLoop(userText, oauthToken, signal, imageInputs = []
 
 // ── Claude API adapter ──────────────────────────────────────────────────────
 
+/**
+ * Parse Claude SSE stream into content blocks.
+ * Claude streaming events: message_start, content_block_start,
+ * content_block_delta, content_block_stop, message_delta, message_stop.
+ */
+async function parseClaudeStream(res, signal) {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("Claude stream sem body de resposta");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const contentBlocks = [];
+  let currentBlock = null;
+
+  while (true) {
+    if (signal?.aborted || interruptRequested) throw new Error("Interrupted");
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+      const rawEvent = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+
+      let eventType = "";
+      let dataText = "";
+      for (const line of rawEvent.split("\n")) {
+        if (line.startsWith("event:")) eventType = line.slice(6).trim();
+        if (line.startsWith("data:")) dataText += line.slice(5).trimStart();
+      }
+      if (!dataText) continue;
+
+      let data;
+      try { data = JSON.parse(dataText); } catch { continue; }
+
+      switch (eventType) {
+        case "content_block_start":
+          currentBlock = data.content_block ? { ...data.content_block } : null;
+          if (currentBlock?.type === "text" && !currentBlock.text) currentBlock.text = "";
+          if (currentBlock?.type === "tool_use" && !currentBlock.input) currentBlock.input = {};
+          // For tool_use, we'll accumulate partial JSON
+          if (currentBlock?.type === "tool_use") currentBlock._inputJson = "";
+          break;
+
+        case "content_block_delta":
+          if (!currentBlock) break;
+          if (data.delta?.type === "text_delta" && typeof data.delta.text === "string") {
+            currentBlock.text = (currentBlock.text || "") + data.delta.text;
+          }
+          if (data.delta?.type === "input_json_delta" && typeof data.delta.partial_json === "string") {
+            currentBlock._inputJson = (currentBlock._inputJson || "") + data.delta.partial_json;
+          }
+          break;
+
+        case "content_block_stop":
+          if (currentBlock) {
+            // Parse accumulated JSON for tool_use blocks
+            if (currentBlock.type === "tool_use" && currentBlock._inputJson) {
+              try { currentBlock.input = JSON.parse(currentBlock._inputJson); } catch { currentBlock.input = {}; }
+              delete currentBlock._inputJson;
+            }
+            contentBlocks.push(currentBlock);
+            currentBlock = null;
+          }
+          break;
+
+        case "message_stop":
+          break;
+
+        case "error":
+          throw new Error(data.error?.message || "Claude stream error");
+      }
+    }
+  }
+
+  return contentBlocks;
+}
+
 // Tool name prefix required by Anthropic's OAuth/beta endpoint.
 // The server requires tool names to start with "mcp_" when using OAuth tokens.
 // Same approach as opencode's anthropic-auth plugin.
@@ -1737,10 +1935,11 @@ async function runClaudeLoop(userText, signal, imageInputs = []) {
         headers,
         body: JSON.stringify({
           model: "claude-opus-4-6",
-          max_tokens: 8192,
+          max_tokens: 16384,
           system: systemPrompt,
           messages: messagesForApi,
           tools: claudeTools,
+          stream: true,
         }),
       });
 
@@ -1749,14 +1948,15 @@ async function runClaudeLoop(userText, signal, imageInputs = []) {
         throw buildProviderApiError("Claude", res.status, headersToObject(res.headers), errText);
       }
 
-      const data = await res.json();
+      // Parse SSE stream from Claude
+      const content = await parseClaudeStream(res, signal);
 
       // Strip mcp_ prefix from tool names in the response before storing in history
-      const content = useOAuth ? stripToolPrefixFromContent(data.content) : data.content;
-      messages.push({ role: "assistant", content });
+      const finalContent = useOAuth ? stripToolPrefixFromContent(content) : content;
+      messages.push({ role: "assistant", content: finalContent });
 
-      const textBlocks = content.filter((b) => b.type === "text");
-      const toolBlocks = content.filter((b) => b.type === "tool_use");
+      const textBlocks = finalContent.filter((b) => b.type === "text");
+      const toolBlocks = finalContent.filter((b) => b.type === "tool_use");
 
       if (toolBlocks.length === 0) {
         // Final iteration — don't emit here; let the caller emit after post-processing.
@@ -1914,7 +2114,7 @@ rl.on("line", async (line) => {
       const transcriptRole = m.role === "user" ? "user" : "assistant";
       conversationTranscript.push({ role: transcriptRole, content: m.content });
     }
-    compactContextIfNeeded();
+    await compactContextIfNeeded();
     emit({ type: "history_loaded", count: msg.messages.length });
     return;
   }
@@ -1986,7 +2186,7 @@ rl.on("line", async (line) => {
   await refreshLLMTokens();
 
   // Keep context/history bounded before selecting provider cascade.
-  compactContextIfNeeded();
+  await compactContextIfNeeded();
 
   // Check if superseded after token refresh
   if (isSuperseded()) {
@@ -2128,6 +2328,25 @@ rl.on("line", async (line) => {
 
         lastErr = err;
         const retry = classifyRetry(err, attempts);
+
+        // Context overflow — force compaction and retry the same provider
+        if (retry.overflow) {
+          process.stderr.write(`Provedor ${provider.name} context overflow, forçando compactação...\n`);
+          emitStatus(`${provider.name} contexto excedido — compactando e retentando...`);
+          emitProviderRetry(provider.name, "context_overflow");
+          // Force aggressive compaction
+          const overflowBefore = conversationTranscript.length;
+          while (conversationTranscript.length > 4) {
+            const chunk = conversationTranscript.splice(0, Math.max(1, conversationTranscript.length - 4));
+            const chunkSummary = await summarizeTranscriptChunk(chunk);
+            conversationSummary = mergeConversationSummary(conversationSummary, chunkSummary);
+          }
+          rebuildProviderHistoriesFromContext();
+          seedProviderHistory(provider.seedName);
+          emitContextCompacted(overflowBefore - conversationTranscript.length, conversationSummary.length);
+          attempts--; // don't consume a retry slot for overflow recovery
+          continue;
+        }
 
         if (retry.auth && !authRetried) {
           authRetried = true;
@@ -2288,6 +2507,58 @@ rl.on("line", async (line) => {
       }
     }
 
+    // ── Automatic continuation ──────────────────────────────────────────
+    // If the model stopped mid-task (indicates more work with "agora vou...",
+    // "proximo passo...", "em seguida...") and we're in build mode, auto-continue
+    // instead of stopping and waiting for user. Max 3 auto-continuations per turn.
+    const AUTO_CONTINUE_MAX = 3;
+    let autoContinueCount = 0;
+    while (
+      autoContinueCount < AUTO_CONTINUE_MAX
+      && currentTurnPolicy.executionMode === "build"
+      && !currentTurnPolicy.planningOnly
+      && !currentTurnStats?.maxStepsReached
+      && !isSuperseded()
+      && (currentTurnStats?.executedToolCalls ?? 0) > 0
+      && looksLikeIncompleteExecution(result)
+    ) {
+      autoContinueCount++;
+      logInternal(`auto-continuation ${autoContinueCount}/${AUTO_CONTINUE_MAX}`);
+      emitMessage(result); // Emit the partial result
+      conversationTranscript.push({ role: "assistant", content: result });
+
+      const continuePrompt = "Continue executando os proximos passos da tarefa. Nao repita o que ja foi feito. Continue de onde parou.";
+      conversationTranscript.push({ role: "user", content: continuePrompt });
+
+      // Re-run the cascade with the continuation prompt
+      currentAbortController = new AbortController();
+      signal = currentAbortController.signal;
+      let continueResult = null;
+
+      for (const provider of cascade) {
+        seedProviderHistory(provider.seedName);
+        try {
+          emitModelActive(provider.modelId, provider.name);
+          continueResult = await provider.fn(continuePrompt, signal, []);
+          break;
+        } catch (continuErr) {
+          if (continuErr.message === "Interrupted" || signal.aborted || interruptRequested) break;
+          process.stderr.write(`Auto-continue falhou no ${provider.name}: ${continuErr.message}\n`);
+          continue;
+        }
+      }
+
+      if (continueResult) {
+        result = continueResult;
+        // Re-apply post-processing guardrails
+        if (shouldStripCheckpointPause(result, currentTurnPolicy)) {
+          result = stripCheckpointPhrases(result);
+        }
+      } else {
+        break;
+      }
+    }
+
     // The provider loop no longer emits the final text — it only emits intermediate
     // progress messages during tool-use iterations. Emit the final result through
     // a dedicated path so interim-claim suppression cannot hide a successful answer.
@@ -2304,7 +2575,7 @@ rl.on("line", async (line) => {
     if (finalResult && finalResult !== FALLBACK_RESULT) {
       conversationTranscript.push({ role: "assistant", content: finalResult });
     }
-    compactContextIfNeeded();
+    await compactContextIfNeeded();
     if (currentTurnStats?.maxStepsReached) {
       snapshotPendingContinuation(userText);
     } else {
