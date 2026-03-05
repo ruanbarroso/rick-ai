@@ -234,6 +234,78 @@ body.embed .container { padding-top: 8px; }
 
 .session-card.main-session .card-avatar svg { fill: #fff; }
 
+/* Confirm modal */
+.confirm-overlay {
+  position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 100;
+  display: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.confirm-overlay.visible { display: block; opacity: 1; }
+
+.confirm-modal {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%) scale(0.96);
+  width: 380px;
+  max-width: calc(100% - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 20px 18px;
+  z-index: 101;
+  display: none;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+}
+.confirm-modal.visible { display: block; opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+.confirm-modal h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.confirm-modal p {
+  color: var(--text2);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  margin-bottom: 18px;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.confirm-btn {
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  transition: background 0.15s, border-color 0.15s;
+}
+.confirm-btn:hover { background: var(--border); }
+
+.confirm-btn.danger {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+}
+.confirm-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: #ef4444;
+}
+
 /* Responsive */
 @media (max-width: 480px) {
   .container { padding: 10px; }
@@ -257,6 +329,17 @@ body.embed .container { padding-top: 8px; }
   <div class="state-message" id="loading">
     <div class="spinner"></div>
     Carregando sessoes...
+  </div>
+</div>
+
+<!-- CONFIRM MODAL -->
+<div class="confirm-overlay" id="confirm-overlay" onclick="closeConfirmModal()"></div>
+<div class="confirm-modal" id="confirm-modal">
+  <h3 id="confirm-title">Encerrar sessao?</h3>
+  <p id="confirm-message">A sessao sera encerrada e nao podera ser retomada.</p>
+  <div class="confirm-actions">
+    <button class="confirm-btn" onclick="closeConfirmModal()">Cancelar</button>
+    <button class="confirm-btn danger" id="confirm-action-btn" onclick="confirmAction()">Encerrar</button>
   </div>
 </div>
 
@@ -321,34 +404,80 @@ function isActive(status) {
   return status === 'active' || status === 'running' || status === 'starting' || status === 'waiting_user';
 }
 
+// ==================== CONFIRM MODAL ====================
+var pendingConfirmCallback = null;
+
+function openConfirmModal(title, message, actionLabel, callback) {
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-message').textContent = message;
+  document.getElementById('confirm-action-btn').textContent = actionLabel;
+  pendingConfirmCallback = callback;
+  document.getElementById('confirm-overlay').classList.add('visible');
+  document.getElementById('confirm-modal').classList.add('visible');
+}
+
+function closeConfirmModal() {
+  document.getElementById('confirm-overlay').classList.remove('visible');
+  document.getElementById('confirm-modal').classList.remove('visible');
+  pendingConfirmCallback = null;
+}
+
+function confirmAction() {
+  var cb = pendingConfirmCallback;
+  closeConfirmModal();
+  if (cb) cb();
+}
+
+function showErrorModal(message) {
+  openConfirmModal('Erro', message, 'OK', function() {});
+  // Change the action button to non-danger style for errors
+  var btn = document.getElementById('confirm-action-btn');
+  btn.className = 'confirm-btn';
+  // Hide cancel for error messages
+  btn.previousElementSibling.style.display = 'none';
+  // Restore on close
+  var origClose = closeConfirmModal;
+  closeConfirmModal = function() {
+    btn.className = 'confirm-btn danger';
+    btn.previousElementSibling.style.display = '';
+    closeConfirmModal = origClose;
+    origClose();
+  };
+}
+
 // ==================== KILL SESSION ====================
 function killSession(sessionId, btn) {
-  if (!confirm('Encerrar esta sessao?')) return;
-  btn.disabled = true;
-  btn.textContent = '...';
+  openConfirmModal(
+    'Encerrar sessao?',
+    'A sessao sera encerrada e nao podera ser retomada.',
+    'Encerrar',
+    function() {
+      btn.disabled = true;
+      btn.textContent = '...';
 
-  fetch('/api/sessions/' + token + '/kill/' + sessionId, { method: 'POST' })
-    .then(function(resp) {
-      if (!resp.ok) throw new Error('Erro ' + resp.status);
-      return resp.json();
-    })
-    .then(function() {
-      // Update the card UI immediately
-      var card = document.getElementById('session-' + sessionId);
-      if (card) {
-        var statusEl = card.querySelector('.card-status');
-        if (statusEl) {
-          statusEl.className = 'card-status killed';
-          statusEl.textContent = 'Encerrado';
-        }
-        btn.remove();
-      }
-    })
-    .catch(function(err) {
-      alert('Erro ao encerrar: ' + err.message);
-      btn.disabled = false;
-      btn.textContent = 'Encerrar';
-    });
+      fetch('/api/sessions/' + token + '/kill/' + sessionId, { method: 'POST' })
+        .then(function(resp) {
+          if (!resp.ok) throw new Error('Erro ' + resp.status);
+          return resp.json();
+        })
+        .then(function() {
+          var card = document.getElementById('session-' + sessionId);
+          if (card) {
+            var statusEl = card.querySelector('.card-status');
+            if (statusEl) {
+              statusEl.className = 'card-status killed';
+              statusEl.textContent = 'Encerrado';
+            }
+            btn.remove();
+          }
+        })
+        .catch(function(err) {
+          showErrorModal('Erro ao encerrar: ' + err.message);
+          btn.disabled = false;
+          btn.textContent = 'Encerrar';
+        });
+    }
+  );
 }
 
 // ==================== RENDERING ====================

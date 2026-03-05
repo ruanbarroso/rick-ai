@@ -713,6 +713,60 @@ body {
   }
 }
 
+/* Confirm modal */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 130;
+  display: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.confirm-overlay.visible { display: block; opacity: 1; }
+
+.confirm-modal {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%) scale(0.96);
+  width: 380px;
+  max-width: calc(100% - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 20px 18px;
+  z-index: 131;
+  display: none;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+}
+.confirm-modal.visible { display: block; opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.confirm-modal h3 { font-size: 1rem; font-weight: 600; margin-bottom: 8px; color: var(--text); }
+.confirm-modal p { color: var(--text2); font-size: 0.88rem; line-height: 1.45; margin-bottom: 18px; }
+.confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+.confirm-btn {
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  transition: background 0.15s, border-color 0.15s;
+}
+.confirm-btn:hover { background: var(--border); }
+.confirm-btn.danger {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+}
+.confirm-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: #ef4444;
+}
+
 /* Tool-use terminal block — loaded from /static/tool-blocks.css */
 </style>
 <link rel="stylesheet" href="/static/tool-blocks.css">
@@ -798,6 +852,17 @@ body {
       <button class="provider-action" onclick="submitOAuthInput()">Conectar</button>
       <button class="provider-action ghost" onclick="closeOAuthInputModal()">Cancelar</button>
     </div>
+  </div>
+</div>
+
+<!-- CONFIRM MODAL -->
+<div class="confirm-overlay" id="confirm-overlay" onclick="closeConfirmModal()"></div>
+<div class="confirm-modal" id="confirm-modal">
+  <h3 id="confirm-title">Encerrar sessao?</h3>
+  <p id="confirm-message">A sessao sera encerrada e nao podera ser retomada.</p>
+  <div class="confirm-actions">
+    <button class="confirm-btn" onclick="closeConfirmModal()">Cancelar</button>
+    <button class="confirm-btn danger" id="confirm-action-btn" onclick="confirmAction()">Encerrar</button>
   </div>
 </div>
 
@@ -1285,25 +1350,68 @@ function updateSessionState(state) {
   updateSendButton();
 }
 
+// ==================== CONFIRM MODAL ====================
+var pendingConfirmCallback = null;
+
+function openConfirmModal(title, message, actionLabel, callback) {
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-message').textContent = message;
+  document.getElementById('confirm-action-btn').textContent = actionLabel;
+  pendingConfirmCallback = callback;
+  document.getElementById('confirm-overlay').classList.add('visible');
+  document.getElementById('confirm-modal').classList.add('visible');
+}
+
+function closeConfirmModal() {
+  document.getElementById('confirm-overlay').classList.remove('visible');
+  document.getElementById('confirm-modal').classList.remove('visible');
+  pendingConfirmCallback = null;
+}
+
+function confirmAction() {
+  var cb = pendingConfirmCallback;
+  closeConfirmModal();
+  if (cb) cb();
+}
+
+function showErrorModal(message) {
+  openConfirmModal('Erro', message, 'OK', function() {});
+  var btn = document.getElementById('confirm-action-btn');
+  btn.className = 'confirm-btn';
+  btn.previousElementSibling.style.display = 'none';
+  var origClose = closeConfirmModal;
+  closeConfirmModal = function() {
+    btn.className = 'confirm-btn danger';
+    btn.previousElementSibling.style.display = '';
+    closeConfirmModal = origClose;
+    origClose();
+  };
+}
+
 // ==================== KILL SESSION ====================
 function killCurrentSession() {
   if (!userToken) return;
-  if (!confirm('Encerrar esta sessao?')) return;
-  var btn = document.getElementById('kill-btn');
-  btn.disabled = true;
-  btn.textContent = '...';
+  openConfirmModal(
+    'Encerrar sessao?',
+    'A sessao sera encerrada e nao podera ser retomada.',
+    'Encerrar',
+    function() {
+      var btn = document.getElementById('kill-btn');
+      btn.disabled = true;
+      btn.textContent = '...';
 
-  fetch('/api/sessions/' + userToken + '/kill/' + sessionId, { method: 'POST' })
-    .then(function(resp) {
-      if (!resp.ok) throw new Error('Erro ' + resp.status);
-      // State will update via WebSocket, but force it in case WS is slow
-      updateSessionState('killed');
-    })
-    .catch(function(err) {
-      alert('Erro ao encerrar: ' + err.message);
-      btn.disabled = false;
-      btn.textContent = 'Encerrar';
-    });
+      fetch('/api/sessions/' + userToken + '/kill/' + sessionId, { method: 'POST' })
+        .then(function(resp) {
+          if (!resp.ok) throw new Error('Erro ' + resp.status);
+          updateSessionState('killed');
+        })
+        .catch(function(err) {
+          showErrorModal('Erro ao encerrar: ' + err.message);
+          btn.disabled = false;
+          btn.textContent = 'Encerrar';
+        });
+    }
+  );
 }
 
 function updateHeaderIcon() {
@@ -1431,7 +1539,7 @@ function connect() {
           pendingOAuthProvider = null;
           requestSessionOAuthStatus();
         } else if (msg.error) {
-          alert(msg.error);
+          showErrorModal(msg.error);
         }
         break;
     }
