@@ -227,7 +227,7 @@
   margin: 4px 0 0 0;
   padding: 6px 10px;
   border-left: 3px solid var(--text-muted, var(--text2, #8899a6));
-  color: var(--text-muted, var(--text2, #8899a6));
+  color: var(--text-primary, var(--text, #e1e8ed));
   font-size: 0.85em;
   font-style: italic;
   line-height: 1.4;
