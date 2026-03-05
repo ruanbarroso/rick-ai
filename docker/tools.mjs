@@ -105,14 +105,48 @@ function isPlaywrightRefValidationError(err) {
   return text.includes("invalid input")
     || text.includes("invalid_type")
     || text.includes("\"path\":[\"ref\"]")
-    || text.includes("expected string") && text.includes("ref");
+    || (text.includes("expected string") && text.includes("ref"));
+}
+
+/**
+ * Detect when the model passes a Playwright snapshot ref as a CSS selector.
+ * e.g. "button[ref='e51']" or just "e51" — these are NOT valid CSS selectors,
+ * they are internal Playwright snapshot identifiers.
+ */
+function extractSnapshotRef(selector) {
+  if (!selector || typeof selector !== "string") return null;
+  const trimmed = selector.trim();
+  // Matches bare refs like "e51", "e123"
+  if (/^e\d+$/.test(trimmed)) return trimmed;
+  // Matches CSS-like abuse: "button[ref='e51']", "[ref=e51]", etc.
+  const match = trimmed.match(/\[ref[=:]['"]?(e\d+)['"]?\]/);
+  if (match) return match[1];
+  return null;
 }
 
 async function callBrowserWithSelectorFallback(action, input = {}) {
+  const selector = typeof input.selector === "string" ? input.selector.trim() : "";
+
+  // If the model passed a snapshot ref as a selector, convert it to a proper
+  // MCP call with the ref parameter instead of trying it as CSS.
+  const snapshotRef = extractSnapshotRef(selector);
+  if (snapshotRef) {
+    try {
+      return await callBrowser(action, { ref: snapshotRef, ...input, selector: undefined });
+    } catch (refErr) {
+      // If ref-based call also fails and this is a click, try Enter as fallback
+      if (action === "click") {
+        try {
+          return await callBrowser("press_key", { key: "Enter" });
+        } catch { /* fall through */ }
+      }
+      throw refErr;
+    }
+  }
+
   try {
     return await callBrowser(action, input);
   } catch (err) {
-    const selector = typeof input.selector === "string" ? input.selector.trim() : "";
     if (!selector || !isPlaywrightRefValidationError(err)) {
       throw err;
     }
@@ -125,8 +159,17 @@ async function callBrowserWithSelectorFallback(action, input = {}) {
     }
 
     if (action === "click") {
-      const code = `async (page) => { const el = page.locator(${JSON.stringify(selector)}).first(); await el.waitFor({ state: 'visible' }); await el.click(); return { ok: true, fallback: 'run_code:click' }; }`;
-      return await callBrowser("run_code", { code });
+      // Try CSS locator via run_code first
+      try {
+        const code = `async (page) => { const el = page.locator(${JSON.stringify(selector)}).first(); await el.waitFor({ state: 'visible' }); await el.click(); return { ok: true, fallback: 'run_code:click' }; }`;
+        return await callBrowser("run_code", { code });
+      } catch {
+        // CSS locator also failed — try Enter as last resort
+        try {
+          return await callBrowser("press_key", { key: "Enter" });
+        } catch { /* fall through to original error */ }
+      }
+      throw err;
     }
 
     throw err;
@@ -292,6 +335,14 @@ export async function executeTool(name, input, extraHandler) {
         return redactSecrets(JSON.stringify(result, null, 2));
       } catch (e) {
         return `Erro no browser_screenshot: ${e.message}`;
+      }
+    }
+    case "browser_press_key": {
+      try {
+        const result = await callBrowser("press_key", { key: input.key });
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_press_key: ${e.message}`;
       }
     }
     case "browser_close": {

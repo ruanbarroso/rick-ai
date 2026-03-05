@@ -278,10 +278,15 @@ rick-ai/
 │       ├── agent-token.ts             # JWT (HS256) token generation/verification for sub-agents
 │       └── session-manager.ts         # Docker container lifecycle, NDJSON relay
 ├── docker/
-│   ├── subagent/                      # Unified sub-agent (current)
-│   │   ├── Dockerfile                 # Chromium + Playwright + Node.js image
-│   │   └── agent.mjs                  # Autonomous agent script (LLM cascade + tools)
-│   └── rick-api.mjs                   # Shared: Rick API client, tool declarations, tool handler, timeout constants
+│   ├── agent.mjs                      # Sub-agent entry point: LLM cascade, turn loop, emit protocol
+│   ├── policy.mjs                     # Turn policy detection, text heuristics, prompt builders
+│   ├── prompt.mjs                     # System prompt construction, instruction file discovery
+│   ├── tools.mjs                      # Core tool implementations (file I/O, shell, browser)
+│   ├── tool-declarations.mjs          # Tool schemas for LLM function calling
+│   ├── rick-api.mjs                   # Rick API client, agent-specific tools (memory, web_fetch)
+│   ├── mcp-playwright.mjs             # MCP Playwright bridge for browser tools
+│   ├── subagent.Dockerfile            # Chromium + Playwright + Node.js container image
+│   └── subagent.package.json          # Runtime dependencies for the container
 ├── scripts/
 │   └── deploy.sh                      # Safe deploy pipeline (backup → build → smoke → swap → watchdog)
 ├── Dockerfile                         # Main agent image (Node.js 22 + Docker CLI)

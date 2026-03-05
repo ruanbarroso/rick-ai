@@ -19,8 +19,7 @@
  */
 
 import { createInterface } from "readline";
-import { access, readFile, stat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import { WORKSPACE, executeTool } from "./tools.mjs";
 import { coreToolDeclarations } from "./tool-declarations.mjs";
 import {
@@ -29,6 +28,26 @@ import {
   LLM_TIMEOUT_MS, MAX_TIMEOUT_RETRIES,
 } from "./rick-api.mjs";
 import { redactSecrets } from "./tools.mjs";
+import {
+  looksLikeTechnicalCompletion, looksLikeTechnicalActionRequest,
+  looksLikeExecutionNowRequest, looksLikeConcreteExecutionRequest,
+  looksLikeExecutionClaim, looksLikeExecutionPromise, looksLikePlanDraftRequest,
+  looksLikeFakeAccessBlockClaim, acknowledgesPriorExecution,
+  isContinuationRequest, hasExecutionReceipt,
+  summarizeCommandInput,
+  detectBlockedCommand, detectPlanningOnlyToolBlock as detectPlanningBlock,
+  parseTurnPolicy as parseTurnPolicyPure, missingExpectedActions as missingExpectedActionsPure,
+  buildPlanningOnlyPrompt, buildForcedExecutionPrompt,
+  buildContinuationPrompt as buildContinuationPromptPure,
+  buildNoExecutionGuardMessage,
+  shouldForceExecutionRetry as shouldForceExecutionRetryPure,
+  shouldSuppressInterimClaim,
+} from "./policy.mjs";
+import {
+  refreshSystemPromptCache as refreshPromptCache,
+  getGeminiSystemPrompt, getOpenAISystemPrompt,
+  getOpenAICodexInstructions, getClaudeSystemPrompt,
+} from "./prompt.mjs";
 
 const SENSITIVE_TOOL_PREVIEW = new Set(["rick_memory", "rick_search"]);
 
@@ -131,7 +150,7 @@ function emitContextCompacted(removedMessages, summaryChars) {
 let toolCallSequence = 0;
 
 const MAX_TOOL_CALLS_PER_TURN = 80;
-const MAX_REPEAT_SAME_TOOL_CALL = 8;
+const MAX_REPEAT_SAME_TOOL_CALL = 3;
 const MAX_STEPS_MESSAGE = "Limite maximo de passos desta rodada foi atingido. Parei as ferramentas para evitar loop; se quiser, me diga o proximo foco e eu continuo em uma nova rodada.";
 
 let currentTurnStats = null;
@@ -195,135 +214,45 @@ function emitToolCallError(callId, name, durationMs, message) {
   });
 }
 
-function looksLikeTechnicalCompletion(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(corrigi|ajustei|removi|alterei|refatorei|implementei|adicionei|criei|resolvi|conclui|finalizei|feito|aplicad|deploy|commit)/.test(normalized);
-}
-
-function looksLikeTechnicalActionRequest(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(commit|push|pull request|pr\b|git|corrig|ajust|remov|alter|refator|implemen|adicion|cria|bug|erro|teste|build|codigo|code|arquivo|repo|reposit)/.test(normalized);
-}
-
-function looksLikeExecutionNowRequest(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(execute|executa|executar|pode executar|agora|manda ver|aplica|aplicar|fa[çc]a|segue com a implementa|pode seguir)/.test(normalized);
-}
-
-function looksLikeConcreteExecutionRequest(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(execute|executa|executar|aplica|aplicar|implement|corrig|ajust|alter|remov|refator|rode|rodar|roda|fa[çc]a|git\s+pull|git\s+commit|git\s+push|checkout|clone|clona|cria\s+pr|abre\s+pr)/.test(normalized);
-}
-
-function looksLikeExecutionClaim(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(conclu[ií]d|feito|aplicad|implementei|ajustei|corrigi|executei|push realizado|commit realizado|ja subi|j[aá] est[aá] no remoto|resultado final|o que eu fiz)/.test(normalized)
-    || looksLikeExecutionPromise(normalized)
-    || looksLikeTechnicalCompletion(normalized);
-}
+// ── Thin wrappers around imported policy functions (pass module-level state) ─
 
 function shouldSuppressInterimExecutionClaim(text) {
-  if (!currentTurnPolicy?.executionRequired) return false;
-  if (currentTurnPolicy.executionMode !== "build") return false;
-  if (!currentTurnStats) return false;
-  // In execution-required turns, avoid publishing provider prose mid-loop.
-  // Tool lifecycle blocks + final waiting_user result are the source of truth.
-  return true;
-}
-
-function looksLikePlanDraftRequest(text) {
-  const normalized = String(text || "").toLowerCase();
-  const asksPlan = /(plano|planejamento|estrategia|estratégia|roadmap|passo a passo|proposta|como faria|o que faria|montar um plano)/.test(normalized);
-  const asksExecutionNow = looksLikeExecutionNowRequest(normalized);
-  return asksPlan && !asksExecutionNow;
-}
-
-function looksLikeExecutionPromise(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(vou executar|vou aplicar|vou implementar|posso executar|fechado[\s\S]{0,20}execut|entendi[\s\S]{0,30}execut|se voc[eê] confirma|se confirmar|assim que confirmar)/.test(normalized);
-}
-
-function buildForcedExecutionPrompt(baseTaskText) {
-  return `${baseTaskText}\n\n[EXECUCAO_OBRIGATORIA]\nEsta rodada esta em modo BUILD e o usuario pediu execucao agora. Nao responda com promessa, confirmacao ou deferimento. Execute ferramentas imediatamente e so entregue resposta final apos tentar os passos tecnicos.`;
-}
-
-function shouldForceExecutionRetry(taskText, resultText) {
-  if (currentTurnPolicy.executionMode !== "build") return false;
-  if (currentTurnPolicy.planningOnly) return false;
-  if (!currentTurnPolicy.executionRequired) return false;
-  if (currentTurnStats?.maxStepsReached) return false;
-  if ((currentTurnStats?.executedToolCalls ?? 0) > 0) return false;
-
-  const requestedExecution = looksLikeTechnicalActionRequest(taskText) || looksLikeExecutionNowRequest(taskText);
-  if (!requestedExecution) return false;
-
-  return looksLikeExecutionPromise(resultText);
-}
-
-function acknowledgesPriorExecution(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(ja foi|já foi|etapa anterior|anteriormente|nesta conversa|como eu disse|sem alteracoes pendentes|sem alterações pendentes|nao executei|não executei)/.test(normalized);
+  return shouldSuppressInterimClaim(text, currentTurnPolicy, currentTurnStats);
 }
 
 function parseTurnPolicy(text) {
-  const normalized = String(text || "").toLowerCase();
-  const explicitAllowCommit = /(\bcommit\b|\bcommitar\b)/.test(normalized);
-  const explicitAllowPush = /(\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b)/.test(normalized);
-  const explicitAllowPr = /(\bpull request\b|\babrir pr\b|\bcriar pr\b|\bgh pr\b)/.test(normalized);
-
-  const hasExplicitGitIntent = explicitAllowCommit || explicitAllowPush || explicitAllowPr;
-  if (hasExplicitGitIntent) {
-    recentGitPolicy = {
-      allowCommit: explicitAllowCommit,
-      allowPush: explicitAllowPush,
-      allowPr: explicitAllowPr,
-      expiresAt: Date.now() + 10 * 60_000,
-    };
+  const result = parseTurnPolicyPure(text, recentGitPolicy);
+  if (result.updatedGitPolicy !== recentGitPolicy) {
+    recentGitPolicy = result.updatedGitPolicy;
   }
-
-  const inheritRecentGitPolicy = !hasExplicitGitIntent
-    && looksLikeExecutionNowRequest(normalized)
-    && recentGitPolicy.expiresAt > Date.now();
-
-  const allowCommit = explicitAllowCommit || (inheritRecentGitPolicy && recentGitPolicy.allowCommit);
-  const allowPush = explicitAllowPush || (inheritRecentGitPolicy && recentGitPolicy.allowPush);
-  const allowPr = explicitAllowPr || (inheritRecentGitPolicy && recentGitPolicy.allowPr);
-  const executionRequired = !looksLikePlanDraftRequest(normalized) && looksLikeConcreteExecutionRequest(normalized);
-  const expectedActions = {
-    gitPull: /\bgit\s+pull\b|\bpull\s+--rebase\b/.test(normalized),
-    gitCommit: /\bgit\s+commit\b|\bcommit\b|\bcommitar\b/.test(normalized),
-    gitPush: /\bgit\s+push\b|\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b/.test(normalized),
-  };
-  return { allowCommit, allowPush, allowPr, executionRequired, expectedActions, planningOnly: false, executionMode: "build" };
+  const { updatedGitPolicy: _, ...policy } = result;
+  return policy;
 }
 
 function missingExpectedActions() {
-  if (!currentTurnPolicy?.expectedActions || !currentTurnStats?.completedActions) return [];
-  const missing = [];
-  if (currentTurnPolicy.expectedActions.gitPull && !currentTurnStats.completedActions.gitPull) missing.push("git pull");
-  if (currentTurnPolicy.expectedActions.gitCommit && !currentTurnStats.completedActions.gitCommit) missing.push("git commit");
-  if (currentTurnPolicy.expectedActions.gitPush && !currentTurnStats.completedActions.gitPush) missing.push("git push");
-  return missing;
-}
-
-function buildPlanningOnlyPrompt(userText) {
-  return `${userText}\n\n[MODO_PLANEJAMENTO]\nResponda APENAS com plano/estrategia. Nao execute ferramentas nesta rodada e nao alegue execucao.`;
-}
-
-function isContinuationRequest(text) {
-  const normalized = String(text || "").trim().toLowerCase();
-  return /^(continua|continue|continuar|segue|prossegue|pode continuar|continue de onde parou|retoma|retomar)[.!?\s]*$/.test(normalized);
+  return missingExpectedActionsPure(currentTurnPolicy, currentTurnStats);
 }
 
 function buildContinuationPrompt(userText) {
-  if (!pendingContinuation) return userText;
-  const context = [
-    "Retome EXATAMENTE a tarefa que ficou pendente na rodada anterior.",
-    `Tarefa original pendente: ${pendingContinuation.userText}`,
-    pendingContinuation.evidence || "",
-    "Nao reinicie do zero. Continue do ponto onde parou.",
-  ].filter(Boolean).join("\n");
-  return `${userText}\n\n[CONTEXTO_DE_CONTINUACAO]\n${context}`;
+  return buildContinuationPromptPure(userText, pendingContinuation);
+}
+
+function shouldForceExecutionRetry(taskText, resultText) {
+  return shouldForceExecutionRetryPure(taskText, resultText, currentTurnPolicy, currentTurnStats);
+}
+
+function detectBlockedGitAction(toolName, input) {
+  return detectBlockedCommand(toolName, input, currentTurnPolicy);
+}
+
+function detectPlanningOnlyToolBlock(toolName) {
+  return detectPlanningBlock(toolName, currentTurnPolicy);
+}
+
+function trimForReceipt(text, max = 90) {
+  const normalized = redactUserVisibleText(String(text || "")).replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
 }
 
 function snapshotPendingContinuation(userText) {
@@ -339,54 +268,6 @@ function snapshotPendingContinuation(userText) {
     evidence,
     createdAt: Date.now(),
   };
-}
-
-function summarizeCommandInput(input) {
-  if (!input || typeof input !== "object") return "";
-  if (typeof input.commandLine === "string" && input.commandLine.trim()) {
-    return input.commandLine.trim().toLowerCase();
-  }
-  const cmd = typeof input.command === "string" ? input.command : "";
-  const args = Array.isArray(input.args) ? input.args.map((a) => String(a)) : [];
-  return `${cmd} ${args.join(" ")}`.trim().toLowerCase();
-}
-
-function detectBlockedGitAction(toolName, input) {
-  if (toolName !== "run_command") return null;
-  const commandText = summarizeCommandInput(input);
-  if (!commandText) return null;
-
-  if (/\bgh\s+pr\s+create\b/.test(commandText) && !currentTurnPolicy.allowPr) {
-    return "Bloqueado por politica antes da execucao: so posso criar PR quando voce pedir explicitamente neste turno.";
-  }
-  if (/\bgit\s+push\b/.test(commandText) && !currentTurnPolicy.allowPush) {
-    return "Bloqueado por politica antes da execucao: so posso fazer git push quando voce pedir explicitamente neste turno.";
-  }
-  if (/\bgit\s+commit\b/.test(commandText) && !currentTurnPolicy.allowCommit) {
-    return "Bloqueado por politica antes da execucao: so posso fazer git commit quando voce pedir explicitamente neste turno.";
-  }
-
-  if (/(^|\s)rg(\s|$)/.test(commandText)) {
-    return "Comando bloqueado: `rg` (ripgrep) nao esta disponivel neste ambiente. Use a ferramenta `grep` para busca de conteudo e `glob` para localizar arquivos.";
-  }
-
-  return null;
-}
-
-function detectPlanningOnlyToolBlock(toolName) {
-  if (!currentTurnPolicy?.planningOnly) return null;
-  return `Bloqueado por politica desta rodada: pedido de planejamento. Ferramenta ${toolName} nao deve ser executada.`;
-}
-
-function looksLikeFakeAccessBlockClaim(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(nao tenho acesso|não tenho acesso|nao tenho execucao ativa|não tenho execução ativa|nao consigo executar ferramentas|não consigo executar ferramentas|bloqueado por acesso)/.test(normalized);
-}
-
-function trimForReceipt(text, max = 90) {
-  const normalized = redactUserVisibleText(String(text || "")).replace(/\s+/g, " ").trim();
-  if (!normalized) return "";
-  return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
 }
 
 function toolFingerprint(name, input) {
@@ -455,11 +336,6 @@ function buildFallbackCarryoverContext(baseTaskText) {
   return `${baseTaskText}\n\n${lines.join("\n")}`;
 }
 
-function hasExecutionReceipt(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(evidencias de execucao|evidências de execução|arquivos alterados|comandos executados|validacoes executadas|validações executadas)/.test(normalized);
-}
-
 function buildExecutionReceipt() {
   if (!currentTurnStats) return "";
 
@@ -493,15 +369,9 @@ function looksToolErrorOutput(toolName, output) {
   return false;
 }
 
-function requestedFullHistory(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(todas as mensagens|historico completo|histórico completo|ler tudo|100% das mensagens|tudo da sessao|tudo da sessão)/.test(normalized);
-}
+// requestedFullHistory — imported from policy.mjs
 
-function looksLikeFullCoverageClaim(text) {
-  const normalized = String(text || "").toLowerCase();
-  return /(li todas as mensagens|todas as mensagens|historico completo|histórico completo|100%|li tudo)/.test(normalized);
-}
+// looksLikeFullCoverageClaim — imported from policy.mjs
 
 function captureBrowserProgress(toolName, output) {
   if (!currentTurnStats) return;
@@ -526,9 +396,7 @@ function isMaxStepsError(err) {
   return !!err && (err.code === "MAX_STEPS_REACHED" || err.message === "MAX_STEPS_REACHED");
 }
 
-function buildNoExecutionGuardMessage() {
-  return "Ainda nao executei nenhuma ferramenta nesta rodada, entao nao vou afirmar conclusao tecnica. Posso continuar agora executando os passos no repositorio e te trazer evidencias objetivas.";
-}
+// buildNoExecutionGuardMessage — imported from policy.mjs
 
 // ── Provider detection (dynamic — re-evaluated per turn) ────────────────────
 
@@ -691,10 +559,14 @@ async function runToolWithLifecycle(name, input) {
   }
 
   if (currentTurnStats.repeatedToolCount >= MAX_REPEAT_SAME_TOOL_CALL) {
-    currentTurnStats.maxStepsReached = true;
-    const err = new Error("MAX_STEPS_REACHED");
-    err.code = "MAX_STEPS_REACHED";
-    throw err;
+    // Don't kill the turn — return a warning so the model can try a different approach.
+    // Only escalate to MAX_STEPS if total tool calls also exceed the hard cap.
+    const warning = `DOOM_LOOP: a mesma ferramenta (${name}) com os mesmos argumentos foi chamada ${MAX_REPEAT_SAME_TOOL_CALL} vezes consecutivas sem progresso. Tente uma abordagem diferente (outro seletor, outro comando, outra ferramenta). Se nao houver alternativa, reporte o problema ao usuario.`;
+    emitToolCallError(callId, name, Date.now() - started, warning);
+    // Reset the counter so the model gets another chance with different args
+    currentTurnStats.repeatedToolCount = 0;
+    currentTurnStats.lastToolFingerprint = "";
+    return warning;
   }
 
   const blockedReason = detectBlockedGitAction(name, input);
@@ -738,207 +610,13 @@ const toolDeclarations = [...coreToolDeclarations, ...buildAgentToolDeclarations
 
 const toolNames = toolDeclarations.map((t) => t.name);
 
-// ── System prompt ───────────────────────────────────────────────────────────
-const BASE_SYSTEM_PROMPT = `Você é ${agentName} Sub-Agent, um agente autônomo executando dentro de um container Docker.
-
-Sua tarefa é realizar o que o usuário pedir usando as ferramentas disponíveis.
-Você mantém o contexto de toda a conversa — mensagens anteriores do usuário são lembradas.
-
-REGRAS:
-1. Responda sempre em português brasileiro.
-2. Use as ferramentas para completar a tarefa. NÃO invente resultados.
-3. Quando terminar uma etapa, emita um resumo claro do que foi feito.
-4. Se precisar de informações adicionais, PERGUNTE DIRETAMENTE ao usuário (ex: "Qual a URL do repositório?") — você receberá a resposta na próxima mensagem. Fale sempre em segunda pessoa, direto com o usuário.
-5. Se precisar de informações que o usuário já ensinou ao ${agentName} (credenciais, links de repositórios, preferências), use rick_memory (sem categoria para ver TUDO) ou rick_search (busca por significado).
-6. SEMPRE consulte rick_memory antes de pedir informações ao usuário — a resposta pode já estar lá.
-7. Credenciais estão disponíveis como variáveis de ambiente RICK_SECRET_* e GITHUB_TOKEN no container. Use \`run_command env\` para ver quais variáveis existem. Os valores de tokens/secrets são redatados por segurança — use a variável de ambiente diretamente nos comandos (ex: \`$GITHUB_TOKEN\`) em vez de tentar copiar o valor.
-8. Para clonar repositórios Git PRIVADOS, use o GITHUB_TOKEN: \`git clone https://\${GITHUB_TOKEN}@github.com/org/repo.git\`. SEMPRE tente com o token antes de dizer que não tem acesso.
-9. Para tarefas de código: clone o repositório, faça as alterações, rode testes se possível.
-10. Para pesquisa web: use web_fetch para acessar URLs e extrair informações.
-11. Seja conciso nas mensagens intermediárias, detalhado no resultado final.
-12. NUNCA envie o output bruto de ferramentas como mensagem para o usuário. Resuma os resultados relevantes em vez de colar output extenso (como variáveis de ambiente, logs longos, etc.). O output das ferramentas já é registrado internamente.
-12.1 Para shell, prefira run_command com commandLine (ex.: "git status && npm test"). Evite chamar apenas "bash" sem comando.
-12.2 NUNCA use \`rg\` via run_command. Para busca de conteúdo use a ferramenta \`grep\`; para localizar arquivos use \`glob\`.
-13. Quando o usuário mencionar um projeto ou repositório por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
-14. Quando o usuário ENSINAR algo útil (URLs, nomes de org, preferências, padrões de projeto), use rick_save_memory para salvar para futuros agentes. Exemplos: URL de organização GitHub, stack tecnológica preferida, convenções de código.
-15. Se o usuário pedir para CORRIGIR, AJUSTAR, REMOVER, ALTERAR comportamento, BUG ou UI, trate como tarefa de código: leia arquivos relevantes, faça a alteração real via ferramenta de edição e valide. Não responda apenas com promessa textual.
-16. NUNCA diga que "corrigiu", "removeu", "ajustou" ou "implementou" sem ter realmente alterado arquivos/estado via ferramentas.
-17. Ao concluir uma alteração técnica, inclua evidência objetiva em 1 frase: arquivo(s) alterado(s) e comando(s) de validação executado(s).
-18. Se não for possível aplicar a mudança (limitação real, erro de permissão, ausência de arquivo, etc.), diga explicitamente que NÃO foi aplicado, explique o motivo e proponha próximo passo.
-19. Em tarefas de código em repositório, antes de alterar arquivos, procure e leia o AGENTS.md do projeto (e qualquer AGENTS.md no caminho da pasta alvo) e siga essas instruções.
-20. Em pedidos diretos de mudança (ex.: "ajuste", "corrija", "remova"), execute a mudança primeiro e só depois responda; só peça confirmação adicional se houver ambiguidade real que impeça aplicar com segurança.
-21. Quando o usuário pedir explicitamente apenas um plano/estratégia (sem execução), responda só com o plano e não use ferramentas.`;
-
-const PROVIDER_SYSTEM_PROMPTS = {
-  gemini: `Diretrizes de provider (Gemini):
-- Prefira respostas objetivas e chamadas de ferramenta pequenas.
-- Quando houver resultados extensos, forneça um resumo factual do essencial.
-- Em caso de erro de ferramenta, explique a falha e tente uma alternativa segura.`,
-  openai: `Diretrizes de provider (OpenAI/Codex):
-- Em tarefas de código, mantenha execução incremental e verificável.
-- Não invente saídas de comandos; cite somente evidências observadas.
-- Use ferramentas de forma determinística e descreva bloqueios com clareza.`,
-  claude: `Diretrizes de provider (Claude):
-- Seja direto, sem floreio, com foco em execução real.
-- Evite repetição e não reapresente contexto já estabelecido.
-- Ao finalizar, inclua o que foi alterado e como validou.`,
-};
-
-const INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"];
-const PROMPT_CACHE_TTL_MS = 30_000;
-
-let promptCache = {
-  expiresAt: 0,
-  fingerprint: "",
-  instructionsBlock: "",
-  hasGitRepo: false,
-};
-
-let activeSystemPrompts = {
-  gemini: "",
-  openai: "",
-  openaiCodex: "",
-  claude: "",
-  claudeOAuth: "",
-};
-
-async function fileExists(filePath) {
-  try {
-    await access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function hasGitRepository() {
-  return fileExists(join(WORKSPACE, ".git"));
-}
-
-async function discoverWorkspaceInstructionFiles() {
-  const found = [];
-  let current = resolve(WORKSPACE);
-
-  while (true) {
-    for (const file of INSTRUCTION_FILES) {
-      const candidate = join(current, file);
-      if (await fileExists(candidate)) {
-        found.push(candidate);
-        break;
-      }
-    }
-
-    if (current === WORKSPACE || current === "/") break;
-    const parent = dirname(current);
-    if (!parent || parent === current) break;
-    current = parent;
-  }
-
-  return found;
-}
-
-async function buildInstructionBundle() {
-  const files = await discoverWorkspaceInstructionFiles();
-  if (files.length === 0) {
-    return { text: "", fingerprint: "none" };
-  }
-
-  const parts = [];
-  const fpParts = [];
-
-  for (const file of files) {
-    let content = "";
-    try {
-      content = (await readFile(file, "utf-8")).trim();
-    } catch {
-      continue;
-    }
-    if (!content) continue;
-
-    parts.push(`Instructions from: ${file}\n${content}`);
-    try {
-      const st = await stat(file);
-      fpParts.push(`${file}:${st.mtimeMs}:${st.size}`);
-    } catch {
-      fpParts.push(`${file}:unknown`);
-    }
-  }
-
-  return {
-    text: parts.join("\n\n"),
-    fingerprint: fpParts.length ? fpParts.join("|") : "none",
-  };
-}
-
-function escapeRegex(text) {
-  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function environmentPrompt(hasGit) {
-  return [
-    "Informacoes do ambiente:",
-    `<env>`,
-    `  Working directory: ${WORKSPACE}`,
-    `  Is directory a git repo: ${hasGit ? "yes" : "no"}`,
-    `  Platform: ${process.platform}`,
-    `  Today's date: ${new Date().toDateString()}`,
-    `</env>`,
-  ].join("\n");
-}
+// ── System prompt (delegated to prompt.mjs) ────────────────────────────────
+// Prompt construction, instruction file discovery, and caching are in prompt.mjs.
+// refreshSystemPromptCache, getGeminiSystemPrompt, getOpenAISystemPrompt,
+// getOpenAICodexInstructions, getClaudeSystemPrompt are imported at the top.
 
 async function refreshSystemPromptCache(force = false) {
-  const now = Date.now();
-  if (!force && now < promptCache.expiresAt) return;
-
-  const [bundle, gitRepo] = await Promise.all([
-    buildInstructionBundle(),
-    hasGitRepository(),
-  ]);
-
-  const cacheChanged = bundle.fingerprint !== promptCache.fingerprint || gitRepo !== promptCache.hasGitRepo;
-  if (cacheChanged || force || !activeSystemPrompts.openai) {
-    const environment = environmentPrompt(gitRepo);
-    const toolsBlock = `FERRAMENTAS DISPONIVEIS: ${toolNames.join(", ")}`;
-    const shared = [BASE_SYSTEM_PROMPT, toolsBlock, environment, bundle.text].filter(Boolean).join("\n\n");
-
-    activeSystemPrompts.gemini = [shared, PROVIDER_SYSTEM_PROMPTS.gemini].join("\n\n");
-    activeSystemPrompts.openai = [shared, PROVIDER_SYSTEM_PROMPTS.openai].join("\n\n");
-    activeSystemPrompts.openaiCodex = activeSystemPrompts.openai;
-    activeSystemPrompts.claude = [shared, PROVIDER_SYSTEM_PROMPTS.claude].join("\n\n");
-    const escapedAgentName = escapeRegex(agentName);
-    activeSystemPrompts.claudeOAuth = activeSystemPrompts.claude
-      .replace(new RegExp(`${escapedAgentName} Sub-Agent`, "g"), "Claude Code")
-      .replace(new RegExp(escapedAgentName, "g"), "Claude");
-
-    promptCache.fingerprint = bundle.fingerprint;
-    promptCache.instructionsBlock = bundle.text;
-    promptCache.hasGitRepo = gitRepo;
-  }
-
-  promptCache.expiresAt = now + PROMPT_CACHE_TTL_MS;
-}
-
-function getGeminiSystemPrompt() {
-  return activeSystemPrompts.gemini || getSharedFallbackPrompt();
-}
-
-function getSharedFallbackPrompt() {
-  return [BASE_SYSTEM_PROMPT, `FERRAMENTAS DISPONIVEIS: ${toolNames.join(", ")}`].join("\n\n");
-}
-
-function getOpenAISystemPrompt() {
-  return activeSystemPrompts.openai || getSharedFallbackPrompt();
-}
-
-function getOpenAICodexInstructions() {
-  return activeSystemPrompts.openaiCodex || getOpenAISystemPrompt();
-}
-
-function getClaudeSystemPrompt(useOAuth = false) {
-  if (useOAuth) {
-    return activeSystemPrompts.claudeOAuth || getSharedFallbackPrompt();
-  }
-  return activeSystemPrompts.claude || getSharedFallbackPrompt();
+  return refreshPromptCache(WORKSPACE, agentName, toolNames, force);
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -1109,6 +787,68 @@ function rebuildProviderHistoriesFromContext() {
   seedProviderHistory("Claude");
 }
 
+/**
+ * Prune old tool outputs from provider histories to save context space.
+ * Inspired by OpenCode's approach: keep recent 40K chars of tool outputs intact,
+ * truncate older ones to a short preview. This prevents browser snapshots and
+ * long command outputs from bloating the context.
+ */
+const TOOL_OUTPUT_RECENT_BUDGET_CHARS = 40_000;
+const TOOL_OUTPUT_TRUNCATED_PREVIEW = 200;
+
+function pruneProviderToolOutputs() {
+  pruneGeminiToolOutputs();
+  pruneOpenAIToolOutputs();
+  pruneClaudeToolOutputs();
+}
+
+function pruneGeminiToolOutputs() {
+  // Gemini: tool results are functionResponse parts in user messages
+  let recentChars = 0;
+  for (let i = geminiHistory.length - 1; i >= 0; i--) {
+    const msg = geminiHistory[i];
+    if (msg.role !== "user" || !Array.isArray(msg.parts)) continue;
+    for (let j = msg.parts.length - 1; j >= 0; j--) {
+      const part = msg.parts[j];
+      if (!part.functionResponse?.response?.result) continue;
+      const result = String(part.functionResponse.response.result);
+      recentChars += result.length;
+      if (recentChars > TOOL_OUTPUT_RECENT_BUDGET_CHARS && result.length > TOOL_OUTPUT_TRUNCATED_PREVIEW * 2) {
+        part.functionResponse.response.result = result.slice(0, TOOL_OUTPUT_TRUNCATED_PREVIEW) + "\n...[output truncado para economizar contexto]";
+      }
+    }
+  }
+}
+
+function pruneOpenAIToolOutputs() {
+  if (!openaiHistory) return;
+  let recentChars = 0;
+  for (let i = openaiHistory.length - 1; i >= 0; i--) {
+    const msg = openaiHistory[i];
+    if (msg.role !== "tool" || typeof msg.content !== "string") continue;
+    recentChars += msg.content.length;
+    if (recentChars > TOOL_OUTPUT_RECENT_BUDGET_CHARS && msg.content.length > TOOL_OUTPUT_TRUNCATED_PREVIEW * 2) {
+      msg.content = msg.content.slice(0, TOOL_OUTPUT_TRUNCATED_PREVIEW) + "\n...[output truncado para economizar contexto]";
+    }
+  }
+}
+
+function pruneClaudeToolOutputs() {
+  let recentChars = 0;
+  for (let i = claudeHistory.length - 1; i >= 0; i--) {
+    const msg = claudeHistory[i];
+    if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
+    for (let j = msg.content.length - 1; j >= 0; j--) {
+      const block = msg.content[j];
+      if (block.type !== "tool_result" || typeof block.content !== "string") continue;
+      recentChars += block.content.length;
+      if (recentChars > TOOL_OUTPUT_RECENT_BUDGET_CHARS && block.content.length > TOOL_OUTPUT_TRUNCATED_PREVIEW * 2) {
+        block.content = block.content.slice(0, TOOL_OUTPUT_TRUNCATED_PREVIEW) + "\n...[output truncado para economizar contexto]";
+      }
+    }
+  }
+}
+
 function compactContextIfNeeded() {
   let compacted = false;
   let removedMessages = 0;
@@ -1140,6 +880,10 @@ function compactContextIfNeeded() {
     emitContextCompacted(removedMessages, conversationSummary.length);
     return;
   }
+
+  // Prune old tool outputs in provider histories (browser snapshots, long command outputs).
+  // This runs every turn regardless of compaction — keeps recent outputs intact, truncates old ones.
+  pruneProviderToolOutputs();
 
   // Prune provider-specific histories if they grew too much (tool loops can bloat them).
   const shouldPruneProviderHistory =

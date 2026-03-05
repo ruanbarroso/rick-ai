@@ -87,22 +87,22 @@ export const coreToolDeclarations = [
   },
   {
     name: "browser_click",
-    description: "Clica no primeiro elemento que corresponde ao seletor CSS",
+    description: "Clica em um elemento. Use o ref do snapshot (ex: 'e51') OU um seletor CSS (ex: 'button.submit'). NUNCA use formato button[ref='e51'] — passe apenas o ref como 'e51'.",
     parameters: {
       type: "object",
       properties: {
-        selector: { type: "string", description: "Seletor CSS do elemento" },
+        selector: { type: "string", description: "Ref do snapshot (ex: 'e51') ou seletor CSS (ex: 'button.login')" },
       },
       required: ["selector"],
     },
   },
   {
     name: "browser_type",
-    description: "Preenche texto em um campo identificado por seletor CSS",
+    description: "Preenche texto em um campo. Use o ref do snapshot (ex: 'e12') OU um seletor CSS (ex: 'input[name=user]').",
     parameters: {
       type: "object",
       properties: {
-        selector: { type: "string", description: "Seletor CSS do campo" },
+        selector: { type: "string", description: "Ref do snapshot (ex: 'e12') ou seletor CSS (ex: 'input#email')" },
         text: { type: "string", description: "Texto para preencher" },
         submit: { type: "boolean", description: "Pressiona Enter apos preencher" },
       },
@@ -145,6 +145,17 @@ export const coreToolDeclarations = [
         fullPage: { type: "boolean", description: "Captura pagina inteira" },
         type: { type: "string", description: "png ou jpeg" },
       },
+    },
+  },
+  {
+    name: "browser_press_key",
+    description: "Pressiona uma tecla no navegador (ex: Enter, Tab, Escape, ArrowDown)",
+    parameters: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Nome da tecla (ex: 'Enter', 'Tab', 'Escape', 'ArrowDown')" },
+      },
+      required: ["key"],
     },
   },
   {

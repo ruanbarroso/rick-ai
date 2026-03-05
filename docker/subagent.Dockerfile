@@ -26,6 +26,8 @@ COPY docker/tools.mjs /app/tools.mjs
 COPY docker/tool-declarations.mjs /app/tool-declarations.mjs
 COPY docker/rick-api.mjs /app/rick-api.mjs
 COPY docker/mcp-playwright.mjs /app/mcp-playwright.mjs
+COPY docker/policy.mjs /app/policy.mjs
+COPY docker/prompt.mjs /app/prompt.mjs
 COPY docker/agent.mjs /app/agent.mjs
 
 RUN chmod -R a+rX /ms-playwright
