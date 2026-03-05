@@ -48,7 +48,12 @@ export function looksLikePlanDraftRequest(text) {
 
 export function looksLikeFakeAccessBlockClaim(text) {
   const normalized = String(text || "").toLowerCase();
-  return /(nao tenho acesso|não tenho acesso|nao tenho execucao ativa|não tenho execução ativa|nao consigo executar ferramentas|não consigo executar ferramentas|bloqueado por acesso)/.test(normalized);
+  return /(nao tenho acesso|não tenho acesso|nao tenho execucao ativa|não tenho execução ativa|nao consigo executar ferramentas|não consigo executar ferramentas|bloqueado por acesso|iframe n[aã]o ficou acess[ií]vel|n[aã]o apareceu no snapshot|bloqueio real|componente interno sem elementos|n[aã]o exp[oõ]e.*elementos|iframe.*n[aã]o.*acess|shadow.*dom.*bloqu|conte[uú]do.*n[aã]o.*vis[ií]vel.*iframe|n[aã]o.*consegui.*acessar.*iframe)/.test(normalized);
+}
+
+export function looksLikeCheckpointPause(text) {
+  const normalized = String(text || "").toLowerCase();
+  return /(se voc[eê] quiser.*continu|quer que eu (continu|prossig|siga|execut)|devo (continuar|prosseguir|seguir)|posso (continuar|prosseguir|seguir)|deseja que eu (continu|prossig|execut)|gostaria que eu (continu|prossig)|me avise se (quer|deseja|devo)|aguardo sua confirma[cç][aã]o para (continu|prosseg|execut)|caso queira.*continu|s[oó] me (diga|fala|avisa).*continu|quando (quiser|desejar).*continu)/.test(normalized);
 }
 
 export function acknowledgesPriorExecution(text) {
@@ -222,4 +227,30 @@ export function shouldSuppressInterimClaim(text, policy, stats) {
   const normalized = String(text || "").toLowerCase();
   return looksLikeExecutionPromise(normalized)
     || (looksLikeExecutionClaim(normalized) && (stats.executedToolCalls ?? 0) === 0);
+}
+
+/**
+ * Detect checkpoint pauses where the model stops mid-task to ask for
+ * permission to continue. These should be stripped in build mode so
+ * the model keeps executing instead of waiting.
+ */
+export function shouldStripCheckpointPause(text, policy) {
+  if (!policy) return false;
+  if (policy.executionMode !== "build") return false;
+  if (policy.planningOnly) return false;
+  return looksLikeCheckpointPause(text);
+}
+
+/**
+ * Remove checkpoint pause phrases from model output text.
+ * Returns cleaned text or original if no match.
+ */
+export function stripCheckpointPhrases(text) {
+  if (!text) return text;
+  // Remove sentences that contain checkpoint-pause language
+  const lines = String(text).split(/\n/);
+  const cleaned = lines.filter(line => !looksLikeCheckpointPause(line));
+  const result = cleaned.join("\n").trim();
+  // If stripping removed everything, return original (don't produce empty)
+  return result.length > 0 ? result : text;
 }

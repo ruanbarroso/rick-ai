@@ -42,6 +42,8 @@ import {
   buildNoExecutionGuardMessage,
   shouldForceExecutionRetry as shouldForceExecutionRetryPure,
   shouldSuppressInterimClaim,
+  shouldStripCheckpointPause,
+  stripCheckpointPhrases,
 } from "./policy.mjs";
 import {
   refreshSystemPromptCache as refreshPromptCache,
@@ -95,7 +97,15 @@ function emitMessage(text) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
   if (shouldSuppressInterimExecutionClaim(text)) return;
-  emit({ type: "message", text: redactUserVisibleText(text) });
+  // Strip checkpoint pause phrases from interim messages in build mode
+  let emitText = text;
+  if (shouldStripCheckpointPause(text, currentTurnPolicy)) {
+    emitText = stripCheckpointPhrases(text);
+    if (!emitText || emitText === text) {
+      emitText = text; // no change or empty — keep original
+    }
+  }
+  emit({ type: "message", text: redactUserVisibleText(emitText) });
 }
 
 function emitStatus(message) {
@@ -1952,6 +1962,17 @@ rl.on("line", async (line) => {
       result = "Ainda nao tentei executar ferramentas suficientes nesta rodada para concluir que existe bloqueio real de acesso. Posso executar agora os passos tecnicos e te trazer evidencias objetivas.";
       emitProviderError("Guardrail de bloqueio: resposta ajustada para evitar alegacao de falta de acesso sem erro real de ferramenta.");
       postProcessed = true;
+    }
+
+    // Strip checkpoint pause phrases ("se você quiser, eu continuo", "quer que eu prossiga?", etc.)
+    // from the final result in build mode. The model should keep executing, not ask for permission.
+    if (shouldStripCheckpointPause(result, currentTurnPolicy)) {
+      const cleaned = stripCheckpointPhrases(result);
+      if (cleaned !== result) {
+        result = cleaned;
+        emitProviderError("Guardrail de checkpoint: removidas frases de pausa intermediaria que pediam confirmacao do usuario para continuar.");
+        postProcessed = true;
+      }
     }
 
     // If post-processing changed the result, emit the new version so the user sees it.
