@@ -1868,20 +1868,16 @@
     color: var(--text-muted);
   }
 
-  .subagent-active-sessions-link {
-    margin-top: 8px;
-    font-size: 0.82rem;
+  .subagent-metric-value.clickable {
     color: #93c5fd;
+    cursor: pointer;
     text-decoration: underline;
     text-decoration-color: rgba(147, 197, 253, 0.45);
     text-underline-offset: 2px;
-    cursor: pointer;
-    display: none;
-    width: fit-content;
   }
-
-  .subagent-active-sessions-link.visible {
-    display: inline-block;
+  .subagent-metric-value.clickable:hover {
+    color: #bfdbfe;
+    text-decoration-color: rgba(191, 219, 254, 0.7);
   }
 
   .subagent-sessions-modal {
@@ -2566,7 +2562,6 @@
         </div>
 
         <div class="subagent-metrics-footnote" id="subagent-metrics-footnote"></div>
-        <button class="subagent-active-sessions-link" id="subagent-active-sessions-link" onclick="openSubagentActiveSessionsModal()">Ver sessões ativas</button>
       </div>
     </div>
 
@@ -5774,6 +5769,7 @@ function renderSubagentMetrics(data) {
     ? gauges.liveSessions
     : subagentActiveSessionsCache.length;
   setText('metric-live-sessions', formatMetricsValue(liveSessionsCount));
+  updateLiveSessionsClickable(liveSessionsCount);
   setText('metric-running-sessions', formatMetricsValue(gauges.runningSessions));
   setText('metric-waiting-sessions', formatMetricsValue(gauges.waitingUserSessions));
   setText('metric-failed-sessions', formatMetricsValue(gauges.failedSessions));
@@ -5794,14 +5790,21 @@ function renderSubagentMetrics(data) {
     foot.textContent = 'Inicio da coleta: ' + startedText;
   }
 
-  updateSubagentActiveSessionsLink(liveSessionsCount);
 }
 
-function updateSubagentActiveSessionsLink(activeCount) {
-  var link = document.getElementById('subagent-active-sessions-link');
-  if (!link) return;
+function updateLiveSessionsClickable(activeCount) {
+  var el = document.getElementById('metric-live-sessions');
+  if (!el) return;
   var hasActive = Number(activeCount) > 0;
-  link.classList.toggle('visible', hasActive);
+  if (hasActive) {
+    el.classList.add('clickable');
+    el.onclick = openSubagentActiveSessionsModal;
+    el.title = 'Ver sessões ativas';
+  } else {
+    el.classList.remove('clickable');
+    el.onclick = null;
+    el.title = '';
+  }
 }
 
 function getSessionLastMessageAtTs(session) {
