@@ -1684,6 +1684,15 @@
   .subagent-session-main {
     min-width: 0;
     flex: 1;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 8px;
+    margin: -4px -6px;
+    transition: background 0.15s;
+  }
+
+  .subagent-session-main:hover {
+    background: rgba(29, 161, 242, 0.08);
   }
 
   .subagent-session-title {
@@ -5376,7 +5385,7 @@ function renderSubagentActiveSessionsModal() {
     var timeText = ts ? new Date(ts).toLocaleString('pt-BR') : '-';
 
     html += '<div class="subagent-session-row">';
-    html +=   '<div class="subagent-session-main">';
+    html +=   '<div class="subagent-session-main" onclick="openSessionPage(\'' + escapeAttr(String(sid)) + '\')" title="Abrir sessao em nova guia">';
     html +=     '<div class="subagent-session-title">' + escapeHtml(String(name)) + '</div>';
     if (task) {
       html +=   '<div class="subagent-session-meta">' + escapeHtml(task) + '</div>';
