@@ -226,8 +226,9 @@ function shouldSuppressInterimExecutionClaim(text) {
   if (!currentTurnPolicy?.executionRequired) return false;
   if (currentTurnPolicy.executionMode !== "build") return false;
   if (!currentTurnStats) return false;
-  if ((currentTurnStats.executedToolCalls ?? 0) > 0) return false;
-  return looksLikeExecutionClaim(text);
+  // In execution-required turns, avoid publishing provider prose mid-loop.
+  // Tool lifecycle blocks + final waiting_user result are the source of truth.
+  return true;
 }
 
 function looksLikePlanDraftRequest(text) {
@@ -2023,7 +2024,14 @@ rl.on("line", async (line) => {
         emitModelActive(provider.modelId, provider.name);
         result = await provider.fn(providerTaskText, signal, imageInputs);
 
-        if (shouldForceExecutionRetry(providerTaskText, result) && !forcedExecutionRetried) {
+        const shouldRunForcedExecutionPass =
+          currentTurnPolicy.executionMode === "build"
+          && currentTurnPolicy.executionRequired
+          && !forcedExecutionRetried
+          && !currentTurnStats?.maxStepsReached
+          && (currentTurnStats?.executedToolCalls ?? 0) === 0;
+
+        if (shouldRunForcedExecutionPass || (shouldForceExecutionRetry(providerTaskText, result) && !forcedExecutionRetried)) {
           forcedExecutionRetried = true;
           result = await provider.fn(buildForcedExecutionPrompt(providerTaskText), signal, imageInputs);
         }
