@@ -52,6 +52,7 @@ import {
 } from "./prompt.mjs";
 
 const SENSITIVE_TOOL_PREVIEW = new Set(["rick_memory", "rick_search"]);
+const HIDDEN_TOOL_INPUT = new Set(["browser_run_code"]);
 
 /** Pattern matching memory keys/categories that indicate the value is a secret. */
 const SENSITIVE_MEMORY_HINT = /senha|password|pass|token|secret|api[_ -]?key|chave|credencial|credential/i;
@@ -239,14 +240,28 @@ function toPreview(text, max = 180) {
 
 function emitToolCallStart(callId, name, input) {
   if (isCurrentSuperseded()) return;
+  if (HIDDEN_TOOL_INPUT.has(name)) {
+    emit({
+      type: "tool_call",
+      event: "start",
+      callId,
+      name,
+      input: { hidden: true, reason: "sensitive_tool_input" },
+    });
+    return;
+  }
   // Redact sensitive values from tool input before emitting to viewers.
   // E.g. browser_type input may contain a password as the "text" field.
   let safeInput = input;
   if (input && typeof input === "object") {
     const json = JSON.stringify(input);
-    const redacted = redactSecrets(json);
+    const redacted = redactUserVisibleText(redactSecrets(json));
     if (redacted !== json) {
       try { safeInput = JSON.parse(redacted); } catch { safeInput = input; }
+    }
+    // Never expose typed text in browser fields to viewers.
+    if (name === "browser_type" && typeof safeInput.text === "string") {
+      safeInput = { ...safeInput, text: "[REDACTED]" };
     }
   }
   emit({ type: "tool_call", event: "start", callId, name, input: safeInput });
@@ -1855,9 +1870,20 @@ rl.on("line", async (line) => {
           && !currentTurnStats?.maxStepsReached
           && (currentTurnStats?.executedToolCalls ?? 0) === 0;
 
-        if (shouldRunForcedExecutionPass || (shouldForceExecutionRetry(providerTaskText, result) && !forcedExecutionRetried)) {
+        const shouldRunContinuationExecutionPass =
+          currentTurnPolicy.executionMode === "build"
+          && currentTurnPolicy.executionRequired
+          && !forcedExecutionRetried
+          && !currentTurnStats?.maxStepsReached
+          && (currentTurnStats?.executedToolCalls ?? 0) > 0
+          && (looksLikeCheckpointPause(result) || looksLikeExecutionPromise(result));
+
+        if (shouldRunForcedExecutionPass || shouldRunContinuationExecutionPass || (shouldForceExecutionRetry(providerTaskText, result) && !forcedExecutionRetried)) {
           forcedExecutionRetried = true;
-          result = await provider.fn(buildForcedExecutionPrompt(providerTaskText), signal, imageInputs);
+          const forcedPrompt = shouldRunContinuationExecutionPass
+            ? `${buildForcedExecutionPrompt(providerTaskText)}\n\n[SEM_CHECKPOINT]\nVoce ja executou ferramentas nesta rodada. Continue autonomamente sem pedir confirmacao para prosseguir. So finalize quando concluir o objetivo do usuario ou quando houver bloqueio tecnico real com evidencia objetiva.`
+            : buildForcedExecutionPrompt(providerTaskText);
+          result = await provider.fn(forcedPrompt, signal, imageInputs);
         }
 
         lastErr = null;

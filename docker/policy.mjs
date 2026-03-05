@@ -58,7 +58,7 @@ export function looksLikeNoExecutionCapabilityClaim(text) {
 
 export function looksLikeCheckpointPause(text) {
   const normalized = String(text || "").toLowerCase();
-  return /(se voc[eê] quiser.*continu|quer que eu (continu|prossig|siga|execut)|devo (continuar|prosseguir|seguir)|posso (continuar|prosseguir|seguir)|deseja que eu (continu|prossig|execut)|gostaria que eu (continu|prossig)|me avise se (quer|deseja|devo)|aguardo sua confirma[cç][aã]o para (continu|prosseg|execut)|caso queira.*continu|s[oó] me (diga|fala|avisa).*continu|quando (quiser|desejar).*continu)/.test(normalized);
+  return /(se voc[eê] quiser.*continu|se voc[eê] mandar.*(continu|prossig|siga|execut)|quer que eu (continu|prossig|siga|execut)|devo (continuar|prosseguir|seguir)|posso (continuar|prosseguir|seguir)|deseja que eu (continu|prossig|execut)|gostaria que eu (continu|prossig)|me avise se (quer|deseja|devo)|aguardo sua confirma[cç][aã]o para (continu|prosseg|execut)|caso queira.*continu|s[oó] me (diga|fala|avisa).*continu|quando (quiser|desejar).*continu)/.test(normalized);
 }
 
 export function acknowledgesPriorExecution(text) {
@@ -277,6 +277,7 @@ export function stripCheckpointPhrases(text) {
   let cleaned = String(text);
   const patterns = [
     /se\s+voc[eê]\s+quiser[^\n.!?]*(?:continu|prossig|seguir|execut)[^\n.!?]*[.!?]?/gi,
+    /se\s+voc[eê]\s+mandar[^\n.!?]*(?:continu|prossig|siga|execut)[^\n.!?]*[.!?]?/gi,
     /quer\s+que\s+eu\s+(?:continu|prossig|siga|execut)[^\n.!?]*[.!?]?/gi,
     /devo\s+(?:continuar|prosseguir|seguir)[^\n.!?]*[.!?]?/gi,
     /posso\s+(?:continuar|prosseguir|seguir)[^\n.!?]*[.!?]?/gi,
