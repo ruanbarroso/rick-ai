@@ -125,7 +125,7 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 - **Prompt layering**: System prompt is composed from a shared base + provider-specific overlay + runtime environment block + project instructions loaded from `AGENTS.md`/`CLAUDE.md` in the workspace
 - **Execution guardrails**: Per-turn max tool-step cap prevents endless loops; for code-change requests, the sub-agent refuses to claim technical completion when no tool execution happened in that turn
 - **Git safety gate**: `git commit`, `git push`, and `gh pr create` are blocked unless explicitly requested in the current user turn
-- **Build/Plan mode**: Session viewer has a mode selector (default `Build`); `Plan` mode answers with strategy only and blocks tool execution for safe planning
+- **Build/Plan mode**: Session viewer has a mode selector (default `Build`); `Plan` mode answers with strategy-first behavior and allows only read/inspection tools (blocks write/edit/command-mutation actions)
 - **Playwright MCP runtime**: Browser tools run via local Playwright MCP command (`RICK_PLAYWRIGHT_MCP_COMMAND`), mirroring OpenCode-style MCP integration
 - **Credential injection**: OAuth tokens and stored passwords injected at runtime (never in task descriptions). Sensitive memories are pre-resolved and injected as `RICK_SECRET_*` env vars (decrypted, no encryption key exposed).
 - **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick's read-only API for memories, credentials, semantic search, conversations, and config — all scoped to the owner's data.

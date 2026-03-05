@@ -1704,7 +1704,7 @@ rl.on("line", async (line) => {
     expectedActions: requestedMode === "plan"
       ? { gitPull: false, gitCommit: false, gitPush: false }
       : parsedPolicy.expectedActions,
-    planningOnly: requestedMode === "plan" ? true : parsedPolicy.planningOnly,
+    planningOnly: requestedMode === "plan",
   };
   currentTurnStats = {
     phase: "planning",

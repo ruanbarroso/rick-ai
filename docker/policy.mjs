@@ -132,9 +132,25 @@ export function detectBlockedCommand(toolName, input, policy) {
   return null;
 }
 
+const PLAN_MODE_ALLOWED_TOOLS = new Set([
+  "read_file",
+  "list_directory",
+  "browser_navigate",
+  "browser_snapshot",
+  "browser_wait_for",
+  "browser_scroll",
+  "browser_screenshot",
+  "browser_evaluate",
+  "browser_close",
+  "web_fetch",
+  "rick_memory",
+  "rick_search",
+]);
+
 export function detectPlanningOnlyToolBlock(toolName, policy) {
   if (!policy?.planningOnly) return null;
-  return `Bloqueado por politica desta rodada: pedido de planejamento. Ferramenta ${toolName} nao deve ser executada.`;
+  if (PLAN_MODE_ALLOWED_TOOLS.has(toolName)) return null;
+  return `Bloqueado por politica desta rodada: modo Plan permite apenas ferramentas de leitura/inspecao. Ferramenta ${toolName} nao e permitida.`;
 }
 
 // ── Turn policy parsing ─────────────────────────────────────────────────────
@@ -192,7 +208,7 @@ export function missingExpectedActions(policy, stats) {
 // ── Prompt builders ─────────────────────────────────────────────────────────
 
 export function buildPlanningOnlyPrompt(userText) {
-  return `${userText}\n\n[MODO_PLANEJAMENTO]\nResponda APENAS com plano/estrategia. Nao execute ferramentas nesta rodada e nao alegue execucao.`;
+  return `${userText}\n\n[MODO_PLANEJAMENTO]\nResponda APENAS com plano/estrategia. Voce pode usar ferramentas somente de leitura/inspecao para embasar o plano (ex.: ler arquivos e coletar contexto), mas nao pode editar arquivos, commitar, dar push ou executar acoes mutaveis.`;
 }
 
 export function buildForcedExecutionPrompt(baseTaskText) {
