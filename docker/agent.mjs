@@ -967,12 +967,14 @@ async function runGeminiLoop(userText, signal, modelId, imageInputs = []) {
       const { texts, toolCalls, modelParts } = await callGemini(contents, signal, modelId);
       contents.push({ role: "model", parts: modelParts });
 
-      for (const text of texts) {
-        emitMessage(text);
+      if (toolCalls.length === 0) {
+        // Final iteration — don't emit here; let the caller emit after post-processing.
+        return texts.join("\n") || FALLBACK_RESULT;
       }
 
-      if (toolCalls.length === 0) {
-        return texts.join("\n") || FALLBACK_RESULT;
+      // Intermediate iteration (tools follow) — emit text as progress update.
+      for (const text of texts) {
+        emitMessage(text);
       }
 
       const toolResults = [];
@@ -1214,8 +1216,6 @@ async function runOpenAILoop(userText, signal, imageInputs = []) {
       const msg = choice.message;
       messages.push(msg);
 
-      if (msg.content) emitMessage(msg.content);
-
       const toolCalls = (msg.tool_calls ?? []).map((tc) => ({
         name: tc.function.name,
         input: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })(),
@@ -1223,8 +1223,12 @@ async function runOpenAILoop(userText, signal, imageInputs = []) {
       }));
 
       if (toolCalls.length === 0) {
+        // Final iteration — don't emit here; let the caller emit after post-processing.
         return msg.content || FALLBACK_RESULT;
       }
+
+      // Intermediate iteration (tools follow) — emit text as progress update.
+      if (msg.content) emitMessage(msg.content);
 
       for (const tc of toolCalls) {
         if (signal?.aborted || interruptRequested) {
@@ -1337,13 +1341,15 @@ async function runOpenAICodexLoop(userText, oauthToken, signal, imageInputs = []
 
       const { text, toolCalls } = await parseCodexStreamResponse(res, signal);
 
-      if (text) emitMessage(text);
-
       if (toolCalls.length === 0) {
+        // Final iteration — don't emit here; let the caller emit after post-processing.
         // Update openaiHistory with the assistant response for future turns
         if (text) openaiHistory.push({ role: "assistant", content: text });
         return text || FALLBACK_RESULT;
       }
+
+      // Intermediate iteration (tools follow) — emit text as progress update.
+      if (text) emitMessage(text);
 
       // Execute tool calls and build function_call_output items for next request
       for (const tc of toolCalls) {
@@ -1479,12 +1485,14 @@ async function runClaudeLoop(userText, signal, imageInputs = []) {
       const textBlocks = content.filter((b) => b.type === "text");
       const toolBlocks = content.filter((b) => b.type === "tool_use");
 
-      for (const tb of textBlocks) {
-        emitMessage(tb.text);
+      if (toolBlocks.length === 0) {
+        // Final iteration — don't emit here; let the caller emit after post-processing.
+        return textBlocks.map((b) => b.text).join("\n") || FALLBACK_RESULT;
       }
 
-      if (toolBlocks.length === 0) {
-        return textBlocks.map((b) => b.text).join("\n") || FALLBACK_RESULT;
+      // Intermediate iteration (tools follow) — emit text as progress update.
+      for (const tb of textBlocks) {
+        emitMessage(tb.text);
       }
 
       const toolResults = [];
@@ -1994,11 +2002,10 @@ rl.on("line", async (line) => {
       }
     }
 
-    // If post-processing changed the result, emit the new version so the user sees it.
-    // If unchanged, the provider loop already emitted it — don't duplicate.
-    if (postProcessed) {
-      emitMessage(result);
-    }
+    // The provider loop no longer emits the final text — it only emits intermediate
+    // progress messages during tool-use iterations. We always emit the (possibly
+    // post-processed) result here so the user sees exactly one final message.
+    emitMessage(result);
 
     // Record successful turn in provider-agnostic transcript (for cascade seeding)
     conversationTranscript.push({ role: "user", content: turnTaskText });
@@ -2012,8 +2019,7 @@ rl.on("line", async (line) => {
       pendingContinuation = null;
     }
     // Signal that we're done processing this turn but ready for more input.
-    // Don't re-send the result text — it was already emitted via emitMessage()
-    // (either by the provider loop or by the post-processing block above).
+    // Don't re-send the result text — it was already emitted above.
     emitWaitingUser();
     currentTurnStats = null;
     currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
