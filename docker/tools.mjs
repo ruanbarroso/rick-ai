@@ -46,6 +46,21 @@ for (const key of Object.keys(process.env)) {
 }
 
 /**
+ * Register runtime secret values discovered during execution (e.g. passwords
+ * retrieved from rick_memory).  Values shorter than 6 chars are ignored to
+ * avoid false-positive redaction of common words.
+ */
+export function registerRuntimeSecrets(values) {
+  if (!Array.isArray(values)) return;
+  for (const v of values) {
+    if (typeof v !== "string" || v.length < 6) continue;
+    // Avoid duplicates
+    if (SECRET_PATTERNS.some((p) => p.val === v)) continue;
+    SECRET_PATTERNS.push({ key: "memory", val: v });
+  }
+}
+
+/**
  * Redact known secret values from a string.
  * Replaces each secret occurrence with [REDACTED:<ENV_VAR_NAME>].
  */

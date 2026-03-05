@@ -27,7 +27,7 @@ import {
   buildAgentToolDeclarations,
   LLM_TIMEOUT_MS, MAX_TIMEOUT_RETRIES,
 } from "./rick-api.mjs";
-import { redactSecrets } from "./tools.mjs";
+import { redactSecrets, registerRuntimeSecrets } from "./tools.mjs";
 import {
   looksLikeTechnicalCompletion, looksLikeTechnicalActionRequest,
   looksLikeExecutionNowRequest, looksLikeConcreteExecutionRequest,
@@ -52,6 +52,43 @@ import {
 } from "./prompt.mjs";
 
 const SENSITIVE_TOOL_PREVIEW = new Set(["rick_memory", "rick_search"]);
+
+/** Pattern matching memory keys/categories that indicate the value is a secret. */
+const SENSITIVE_MEMORY_HINT = /senha|password|pass|token|secret|api[_ -]?key|chave|credencial|credential/i;
+
+/**
+ * Parse the JSON output of rick_memory / rick_search and register any values
+ * associated with sensitive keys so they are redacted from future tool output
+ * (e.g. a password retrieved from memory that later appears in Playwright code).
+ *
+ * Memory objects look like: { key: "senha sankhya", value: "abc123", category: "credenciais" }
+ * Search results may nest a memory inside a `content` or `metadata` field.
+ */
+function extractAndRegisterSecrets(output) {
+  try {
+    const data = JSON.parse(output);
+    const secrets = [];
+    const check = (obj) => {
+      if (!obj || typeof obj !== "object") return;
+      if (Array.isArray(obj)) { obj.forEach(check); return; }
+      // Memory-shaped object: if key or category hints at a secret, register the value.
+      const k = obj.key ?? obj.name ?? "";
+      const cat = obj.category ?? "";
+      const val = obj.value ?? obj.content ?? "";
+      if (typeof val === "string" && val.length >= 6 && (SENSITIVE_MEMORY_HINT.test(k) || SENSITIVE_MEMORY_HINT.test(cat))) {
+        secrets.push(val);
+      }
+      // Recurse into nested objects (search results wrap memories)
+      for (const v of Object.values(obj)) {
+        if (v && typeof v === "object") check(v);
+      }
+    };
+    check(data);
+    if (secrets.length > 0) registerRuntimeSecrets(secrets);
+  } catch {
+    // Not valid JSON or unexpected format — ignore silently.
+  }
+}
 
 function redactUserVisibleText(value) {
   let text = String(value ?? "");
@@ -197,7 +234,17 @@ function toPreview(text, max = 180) {
 
 function emitToolCallStart(callId, name, input) {
   if (isCurrentSuperseded()) return;
-  emit({ type: "tool_call", event: "start", callId, name, input });
+  // Redact sensitive values from tool input before emitting to viewers.
+  // E.g. browser_type input may contain a password as the "text" field.
+  let safeInput = input;
+  if (input && typeof input === "object") {
+    const json = JSON.stringify(input);
+    const redacted = redactSecrets(json);
+    if (redacted !== json) {
+      try { safeInput = JSON.parse(redacted); } catch { safeInput = input; }
+    }
+  }
+  emit({ type: "tool_call", event: "start", callId, name, input: safeInput });
 }
 
 function emitToolCallCompleted(callId, name, durationMs, outputPreview) {
@@ -593,6 +640,12 @@ async function runToolWithLifecycle(name, input) {
     currentTurnStats.executedToolCalls += 1;
     const result = await runTool(name, input);
     const output = String(result);
+    // When sensitive tools return data, extract potential secret values so they
+    // get redacted from any future tool output shown to the user (e.g. Playwright
+    // code that includes a password typed via browser_type).
+    if (SENSITIVE_TOOL_PREVIEW.has(name)) {
+      extractAndRegisterSecrets(output);
+    }
     collectTurnEvidence(name, input);
     captureBrowserProgress(name, output);
     if (currentTurnStats.executionTrail.length < 16) {
