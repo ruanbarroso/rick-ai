@@ -68,8 +68,8 @@ export interface WebAgentBridge {
   getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Get the persisted status and variant name of a session from the DB */
   getSessionInfoFromDB(sessionId: string): Promise<{ status: string; variantName: string | null; numericUserId: number | null } | null>;
-  /** Send audio transcription update to all web clients */
-  sendTranscription(audioUrl: string, transcription: string): void;
+  /** Send audio transcription update to all web clients and main session viewers */
+  sendTranscription(audioUrl: string, transcription: string, userId?: number): void;
   /** Clear conversation history for a user (uses numericUserId when available for RBAC) */
   clearConversation(userPhone: string, numericUserId?: number): Promise<void>;
   /** Create a blank sub-agent session (no initial task) and return the ack message */
@@ -2053,9 +2053,23 @@ export class WebConnector implements Connector {
     }
   }
 
-  /** Send audio transcription update to all authenticated web clients */
-  sendTranscription(audioUrl: string, transcription: string): void {
-    this.broadcastToAuthenticated({ type: "transcription", audioUrl, text: transcription });
+  /** Send audio transcription update to all authenticated web clients and main session viewers */
+  sendTranscription(audioUrl: string, transcription: string, userId?: number): void {
+    const payload = { type: "transcription", audioUrl, text: transcription };
+    // Broadcast to web-ui clients (admin panel)
+    this.broadcastToAuthenticated(payload);
+    // Broadcast to main-session-viewer subscribers for this user
+    if (userId !== undefined) {
+      const subs = this.mainViewerSubscribers.get(userId);
+      if (subs && subs.size > 0) {
+        const json = JSON.stringify(payload);
+        for (const ws of subs) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(json);
+          }
+        }
+      }
+    }
   }
 
   private broadcastToAuthenticated(data: object): void {

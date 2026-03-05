@@ -323,6 +323,20 @@ export class MemoryService {
   }
 
   /**
+   * Update the content of the most recent user message that has a given audio_url.
+   * Used to persist audio transcription back to the DB after Gemini transcribes it.
+   */
+  async updateAudioTranscription(userId: number, audioUrl: string, transcription: string): Promise<void> {
+    await query(
+      `UPDATE conversations SET content = $1 WHERE id = (
+         SELECT id FROM conversations WHERE user_id = $2 AND audio_url = $3 AND role = 'user'
+         ORDER BY created_at DESC LIMIT 1
+       )`,
+      [transcription, userId, audioUrl]
+    );
+  }
+
+  /**
    * Get conversation history by user_id.
    */
   async getConversationHistoryByUserId(

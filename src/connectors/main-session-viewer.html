@@ -698,6 +698,59 @@ function appendHistoryMessage(msg) {
   container.insertBefore(div, typing);
 }
 
+function handleTranscription(audioUrl, transcription) {
+  if (!audioUrl || !transcription) return;
+
+  // Clean transcription text (strip Gemini prefix + wrapping quotes)
+  var cleanText = transcription.replace(/^aqui\s+est[aá]\s+a\s+transcri[cç][aã]o.*?:\s*/i, '');
+  cleanText = cleanText.replace(/^[""\u201C](.+)[""\u201D]$/, '$1').trim();
+  if (!cleanText) return;
+
+  // Find audio elements in the messages container by matching src URL
+  var container = document.getElementById('messages');
+  var audioDivs = container.querySelectorAll('.message.user .audio-message');
+  var matched = false;
+
+  for (var j = audioDivs.length - 1; j >= 0; j--) {
+    var audioMsg = audioDivs[j];
+    var audioEl = audioMsg.querySelector('audio');
+    if (audioEl) {
+      var src = audioEl.getAttribute('src') || '';
+      if (src !== audioUrl && src.indexOf(audioUrl) === -1) continue;
+    }
+    // Found a matching audio element — update or create the transcription blockquote
+    var existingBq = audioMsg.querySelector('.audio-transcription');
+    if (existingBq && existingBq.classList.contains('processing')) {
+      existingBq.classList.remove('processing');
+      existingBq.innerHTML = renderText(cleanText);
+      matched = true;
+      break;
+    } else if (!existingBq) {
+      var bq = document.createElement('blockquote');
+      bq.className = 'audio-transcription';
+      bq.innerHTML = renderText(cleanText);
+      audioMsg.appendChild(bq);
+      matched = true;
+      break;
+    }
+  }
+
+  // Fallback: update the last processing audio (handles cases where URL doesn't match)
+  if (!matched) {
+    for (var jj = audioDivs.length - 1; jj >= 0; jj--) {
+      var audioMsg2 = audioDivs[jj];
+      var existingBq2 = audioMsg2.querySelector('.audio-transcription.processing');
+      if (existingBq2) {
+        existingBq2.classList.remove('processing');
+        existingBq2.innerHTML = renderText(cleanText);
+        break;
+      }
+    }
+  }
+
+  scrollToBottom();
+}
+
 function setConnected(connected) {
   var dot = document.getElementById('status-dot');
   var text = document.getElementById('status-text');
@@ -784,6 +837,10 @@ function connect() {
           statusText.textContent = 'Online';
         }
         updateSendButton();
+        break;
+
+      case 'transcription':
+        handleTranscription(msg.audioUrl, msg.text);
         break;
 
       case 'error':

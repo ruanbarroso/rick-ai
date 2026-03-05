@@ -269,7 +269,12 @@ export class Agent {
 
       // Send transcription to frontend so it appears under the audio player
       if (audioUrl && this.webBridge) {
-        this.webBridge.sendTranscription(audioUrl, transcription);
+        this.webBridge.sendTranscription(audioUrl, transcription, user.id);
+      }
+      // Persist transcription back to DB so it survives page reloads
+      if (audioUrl) {
+        this.memory.updateAudioTranscription(user.id, audioUrl, transcription)
+          .catch((err) => logger.warn({ err }, "Failed to persist audio transcription to DB"));
       }
     }
 
@@ -1460,8 +1465,8 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.sessionManager.getSessionInfoFromDB(sessionId);
       },
 
-      sendTranscription: (audioUrl: string, transcription: string) => {
-        webConnector.sendTranscription(audioUrl, transcription);
+      sendTranscription: (audioUrl: string, transcription: string, userId?: number) => {
+        webConnector.sendTranscription(audioUrl, transcription, userId);
       },
 
       clearConversation: async (userPhone: string, numericUserId?: number) => {
