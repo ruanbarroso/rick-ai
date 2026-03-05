@@ -14,7 +14,7 @@ RUN useradd -m -u 1001 -s /bin/bash agent \
 
 # Install runtime deps in a cache-friendly layer.
 # Keep this before copying frequently changed agent source files.
-COPY docker/subagent.package.json /app/package.json
+COPY subagent.package.json /app/package.json
 RUN cd /app && npm install --omit=dev
 
 # Install Playwright browsers (used for web browsing tasks)
@@ -22,13 +22,13 @@ RUN cd /app && npm install --omit=dev
 RUN cd /app && npx playwright install chromium --with-deps
 
 # Copy agent entry point and shared modules
-COPY docker/tools.mjs /app/tools.mjs
-COPY docker/tool-declarations.mjs /app/tool-declarations.mjs
-COPY docker/rick-api.mjs /app/rick-api.mjs
-COPY docker/mcp-playwright.mjs /app/mcp-playwright.mjs
-COPY docker/policy.mjs /app/policy.mjs
-COPY docker/prompt.mjs /app/prompt.mjs
-COPY docker/agent.mjs /app/agent.mjs
+COPY tools.mjs /app/tools.mjs
+COPY tool-declarations.mjs /app/tool-declarations.mjs
+COPY rick-api.mjs /app/rick-api.mjs
+COPY mcp-playwright.mjs /app/mcp-playwright.mjs
+COPY policy.mjs /app/policy.mjs
+COPY prompt.mjs /app/prompt.mjs
+COPY agent.mjs /app/agent.mjs
 
 RUN chmod -R a+rX /ms-playwright
 RUN chown -R agent:agent /app

@@ -16,19 +16,22 @@ export type SessionImageStatus = "building_fresh" | "waiting_first_build" | "usi
 
 class SubagentImageBuilder {
   private inFlightBuild: Promise<void> | null = null;
+  /** Fingerprint that the in-flight build will produce (so callers can decide whether to wait). */
+  private inFlightFingerprint: string | null = null;
   private readyFingerprint: string | null = null;
 
-  private getLocalFingerprint(): { hash: string; version: string; fingerprint: string; dockerfilePath: string; localAppDir: string } {
+  private getLocalFingerprint(): { hash: string; version: string; fingerprint: string; dockerfilePath: string; dockerDir: string } {
     const localAppDir = process.cwd();
-    const agentMjsPath = `${localAppDir}/docker/agent.mjs`;
-    const sharedToolsPath = `${localAppDir}/docker/tools.mjs`;
-    const sharedDeclsPath = `${localAppDir}/docker/tool-declarations.mjs`;
-    const rickApiPath = `${localAppDir}/docker/rick-api.mjs`;
-    const mcpPlaywrightPath = `${localAppDir}/docker/mcp-playwright.mjs`;
-    const policyMjsPath = `${localAppDir}/docker/policy.mjs`;
-    const promptMjsPath = `${localAppDir}/docker/prompt.mjs`;
-    const subagentPackagePath = `${localAppDir}/docker/subagent.package.json`;
-    const dockerfilePath = `${localAppDir}/docker/subagent.Dockerfile`;
+    const dockerDir = `${localAppDir}/docker`;
+    const agentMjsPath = `${dockerDir}/agent.mjs`;
+    const sharedToolsPath = `${dockerDir}/tools.mjs`;
+    const sharedDeclsPath = `${dockerDir}/tool-declarations.mjs`;
+    const rickApiPath = `${dockerDir}/rick-api.mjs`;
+    const mcpPlaywrightPath = `${dockerDir}/mcp-playwright.mjs`;
+    const policyMjsPath = `${dockerDir}/policy.mjs`;
+    const promptMjsPath = `${dockerDir}/prompt.mjs`;
+    const subagentPackagePath = `${dockerDir}/subagent.package.json`;
+    const dockerfilePath = `${dockerDir}/subagent.Dockerfile`;
     const versionFilePath = `${localAppDir}/.rick-version`;
     const packageJsonPath = `${localAppDir}/package.json`;
 
@@ -74,7 +77,7 @@ class SubagentImageBuilder {
       version,
       fingerprint: `${hash}|${version}`,
       dockerfilePath,
-      localAppDir,
+      dockerDir,
     };
   }
 
@@ -98,6 +101,8 @@ class SubagentImageBuilder {
       const out = stdout.trim();
       if (!out) return null;
       const [hash = "", version = ""] = out.split("|");
+      // If both labels are empty, the image has no fingerprint metadata
+      if (!hash && !version) return null;
       return { hash, version, fingerprint: out };
     } catch {
       return null;
@@ -106,14 +111,14 @@ class SubagentImageBuilder {
 
   /**
    * Re-label the existing image with updated version metadata (no rebuild).
-   * Uses `docker build` with a trivial FROM+LABEL Dockerfile piped via shell,
-   * which is instant because no layers change.
+   * Uses `docker build` with a trivial FROM+LABEL Dockerfile piped via stdin.
+   * Context is /tmp to avoid sending the entire project tree to the daemon.
    */
   private async relabel(imageRef: string, targetTag: string, local: { hash: string; version: string }): Promise<void> {
     logger.info({ hash: local.hash, version: local.version, imageRef }, "Re-labeling subagent image (content unchanged, version updated)");
     const { execSync } = await import("node:child_process");
     execSync(
-      `printf 'FROM ${imageRef}\\nLABEL agent.bundle.hash=${local.hash} rick.version=${local.version}\\n' | docker build -t ${targetTag} -f - .`,
+      `printf 'FROM ${imageRef}\\nLABEL agent.bundle.hash=${local.hash} rick.version=${local.version}\\n' | docker build -t ${targetTag} -f - /tmp`,
       { timeout: 30_000 },
     );
     execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 }).catch(() => {});
@@ -132,7 +137,7 @@ class SubagentImageBuilder {
     }
   }
 
-  private async buildAndPromote(local: { hash: string; version: string; dockerfilePath: string; localAppDir: string }): Promise<void> {
+  private async buildAndPromote(local: { hash: string; version: string; dockerfilePath: string; dockerDir: string }): Promise<void> {
     logger.info({ hash: local.hash, version: local.version }, "Building subagent image from docker/subagent.Dockerfile");
 
     await execFileAsync(
@@ -147,7 +152,7 @@ class SubagentImageBuilder {
         `rick.version=${local.version}`,
         "-f",
         local.dockerfilePath,
-        local.localAppDir,
+        local.dockerDir,
       ],
       { timeout: 600_000 },
     );
@@ -162,10 +167,17 @@ class SubagentImageBuilder {
     logger.info({ hash: local.hash, version: local.version }, "subagent image built and promoted successfully");
   }
 
-  private async buildWithLock(local: { hash: string; version: string; fingerprint: string; dockerfilePath: string; localAppDir: string }): Promise<void> {
-    if (this.inFlightBuild) {
+  private async buildWithLock(local: { hash: string; version: string; fingerprint: string; dockerfilePath: string; dockerDir: string }): Promise<void> {
+    // If there's already a build in-flight for the SAME fingerprint, just wait for it
+    if (this.inFlightBuild && this.inFlightFingerprint === local.fingerprint) {
       await this.inFlightBuild;
       return;
+    }
+
+    // If there's a build in-flight for a DIFFERENT fingerprint, wait for it to finish
+    // before starting a new one (avoid concurrent docker builds)
+    if (this.inFlightBuild) {
+      try { await this.inFlightBuild; } catch { /* previous build failed, proceed with new one */ }
     }
 
     const buildPromise = this.buildAndPromote(local)
@@ -176,14 +188,16 @@ class SubagentImageBuilder {
       .finally(() => {
         if (this.inFlightBuild === buildPromise) {
           this.inFlightBuild = null;
+          this.inFlightFingerprint = null;
         }
       });
 
     this.inFlightBuild = buildPromise;
+    this.inFlightFingerprint = local.fingerprint;
     await buildPromise;
   }
 
-  private async startBackgroundBuild(local: { hash: string; version: string; fingerprint: string; dockerfilePath: string; localAppDir: string }, reason: string): Promise<void> {
+  private startBackgroundBuild(local: { hash: string; version: string; fingerprint: string; dockerfilePath: string; dockerDir: string }, reason: string): void {
     if (this.inFlightBuild) return;
     this.buildWithLock(local)
       .then(() => logger.info({ reason }, "Subagent image background build completed"))
@@ -195,13 +209,15 @@ class SubagentImageBuilder {
 
     await this.ensureCurrentTagExists();
 
+    // Fast path: in-memory cache says image is up to date
     if (this.readyFingerprint === local.fingerprint && await this.imageExists(CURRENT_IMAGE)) {
       return CURRENT_IMAGE;
     }
 
     const current = await this.imageFingerprint(CURRENT_IMAGE);
-    const hasCurrent = current !== null || await this.imageExists(CURRENT_IMAGE);
+    const hasCurrent = await this.imageExists(CURRENT_IMAGE);
 
+    // Image fingerprint matches local — fully up to date
     if (current?.fingerprint === local.fingerprint) {
       this.readyFingerprint = local.fingerprint;
       return CURRENT_IMAGE;
@@ -228,7 +244,27 @@ class SubagentImageBuilder {
       );
     }
 
+    // A build is already in-flight
     if (this.inFlightBuild) {
+      // If the build will produce exactly the image we need, wait for it —
+      // even if a stale image is available. This avoids launching new sessions
+      // on outdated code when the correct image is seconds away.
+      if (this.inFlightFingerprint === local.fingerprint) {
+        if (hasCurrent) {
+          opts?.onStatus?.("using_stale");
+        } else {
+          opts?.onStatus?.("waiting_first_build");
+        }
+        try {
+          await this.inFlightBuild;
+          return CURRENT_IMAGE;
+        } catch {
+          // Build failed — fall through to use stale image if available
+          if (hasCurrent) return CURRENT_IMAGE;
+          throw new Error("Falha ao construir imagem do sub-agente e nenhuma imagem anterior disponível.");
+        }
+      }
+      // Build is for a different fingerprint — use stale if available, or wait
       if (hasCurrent) {
         opts?.onStatus?.("using_stale");
         return CURRENT_IMAGE;
@@ -238,12 +274,14 @@ class SubagentImageBuilder {
       return CURRENT_IMAGE;
     }
 
+    // No build in-flight — need to kick one off
     if (hasCurrent) {
       opts?.onStatus?.("using_stale");
-      await this.startBackgroundBuild(local, "session_stale_image");
+      this.startBackgroundBuild(local, "session_stale_image");
       return CURRENT_IMAGE;
     }
 
+    // No image at all — must build synchronously
     opts?.onStatus?.("building_fresh");
     await this.buildWithLock(local);
     return CURRENT_IMAGE;
@@ -276,7 +314,7 @@ class SubagentImageBuilder {
           });
         }
         logger.info({ reason, imageFingerprint: image?.fingerprint ?? null, localFingerprint: local.fingerprint }, "Subagent image warmup starting build");
-        return this.startBackgroundBuild(local, reason);
+        this.startBackgroundBuild(local, reason);
       })
       .catch(async (err) => {
         this.warmupRetries++;
