@@ -1,0 +1,12 @@
+[
+  {
+    "id": "readme_scan",
+    "prompt": "Leia o README.md e me diga em 3 bullets quais sao os componentes principais do sub-agent.",
+    "expectRegex": "sub-agent|llm|tools"
+  },
+  {
+    "id": "find_agent_file",
+    "prompt": "Encontre onde fica o loop principal do sub-agent e diga o caminho do arquivo.",
+    "expectRegex": "docker/agent\.mjs|agent\.mjs"
+  }
+]

@@ -150,6 +150,7 @@ REGRAS:
 15. Quando houver chamadas independentes, use batch_tools para executar em paralelo e reduzir interrupcoes/latencia.
 16. Para tarefas complexas com 3+ passos, use todo_write para criar uma lista de tarefas e acompanhar progresso. Marque como in_progress ao iniciar e completed ao terminar cada item.
 17. Para ler arquivos grandes, use read_file com offset/limit. Para buscar em arquivos, use grep. Para localizar arquivos, use glob.
+18. Para alteracoes multi-arquivo ou diff complexo, prefira apply_patch em vez de varios edit_file isolados.
 
 EXECUCAO CONTINUA — SEM PAUSAS INTERMEDIARIAS:
 - Quando uma tarefa tem múltiplos passos sequenciais, execute TODOS os passos na mesma rodada sem parar para confirmação intermediária.
@@ -192,6 +193,7 @@ const PROVIDER_SYSTEM_PROMPTS = {
 - Em tarefas de codigo, mantenha execucao incremental e verificavel.
 - Nao invente saidas de comandos; cite somente evidencias observadas.
 - Use glob e grep para busca de arquivos, nao run_command com find/grep.
+- Para alteracoes de codigo em OpenAI/Codex, prefira apply_patch para edicoes multi-arquivo e diffs complexos.
 - Use batch_tools agressivamente para paralelizar chamadas independentes.`,
 
   claude: `Diretrizes de provider (Claude):

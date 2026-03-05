@@ -119,11 +119,14 @@ Tables are automatically pruned to prevent unbounded growth:
 All delegated tasks (coding, research, browser automation) are handled by a **single unified sub-agent** container with:
 
 - **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro → Gemini 3.0 Flash (automatic failover on rate limits or errors, with automatic retry on timeout before falling through). The session viewer also lets you pick a primary model per session; the selected model is tried first, then the cascade continues from that point. Claude/OpenAI OAuth can be configured per user directly in the sub-agent session viewer (Gemini remains global); when a user has no personal OAuth, the sub-agent falls back to the admin connection. Providers are re-evaluated per turn, so a session started with only Gemini will automatically gain Claude/GPT access when they are connected later via OAuth. Conversation context is shared across providers via a common transcript, so a cascade switch does not cause amnesia.
-- **Tools**: Browser (Playwright MCP + Chrome channel), shell commands, file I/O (`read_file` with offset/limit, resilient `edit_file` with multi-strategy matching), native `glob`/`grep`, `todo_write`, HTTP fetch with HTML-to-text normalization, read-only PostgreSQL access
+- **Tools**: Browser (Playwright MCP + Chrome channel), shell commands, file I/O (`read_file` with offset/limit, resilient `edit_file` with multi-strategy matching, multi-file `apply_patch`), native `glob`/`grep`, `todo_write`, HTTP fetch with HTML-to-text normalization, read-only PostgreSQL access
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
 - **Context rotation**: Automatic summarization when context window fills up (LLM-assisted summary with fallback to textual compaction)
 - **Prompt layering**: System prompt is composed from a shared base + provider-specific overlay + runtime environment block + project instructions loaded from `AGENTS.md`/`CLAUDE.md` in the workspace
 - **Execution guardrails**: Per-turn max tool-step cap prevents endless loops; for code-change requests, the sub-agent refuses to claim technical completion when no tool execution happened in that turn
+- **Autonomous continuation loop**: Internal multi-pass execution budget (time + passes) keeps progressing without user interruptions until completion criteria or hard limits are reached
+- **Turn observability**: Emits per-turn metrics (duration, retries, fallback depth, tool counts, validation count) for session analysis/debugging
+- **SWE-lite benchmark harness**: `docker/benchmark-swe-lite.mjs` runs regression tasks against the sub-agent and measures pass/fail + autonomy metrics
 - **Git safety gate**: `git commit`, `git push`, and `gh pr create` are blocked unless explicitly requested in the current user turn
 - **Build/Plan mode**: Session viewer has a mode selector (default `Build`); `Plan` mode answers with strategy-first behavior and allows only read/inspection tools (blocks write/edit/command-mutation actions)
 - **Playwright MCP runtime**: Browser tools run via local Playwright MCP command (`RICK_PLAYWRIGHT_MCP_COMMAND`), mirroring OpenCode-style MCP integration
@@ -286,6 +289,8 @@ rick-ai/
 │   ├── tool-declarations.mjs          # Tool schemas for LLM function calling
 │   ├── rick-api.mjs                   # Rick API client, agent-specific tools (memory, web_fetch)
 │   ├── mcp-playwright.mjs             # MCP Playwright bridge for browser tools
+│   ├── benchmark-swe-lite.mjs         # SWE-lite benchmark harness for sub-agent autonomy
+│   ├── benchmark-tasks.example.json   # Example benchmark task set
 │   ├── subagent.Dockerfile            # Full bootstrap image (Chrome + Playwright deps)
 │   ├── subagent-fast.Dockerfile       # Fast rebuild image (FROM subagent-base:chrome + runtime files)
 │   └── subagent.package.json          # Runtime dependencies for the container

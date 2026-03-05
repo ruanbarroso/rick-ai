@@ -11,6 +11,7 @@ import {
   readdirSync,
   statSync,
   mkdirSync,
+  unlinkSync,
 } from "fs";
 import { join, relative, extname } from "path";
 import { execFile } from "child_process";
@@ -372,6 +373,228 @@ function levenshteinDistance(a, b) {
   return prev[n];
 }
 
+// ── Unified apply_patch parser/executor ────────────────────────────────────
+
+function splitLines(text) {
+  return String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+}
+
+function fileExists(path) {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseApplyPatch(patchText) {
+  const lines = splitLines(patchText);
+  if (lines.length < 2 || lines[0].trim() !== "*** Begin Patch") {
+    throw new Error("Patch invalido: faltando cabecalho '*** Begin Patch'.");
+  }
+
+  const ops = [];
+  let i = 1;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim() === "*** End Patch") {
+      return ops;
+    }
+
+    if (line.startsWith("*** Add File: ")) {
+      const path = line.slice("*** Add File: ".length).trim();
+      i += 1;
+      const contentLines = [];
+      while (i < lines.length && !lines[i].startsWith("*** ")) {
+        if (!lines[i].startsWith("+")) {
+          throw new Error(`Patch invalido em Add File (${path}): todas as linhas de conteudo devem iniciar com '+'.`);
+        }
+        contentLines.push(lines[i].slice(1));
+        i += 1;
+      }
+      ops.push({ type: "add", path, content: contentLines.join("\n") });
+      continue;
+    }
+
+    if (line.startsWith("*** Delete File: ")) {
+      const path = line.slice("*** Delete File: ".length).trim();
+      ops.push({ type: "delete", path });
+      i += 1;
+      continue;
+    }
+
+    if (line.startsWith("*** Update File: ")) {
+      const path = line.slice("*** Update File: ".length).trim();
+      i += 1;
+      let moveTo = null;
+      if (i < lines.length && lines[i].startsWith("*** Move to: ")) {
+        moveTo = lines[i].slice("*** Move to: ".length).trim();
+        i += 1;
+      }
+
+      const hunks = [];
+      while (i < lines.length && !lines[i].startsWith("*** ")) {
+        if (!lines[i].startsWith("@@")) {
+          throw new Error(`Patch invalido em Update File (${path}): esperado cabecalho de hunk '@@'.`);
+        }
+        const header = lines[i];
+        i += 1;
+        const hunkLines = [];
+        while (i < lines.length && !lines[i].startsWith("@@") && !lines[i].startsWith("*** ")) {
+          hunkLines.push(lines[i]);
+          i += 1;
+        }
+        hunks.push({ header, lines: hunkLines });
+      }
+      ops.push({ type: "update", path, moveTo, hunks });
+      continue;
+    }
+
+    throw new Error(`Patch invalido: cabecalho desconhecido '${line}'.`);
+  }
+
+  throw new Error("Patch invalido: faltando terminador '*** End Patch'.");
+}
+
+function findSequence(lines, sequence, fromIndex = 0) {
+  if (sequence.length === 0) return fromIndex;
+  for (let i = Math.max(0, fromIndex); i <= lines.length - sequence.length; i++) {
+    let ok = true;
+    for (let j = 0; j < sequence.length; j++) {
+      if (lines[i + j] !== sequence[j]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return i;
+  }
+  return -1;
+}
+
+function applyUnifiedHunks(content, hunks, filePathForError) {
+  let lines = splitLines(content);
+  let cursor = 0;
+
+  for (let hunkIndex = 0; hunkIndex < hunks.length; hunkIndex++) {
+    const hunk = hunks[hunkIndex];
+    const oldSeq = [];
+    const newSeq = [];
+
+    for (const rawLine of hunk.lines) {
+      if (!rawLine) {
+        oldSeq.push("");
+        newSeq.push("");
+        continue;
+      }
+      const prefix = rawLine[0];
+      const payload = rawLine.slice(1);
+      if (prefix === " ") {
+        oldSeq.push(payload);
+        newSeq.push(payload);
+      } else if (prefix === "-") {
+        oldSeq.push(payload);
+      } else if (prefix === "+") {
+        newSeq.push(payload);
+      } else if (prefix === "\\") {
+        // "\\ No newline at end of file" marker — ignore
+      } else {
+        throw new Error(`Patch invalido em ${filePathForError} no hunk ${hunkIndex + 1}: prefixo '${prefix}' nao suportado.`);
+      }
+    }
+
+    const matchAtCursor = findSequence(lines, oldSeq, cursor);
+    const matchAnywhere = matchAtCursor >= 0 ? matchAtCursor : findSequence(lines, oldSeq, 0);
+    if (matchAnywhere < 0) {
+      throw new Error(`Falha ao aplicar patch em ${filePathForError}: contexto do hunk ${hunkIndex + 1} nao encontrado.`);
+    }
+
+    lines.splice(matchAnywhere, oldSeq.length, ...newSeq);
+    cursor = matchAnywhere + newSeq.length;
+  }
+
+  return lines.join("\n");
+}
+
+function applyPatchText(patchText) {
+  const ops = parseApplyPatch(patchText);
+  const virtualWrites = new Map();
+  const virtualDeletes = new Set();
+  const changed = [];
+
+  const readVirtual = (fp) => {
+    if (virtualWrites.has(fp)) return virtualWrites.get(fp);
+    if (virtualDeletes.has(fp)) throw new Error(`Arquivo nao existe (marcado para delete): ${fp}`);
+    if (!fileExists(fp)) throw new Error(`Arquivo nao encontrado: ${fp}`);
+    return readFileSync(fp, "utf-8");
+  };
+
+  const existsVirtual = (fp) => {
+    if (virtualDeletes.has(fp)) return false;
+    if (virtualWrites.has(fp)) return true;
+    return fileExists(fp);
+  };
+
+  for (const op of ops) {
+    const fromPath = resolvePath(op.path);
+    if (op.type === "add") {
+      if (existsVirtual(fromPath)) {
+        throw new Error(`Add File falhou: arquivo ja existe (${fromPath}).`);
+      }
+      virtualWrites.set(fromPath, op.content);
+      virtualDeletes.delete(fromPath);
+      changed.push({ type: "add", path: fromPath });
+      continue;
+    }
+
+    if (op.type === "delete") {
+      if (!existsVirtual(fromPath)) {
+        throw new Error(`Delete File falhou: arquivo nao existe (${fromPath}).`);
+      }
+      virtualWrites.delete(fromPath);
+      virtualDeletes.add(fromPath);
+      changed.push({ type: "delete", path: fromPath });
+      continue;
+    }
+
+    if (op.type === "update") {
+      const original = readVirtual(fromPath);
+      const updated = applyUnifiedHunks(original, op.hunks, fromPath);
+      const toPath = op.moveTo ? resolvePath(op.moveTo) : fromPath;
+
+      if (toPath !== fromPath && existsVirtual(toPath)) {
+        throw new Error(`Move to falhou: destino ja existe (${toPath}).`);
+      }
+
+      virtualWrites.set(toPath, updated);
+      virtualDeletes.delete(toPath);
+
+      if (toPath !== fromPath) {
+        virtualWrites.delete(fromPath);
+        virtualDeletes.add(fromPath);
+        changed.push({ type: "move", from: fromPath, to: toPath });
+      } else {
+        changed.push({ type: "update", path: fromPath });
+      }
+      continue;
+    }
+  }
+
+  // Commit writes first, then deletes (best-effort atomicity after full validation)
+  for (const [fp, content] of virtualWrites.entries()) {
+    const dir = fp.substring(0, fp.lastIndexOf("/"));
+    if (dir) mkdirSync(dir, { recursive: true });
+    writeFileSync(fp, content, "utf-8");
+  }
+  for (const fp of virtualDeletes.values()) {
+    if (virtualWrites.has(fp)) continue;
+    if (fileExists(fp)) unlinkSync(fp);
+  }
+
+  return changed;
+}
+
 // ── Glob: recursive file pattern matching ───────────────────────────────────
 
 const GLOB_IGNORE = new Set(["node_modules", ".git", "__pycache__", ".next", "dist", "build", ".cache", "coverage", ".venv", "venv"]);
@@ -379,7 +602,7 @@ const GLOB_MAX_RESULTS = 200;
 
 function globRecursive(dir, pattern, results = [], depth = 0) {
   if (depth > 12 || results.length >= GLOB_MAX_RESULTS) return results;
-  const regex = globToRegex(pattern);
+  const regexes = globToRegexes(pattern);
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
@@ -392,13 +615,33 @@ function globRecursive(dir, pattern, results = [], depth = 0) {
         // If pattern contains **, recurse into all directories
         globRecursive(fullPath, pattern, results, depth + 1);
       } else if (entry.isFile()) {
-        if (regex.test(relPath) || regex.test(entry.name)) {
+        if (regexes.some((rx) => rx.test(relPath) || rx.test(entry.name))) {
           results.push(fullPath);
         }
       }
     }
   } catch { /* permission denied or similar */ }
   return results;
+}
+
+function expandBracePatterns(pattern) {
+  const text = String(pattern || "");
+  const start = text.indexOf("{");
+  if (start < 0) return [text];
+  const end = text.indexOf("}", start + 1);
+  if (end < 0) return [text];
+  const before = text.slice(0, start);
+  const after = text.slice(end + 1);
+  const body = text.slice(start + 1, end);
+  const options = body.split(",").map((s) => s.trim()).filter(Boolean);
+  if (options.length === 0) return [text];
+  const expanded = [];
+  for (const opt of options) {
+    for (const tail of expandBracePatterns(after)) {
+      expanded.push(`${before}${opt}${tail}`);
+    }
+  }
+  return expanded;
 }
 
 function globToRegex(pattern) {
@@ -410,6 +653,21 @@ function globToRegex(pattern) {
     .replace(/§DOUBLESTAR§/g, ".*")
     .replace(/\?/g, "[^/]");
   return new RegExp(`(^|/)${regex}$`, "i");
+}
+
+function globToRegexes(pattern) {
+  const expanded = expandBracePatterns(pattern);
+  return expanded.map((p) => globToRegex(p));
+}
+
+function sortPathsByMtimeDesc(paths) {
+  return [...paths].sort((a, b) => {
+    let am = 0;
+    let bm = 0;
+    try { am = statSync(a).mtimeMs; } catch { am = 0; }
+    try { bm = statSync(b).mtimeMs; } catch { bm = 0; }
+    return bm - am;
+  });
 }
 
 // ── Grep: recursive content search ─────────────────────────────────────────
@@ -424,7 +682,7 @@ function grepRecursive(dir, pattern, includeFilter, maxResults, results = [], de
   } catch {
     return [{ file: "(erro)", line: 0, content: `Regex invalida: ${pattern}` }];
   }
-  const includeRegex = includeFilter ? globToRegex(includeFilter) : null;
+  const includeRegexes = includeFilter ? globToRegexes(includeFilter) : null;
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -436,7 +694,10 @@ function grepRecursive(dir, pattern, includeFilter, maxResults, results = [], de
       if (entry.isDirectory()) {
         grepRecursive(fullPath, pattern, includeFilter, maxResults, results, depth + 1);
       } else if (entry.isFile()) {
-        if (includeRegex && !includeRegex.test(entry.name) && !includeRegex.test(relative(WORKSPACE, fullPath))) continue;
+        if (
+          includeRegexes
+          && !includeRegexes.some((rx) => rx.test(entry.name) || rx.test(relative(WORKSPACE, fullPath)))
+        ) continue;
         // Skip binary files by extension
         const ext = extname(entry.name).toLowerCase();
         if ([".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".zip", ".tar", ".gz", ".pdf", ".exe", ".dll", ".so", ".dylib", ".bin", ".lock"].includes(ext)) continue;
@@ -634,6 +895,23 @@ export async function executeTool(name, input, extraHandler) {
         return `Arquivo editado: ${fp}${strategyHint}${countHint}`;
       } catch (e) { return `Erro ao editar arquivo: ${e.message}`; }
     }
+    case "apply_patch": {
+      try {
+        const patchText = String(input.patchText ?? "");
+        if (!patchText.trim()) return "Erro no apply_patch: patchText vazio.";
+        const changed = applyPatchText(patchText);
+        if (changed.length === 0) return "Patch aplicado sem alteracoes.";
+        const summary = changed.map((item) => {
+          if (item.type === "move") {
+            return `- move: ${relative(WORKSPACE, item.from)} -> ${relative(WORKSPACE, item.to)}`;
+          }
+          return `- ${item.type}: ${relative(WORKSPACE, item.path)}`;
+        }).join("\n");
+        return `Patch aplicado com sucesso (${changed.length} operacoes):\n${summary}`;
+      } catch (e) {
+        return `Erro no apply_patch: ${e.message}`;
+      }
+    }
     case "list_directory": {
       const dp = resolvePath(input.path);
       const entries = listWorkspace(dp);
@@ -644,7 +922,7 @@ export async function executeTool(name, input, extraHandler) {
       const searchDir = resolvePath(input.path || "");
       if (!pattern) return "Erro: parametro 'pattern' obrigatorio.";
       try {
-        const matches = globRecursive(searchDir, pattern);
+        const matches = sortPathsByMtimeDesc(globRecursive(searchDir, pattern));
         if (matches.length === 0) return `Nenhum arquivo encontrado para o padrão: ${pattern}`;
         return matches.map(fp => relative(WORKSPACE, fp)).join("\n");
       } catch (e) { return `Erro no glob: ${e.message}`; }
@@ -657,7 +935,16 @@ export async function executeTool(name, input, extraHandler) {
       try {
         const results = grepRecursive(searchDir, pattern, include, input.maxResults || 50);
         if (results.length === 0) return `Nenhum resultado para o padrão: ${pattern}`;
-        return results.map(r => `${relative(WORKSPACE, r.file)}:${r.line}: ${r.content}`).join("\n");
+        const sorted = [...results].sort((a, b) => {
+          let am = 0;
+          let bm = 0;
+          try { am = statSync(a.file).mtimeMs; } catch { am = 0; }
+          try { bm = statSync(b.file).mtimeMs; } catch { bm = 0; }
+          if (bm !== am) return bm - am;
+          if (a.file !== b.file) return a.file.localeCompare(b.file);
+          return a.line - b.line;
+        });
+        return sorted.map(r => `${relative(WORKSPACE, r.file)}:${r.line}: ${r.content}`).join("\n");
       } catch (e) { return `Erro no grep: ${e.message}`; }
     }
     case "todo_write": {

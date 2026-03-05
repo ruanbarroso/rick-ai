@@ -136,6 +136,14 @@ export function detectBlockedCommand(toolName, input, policy) {
     return "Comando bloqueado: `rg` (ripgrep) nao esta disponivel neste ambiente. Use a ferramenta `grep` para busca de conteudo e `glob` para localizar arquivos.";
   }
 
+  if (/(^|\s)git\s+push\b[^\n]*\s--force(\s|$)|(^|\s)git\s+push\s+-f(\s|$)/.test(commandText) && !policy?.allowDestructive) {
+    return "Comando bloqueado: git push --force e potencialmente destrutivo. Solicite autorizacao explicita do usuario no mesmo turno (ex.: 'autorizo force push') antes de executar.";
+  }
+
+  if (/(^|\s)git\s+reset\s+--hard(\s|$)|(^|\s)git\s+checkout\s+--(\s|$)|(^|\s)rm\s+-rf(\s|$)|(^|\s)rm\s+-r\s+-f(\s|$)/.test(commandText) && !policy?.allowDestructive) {
+    return "Comando bloqueado: acao destrutiva detectada (reset/checkout --/rm -rf). Solicite autorizacao explicita do usuario no mesmo turno (ex.: 'autorizo comando destrutivo') antes de executar.";
+  }
+
   // Block bare `env` without filter — wastes tokens and risks leaking secrets.
   if (/^env\s*$/.test(commandText) || /^(\/usr\/bin\/)?env\s*$/.test(commandText)) {
     return "Comando bloqueado: `env` sem filtro despeja todas as variaveis de ambiente (desperdicio de tokens e risco de seguranca). Use `env | grep RICK_` ou `echo $NOME_VARIAVEL` para verificar variaveis especificas.";
@@ -179,6 +187,7 @@ export function parseTurnPolicy(text, recentGitPolicy) {
   const explicitAllowCommit = /(\bcommit\b|\bcommitar\b)/.test(normalized);
   const explicitAllowPush = /(\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b)/.test(normalized);
   const explicitAllowPr = /(\bpull request\b|\babrir pr\b|\bcriar pr\b|\bgh pr\b)/.test(normalized);
+  const explicitAllowDestructive = /(autorizo\s+(force\s+push|comando\s+destrutivo|reset\s+--hard|rm\s+-rf)|pode\s+usar\s+--force|pode\s+fazer\s+reset\s+--hard|pode\s+apagar\s+com\s+rm\s+-rf|for[çc]a\s+push\s+autorizad)/.test(normalized);
 
   const hasExplicitGitIntent = explicitAllowCommit || explicitAllowPush || explicitAllowPr;
   let updatedGitPolicy = recentGitPolicy;
@@ -205,7 +214,7 @@ export function parseTurnPolicy(text, recentGitPolicy) {
     gitCommit: /\bgit\s+commit\b|\bcommit\b|\bcommitar\b/.test(normalized),
     gitPush: /\bgit\s+push\b|\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b/.test(normalized),
   };
-  return { allowCommit, allowPush, allowPr, executionRequired, technicalRequest, expectedActions, planningOnly, executionMode: "build", updatedGitPolicy };
+  return { allowCommit, allowPush, allowPr, allowDestructive: explicitAllowDestructive, executionRequired, technicalRequest, expectedActions, planningOnly, executionMode: "build", updatedGitPolicy };
 }
 
 export function missingExpectedActions(policy, stats) {

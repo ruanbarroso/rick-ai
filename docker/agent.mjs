@@ -189,17 +189,49 @@ function logInternal(message) {
 
 function emitFallbackUsed(providerName, depth) {
   if (isCurrentSuperseded()) return;
+  if (currentTurnMetrics) currentTurnMetrics.fallbackDepth = Math.max(currentTurnMetrics.fallbackDepth || 0, depth || 0);
   emit({ type: "fallback_used", providerName: redactUserVisibleText(providerName), depth });
 }
 
 function emitProviderRetry(providerName, reason) {
   if (isCurrentSuperseded()) return;
+  if (currentTurnMetrics) {
+    currentTurnMetrics.providerRetries = (currentTurnMetrics.providerRetries || 0) + 1;
+    if (reason === "context_overflow") {
+      currentTurnMetrics.contextOverflowRecoveries = (currentTurnMetrics.contextOverflowRecoveries || 0) + 1;
+    }
+  }
   emit({ type: "provider_retry", providerName: redactUserVisibleText(providerName), reason });
 }
 
 function emitContextCompacted(removedMessages, summaryChars) {
   if (isCurrentSuperseded()) return;
   emit({ type: "context_compacted", removedMessages, summaryChars });
+}
+
+function emitTurnMetrics(metrics) {
+  if (isCurrentSuperseded()) return;
+  emit({ type: "turn_metrics", ...metrics });
+}
+
+function flushTurnMetrics(outcome) {
+  if (!currentTurnMetrics && !currentTurnStats) return;
+  const now = Date.now();
+  const startedAt = currentTurnMetrics?.startedAt || now;
+  const metrics = {
+    outcome,
+    durationMs: Math.max(0, now - startedAt),
+    providerRetries: currentTurnMetrics?.providerRetries || 0,
+    fallbackDepth: currentTurnMetrics?.fallbackDepth || 0,
+    contextOverflowRecoveries: currentTurnMetrics?.contextOverflowRecoveries || 0,
+    autonomousPasses: currentTurnMetrics?.autonomousPasses || 0,
+    toolCalls: currentTurnStats?.toolCalls || 0,
+    executedToolCalls: currentTurnStats?.executedToolCalls || 0,
+    toolErrors: currentTurnStats?.toolErrors || 0,
+    validations: currentTurnStats?.validations?.length || 0,
+    changedPaths: currentTurnStats?.changedPaths?.size || 0,
+  };
+  emitTurnMetrics(metrics);
 }
 
 let toolCallSequence = 0;
@@ -212,8 +244,11 @@ const RETRY_INITIAL_DELAY_MS = 2_000;
 const RETRY_BACKOFF_FACTOR = 2;
 const RETRY_MAX_DELAY_MS = 30_000;
 const MAX_PROVIDER_RETRIES = 2;
+const TURN_AUTONOMY_MAX_PASSES = 6;
+const TURN_AUTONOMY_MAX_RUNTIME_MS = 6 * 60_000;
 
 let currentTurnStats = null;
+let currentTurnMetrics = null;
 let currentTurnPolicy = {
   allowCommit: false,
   allowPush: false,
@@ -324,6 +359,27 @@ function buildContinuationPrompt(userText) {
 
 function shouldForceExecutionRetry(taskText, resultText) {
   return shouldForceExecutionRetryPure(taskText, resultText, currentTurnPolicy, currentTurnStats);
+}
+
+function shouldContinueAutonomousTurn(taskText, resultText, passCount, turnStartedAt) {
+  if (!currentTurnStats || !currentTurnPolicy) return false;
+  if (currentTurnPolicy.executionMode !== "build") return false;
+  if (currentTurnPolicy.planningOnly) return false;
+  if (currentTurnStats.maxStepsReached) return false;
+  if (passCount >= TURN_AUTONOMY_MAX_PASSES) return false;
+  if ((Date.now() - turnStartedAt) > TURN_AUTONOMY_MAX_RUNTIME_MS) return false;
+  if ((currentTurnStats.executedToolCalls ?? 0) === 0) return false;
+
+  const missing = missingExpectedActions();
+  if (missing.length > 0) return true;
+
+  if (
+    currentTurnPolicy.executionRequired
+    && looksLikeTechnicalActionRequest(taskText)
+    && !hasExecutionReceipt(resultText)
+  ) return true;
+
+  return looksLikeIncompleteExecution(resultText) || looksLikeExecutionPromise(resultText);
 }
 
 function detectBlockedGitAction(toolName, input) {
@@ -2153,6 +2209,13 @@ rl.on("line", async (line) => {
     repeatedToolCount: 0,
     maxStepsReached: false,
   };
+  currentTurnMetrics = {
+    startedAt: Date.now(),
+    providerRetries: 0,
+    fallbackDepth: 0,
+    contextOverflowRecoveries: 0,
+    autonomousPasses: 0,
+  };
   const continuation = isContinuationRequest(userText) && !!pendingContinuation;
   const baseTurnTaskText = continuation ? buildContinuationPrompt(userText) : userText;
   const turnTaskText = currentTurnPolicy.planningOnly
@@ -2248,6 +2311,9 @@ rl.on("line", async (line) => {
   if (cascade.length === 0) {
     emitError("Nenhum provedor de LLM disponível. Conecte Claude, OpenAI ou Gemini no painel de configurações.");
     currentAbortController = null;
+    flushTurnMetrics("no_provider");
+    currentTurnStats = null;
+    currentTurnMetrics = null;
     return;
   }
 
@@ -2320,7 +2386,9 @@ rl.on("line", async (line) => {
           if (!isSuperseded()) {
             emitWaitingUser();
           }
+          flushTurnMetrics("interrupted");
           currentTurnStats = null;
+          currentTurnMetrics = null;
           currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
           pendingContinuation = null;
           return;
@@ -2394,7 +2462,9 @@ rl.on("line", async (line) => {
 
   // Check if superseded before emitting response
   if (isSuperseded()) {
+    flushTurnMetrics("superseded");
     currentTurnStats = null;
+    currentTurnMetrics = null;
     currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
     return;
@@ -2402,7 +2472,9 @@ rl.on("line", async (line) => {
 
   if (lastErr) {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");
+    flushTurnMetrics("error");
     currentTurnStats = null;
+    currentTurnMetrics = null;
     currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
   } else {
@@ -2507,30 +2579,27 @@ rl.on("line", async (line) => {
       }
     }
 
-    // ── Automatic continuation ──────────────────────────────────────────
-    // If the model stopped mid-task (indicates more work with "agora vou...",
-    // "proximo passo...", "em seguida...") and we're in build mode, auto-continue
-    // instead of stopping and waiting for user. Max 3 auto-continuations per turn.
-    const AUTO_CONTINUE_MAX = 3;
-    let autoContinueCount = 0;
-    while (
-      autoContinueCount < AUTO_CONTINUE_MAX
-      && currentTurnPolicy.executionMode === "build"
-      && !currentTurnPolicy.planningOnly
-      && !currentTurnStats?.maxStepsReached
-      && !isSuperseded()
-      && (currentTurnStats?.executedToolCalls ?? 0) > 0
-      && looksLikeIncompleteExecution(result)
-    ) {
-      autoContinueCount++;
-      logInternal(`auto-continuation ${autoContinueCount}/${AUTO_CONTINUE_MAX}`);
-      emitMessage(result); // Emit the partial result
+    // ── Autonomous continuation loop with explicit budget ───────────────
+    // Keeps executing internally until done criteria is satisfied or budgets are hit.
+    const turnStartedAt = currentTurnMetrics?.startedAt || Date.now();
+    let autonomousPass = 0;
+    let lastPassResult = "";
+    let lastExecutedTools = currentTurnStats?.executedToolCalls ?? 0;
+
+    while (shouldContinueAutonomousTurn(turnTaskText, result, autonomousPass, turnStartedAt) && !isSuperseded()) {
+      autonomousPass += 1;
+      if (currentTurnMetrics) currentTurnMetrics.autonomousPasses = autonomousPass;
+
+      emitMessage(result);
       conversationTranscript.push({ role: "assistant", content: result });
 
-      const continuePrompt = "Continue executando os proximos passos da tarefa. Nao repita o que ja foi feito. Continue de onde parou.";
+      const missing = missingExpectedActions();
+      const continuePrompt = missing.length > 0
+        ? `Continue executando para concluir as acoes obrigatorias ainda pendentes nesta rodada: ${missing.join(", ")}. Nao repita o que ja foi feito. So finalize apos concluir essas acoes ou reportar bloqueio tecnico real com evidencia.`
+        : "Continue executando os proximos passos da tarefa. Nao repita o que ja foi feito. Continue de onde parou e finalize apenas quando estiver realmente concluido com evidencia.";
       conversationTranscript.push({ role: "user", content: continuePrompt });
 
-      // Re-run the cascade with the continuation prompt
+      // Re-run cascade with continuation prompt
       currentAbortController = new AbortController();
       signal = currentAbortController.signal;
       let continueResult = null;
@@ -2543,20 +2612,39 @@ rl.on("line", async (line) => {
           break;
         } catch (continuErr) {
           if (continuErr.message === "Interrupted" || signal.aborted || interruptRequested) break;
-          process.stderr.write(`Auto-continue falhou no ${provider.name}: ${continuErr.message}\n`);
+          process.stderr.write(`auto-pass ${autonomousPass} falhou no ${provider.name}: ${continuErr.message}\n`);
           continue;
         }
       }
 
-      if (continueResult) {
-        result = continueResult;
-        // Re-apply post-processing guardrails
-        if (shouldStripCheckpointPause(result, currentTurnPolicy)) {
-          result = stripCheckpointPhrases(result);
-        }
-      } else {
+      if (!continueResult) break;
+      result = continueResult;
+
+      // Re-apply post-processing guardrails for each autonomous pass
+      if (shouldStripCheckpointPause(result, currentTurnPolicy)) {
+        result = stripCheckpointPhrases(result);
+      }
+
+      // Stop if we are spinning without progress
+      const sameResult = String(result || "").trim() === String(lastPassResult || "").trim();
+      const executedNow = currentTurnStats?.executedToolCalls ?? 0;
+      const noNewTools = executedNow <= lastExecutedTools;
+      if (sameResult && noNewTools) {
+        logInternal(`autonomous-loop interrompido por falta de progresso no passe ${autonomousPass}`);
         break;
       }
+      lastPassResult = result;
+      lastExecutedTools = executedNow;
+    }
+
+    const requiresEvidenceBeforeFinalize =
+      currentTurnPolicy.executionMode === "build"
+      && !currentTurnPolicy.planningOnly
+      && looksLikeTechnicalActionRequest(turnTaskText)
+      && (currentTurnStats?.executedToolCalls ?? 0) > 0
+      && !hasExecutionReceipt(result);
+    if (requiresEvidenceBeforeFinalize) {
+      result = `${String(result || "").trim()}${buildExecutionReceipt()}`.trim();
     }
 
     // The provider loop no longer emits the final text — it only emits intermediate
@@ -2584,7 +2672,9 @@ rl.on("line", async (line) => {
     // Signal that we're done processing this turn but ready for more input.
     // Don't re-send the result text — it was already emitted above.
     emitWaitingUser();
+    flushTurnMetrics("success");
     currentTurnStats = null;
+    currentTurnMetrics = null;
     currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
   }
 });

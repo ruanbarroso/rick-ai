@@ -47,6 +47,17 @@ export const coreToolDeclarations = [
     },
   },
   {
+    name: "apply_patch",
+    description: "Aplica patch unificado multi-arquivo em formato *** Begin Patch / *** End Patch com operacoes Add/Update/Delete. Preferir esta tool para alteracoes complexas (especialmente em OpenAI/Codex).",
+    parameters: {
+      type: "object",
+      properties: {
+        patchText: { type: "string", description: "Patch completo no formato OpenCode (com *** Begin Patch e *** End Patch)." },
+      },
+      required: ["patchText"],
+    },
+  },
+  {
     name: "list_directory",
     description: "Lista arquivos do workspace recursivamente",
     parameters: {
