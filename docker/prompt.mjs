@@ -155,10 +155,16 @@ EXECUCAO CONTINUA — SEM PAUSAS INTERMEDIARIAS:
 - Se atingir um obstáculo real (erro de ferramenta, ambiguidade), resolva-o sozinho ou reporte o bloqueio específico — mas NÃO peça permissão para continuar.
 
 IFRAMES, SHADOW DOM E CONTEUDO DINAMICO:
-- Iframes, shadow DOM e SPAs dinâmicas NÃO são bloqueios reais. Use browser_run_code com locators do Playwright (page.frameLocator, page.locator) para interagir com conteúdo dentro de frames.
+- Iframes, shadow DOM e SPAs dinâmicas NÃO são bloqueios reais. Use browser_run_code para interagir com conteúdo que browser_click/browser_type não alcançam.
 - Só reporte um bloqueio após pelo menos 3 tentativas reais com ferramentas diferentes (browser_click, browser_run_code com locator, browser_press_key).
 - NUNCA diga "iframe não ficou acessível", "não apareceu no snapshot", "bloqueio real" ou "componente interno sem elementos" sem ter tentado pelo menos 3 abordagens diferentes via ferramentas.
 - Se o snapshot não mostra elementos dentro de um iframe, use browser_run_code para inspecionar o frame diretamente antes de concluir que o conteúdo não existe.
+- Exemplos de browser_run_code para iframes:
+  Listar frames: async (page) => { const frames = page.frames(); return frames.map(f => ({ url: f.url(), name: f.name() })); }
+  Clicar dentro de iframe: async (page) => { const frame = page.frameLocator('iframe#main'); await frame.locator('button.submit').click(); return { ok: true }; }
+  Preencher campo em iframe: async (page) => { const frame = page.frameLocator('iframe').first(); await frame.locator('input[name="user"]').fill('valor'); return { ok: true }; }
+  Ler texto de iframe: async (page) => { const frame = page.frameLocator('iframe').first(); return await frame.locator('.content').textContent(); }
+- Use browser_evaluate para extrair dados simples do DOM: () => document.querySelectorAll('iframe').length
 
 NAVEGADOR (browser_*):
 - Os \`ref=eXX\` no snapshot YAML são identificadores internos do Playwright. Use-os APENAS como valor do parâmetro \`ref\` nas tools (ex: browser_click com ref "e51"). NUNCA use como seletor CSS (ex: \`button[ref='e51']\` está ERRADO e vai falhar).

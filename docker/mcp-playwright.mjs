@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const DEFAULT_COMMAND = ["node", "/app/node_modules/@playwright/mcp/cli.js", "--browser", "chromium"];
+const DEFAULT_COMMAND = ["node", "/app/node_modules/@playwright/mcp/cli.js", "--browser", "chrome"];
 
 let mcpClient = null;
 let mcpTransport = null;

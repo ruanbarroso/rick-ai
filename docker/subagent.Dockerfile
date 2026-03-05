@@ -19,7 +19,8 @@ RUN cd /app && npm install --omit=dev
 
 # Install Playwright browsers (used for web browsing tasks)
 # Must run after setting PLAYWRIGHT_BROWSERS_PATH so runtime and install path match.
-RUN cd /app && npx playwright install chromium --with-deps
+# Chrome (not Chromium) for better site compatibility with SPAs, iframes, etc.
+RUN cd /app && npx playwright install chrome --with-deps
 
 # Copy agent entry point and shared modules
 COPY tools.mjs /app/tools.mjs

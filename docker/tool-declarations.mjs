@@ -159,6 +159,38 @@ export const coreToolDeclarations = [
     },
   },
   {
+    name: "browser_run_code",
+    description: "Executa código Playwright arbitrário na página. Recebe uma função JS async com argumento `page`. Essencial para iframes (page.frameLocator), shadow DOM, interações complexas e qualquer coisa que as ferramentas browser_* padrão não conseguem fazer.",
+    parameters: {
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description: "Função JavaScript async para executar. Ex: `async (page) => { const frame = page.frameLocator('iframe#main'); await frame.locator('input#user').fill('test'); return { ok: true }; }`",
+        },
+      },
+      required: ["code"],
+    },
+  },
+  {
+    name: "browser_evaluate",
+    description: "Avalia expressão JavaScript na página ou em um elemento específico. Útil para extrair dados do DOM, verificar estado de elementos, ou executar JS simples.",
+    parameters: {
+      type: "object",
+      properties: {
+        function: {
+          type: "string",
+          description: "Função JS para avaliar. Ex: `() => document.title` ou `(element) => element.textContent` quando ref é fornecido",
+        },
+        ref: {
+          type: "string",
+          description: "Ref do elemento do snapshot (ex: 'e51'). Se fornecido, a função recebe o elemento como argumento.",
+        },
+      },
+      required: ["function"],
+    },
+  },
+  {
     name: "browser_close",
     description: "Fecha navegador e limpa a sessao atual",
     parameters: {

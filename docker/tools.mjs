@@ -352,6 +352,25 @@ export async function executeTool(name, input, extraHandler) {
         return `Erro no browser_screenshot: ${e.message}`;
       }
     }
+    case "browser_run_code": {
+      try {
+        const result = await callBrowser("run_code", { code: input.code });
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_run_code: ${e.message}`;
+      }
+    }
+    case "browser_evaluate": {
+      try {
+        const payload = { function: input.function };
+        if (input.ref) payload.ref = input.ref;
+        if (input.element) payload.element = input.element;
+        const result = await callBrowser("evaluate", payload);
+        return redactSecrets(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return `Erro no browser_evaluate: ${e.message}`;
+      }
+    }
     case "browser_press_key": {
       try {
         const result = await callBrowser("press_key", { key: input.key });
