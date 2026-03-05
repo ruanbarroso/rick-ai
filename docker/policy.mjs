@@ -147,6 +147,7 @@ export function detectPlanningOnlyToolBlock(toolName, policy) {
  */
 export function parseTurnPolicy(text, recentGitPolicy) {
   const normalized = String(text || "").toLowerCase();
+  const planningOnly = looksLikePlanDraftRequest(normalized);
   const explicitAllowCommit = /(\bcommit\b|\bcommitar\b)/.test(normalized);
   const explicitAllowPush = /(\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b)/.test(normalized);
   const explicitAllowPr = /(\bpull request\b|\babrir pr\b|\bcriar pr\b|\bgh pr\b)/.test(normalized);
@@ -170,13 +171,13 @@ export function parseTurnPolicy(text, recentGitPolicy) {
   const allowPush = explicitAllowPush || (inheritRecentGitPolicy && recentGitPolicy.allowPush);
   const allowPr = explicitAllowPr || (inheritRecentGitPolicy && recentGitPolicy.allowPr);
   const technicalRequest = looksLikeTechnicalActionRequest(normalized);
-  const executionRequired = !looksLikePlanDraftRequest(normalized) && looksLikeConcreteExecutionRequest(normalized);
+  const executionRequired = !planningOnly && looksLikeConcreteExecutionRequest(normalized);
   const expectedActions = {
     gitPull: /\bgit\s+pull\b|\bpull\s+--rebase\b/.test(normalized),
     gitCommit: /\bgit\s+commit\b|\bcommit\b|\bcommitar\b/.test(normalized),
     gitPush: /\bgit\s+push\b|\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b/.test(normalized),
   };
-  return { allowCommit, allowPush, allowPr, executionRequired, technicalRequest, expectedActions, planningOnly: false, executionMode: "build", updatedGitPolicy };
+  return { allowCommit, allowPush, allowPr, executionRequired, technicalRequest, expectedActions, planningOnly, executionMode: "build", updatedGitPolicy };
 }
 
 export function missingExpectedActions(policy, stats) {

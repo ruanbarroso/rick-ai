@@ -143,6 +143,11 @@ function emitMessage(text) {
   emit({ type: "message", text: redactUserVisibleText(emitText) });
 }
 
+function emitFinalMessage(text) {
+  if (isCurrentSuperseded()) return;
+  emit({ type: "message", text: redactUserVisibleText(text) });
+}
+
 function emitStatus(message) {
   // Don't emit if this message has been superseded
   if (isCurrentSuperseded()) return;
@@ -2056,14 +2061,20 @@ rl.on("line", async (line) => {
     }
 
     // The provider loop no longer emits the final text — it only emits intermediate
-    // progress messages during tool-use iterations. We always emit the (possibly
-    // post-processed) result here so the user sees exactly one final message.
-    emitMessage(result);
+    // progress messages during tool-use iterations. Emit the final result through
+    // a dedicated path so interim-claim suppression cannot hide a successful answer.
+    const finalResult = String(result || "").trim();
+    if (!finalResult) {
+      logInternal("resultado-final-vazio inesperado");
+      emitError("Resposta vazia inesperada.");
+    } else {
+      emitFinalMessage(finalResult);
+    }
 
     // Record successful turn in provider-agnostic transcript (for cascade seeding)
     conversationTranscript.push({ role: "user", content: turnTaskText });
-    if (result && result !== FALLBACK_RESULT) {
-      conversationTranscript.push({ role: "assistant", content: result });
+    if (finalResult && finalResult !== FALLBACK_RESULT) {
+      conversationTranscript.push({ role: "assistant", content: finalResult });
     }
     compactContextIfNeeded();
     if (currentTurnStats?.maxStepsReached) {
