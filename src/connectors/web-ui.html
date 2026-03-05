@@ -1704,6 +1704,34 @@
     text-overflow: ellipsis;
   }
 
+  .subagent-session-kill {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: none;
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .subagent-session-kill:hover {
+    background: var(--danger, #ef4444);
+    border-color: var(--danger, #ef4444);
+    color: white;
+  }
+
+  .subagent-session-kill:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
   .status-dot {
     width: 8px;
     height: 8px;
@@ -1712,6 +1740,7 @@
   }
 
   .status-dot.green { background: var(--success); }
+  .status-dot.orange { background: #f59e0b; }
   .status-dot.red { background: var(--danger); }
   .status-dot.gray { background: var(--text-muted); }
 
@@ -5338,18 +5367,26 @@ function renderSubagentActiveSessionsModal() {
   for (var i = 0; i < rows.length; i++) {
     var s = rows[i] || {};
     var sid = s.sessionId || s.id || '-';
-    var userLabel = s.userId ? ('Usuário #' + s.userId) : 'Usuário desconhecido';
+    var name = s.variantName || sid;
+    var task = s.taskDescription || '';
     var state = s.state || 'active';
-    var stateDot = state === 'running' ? 'green' : (state === 'failed' ? 'red' : 'gray');
+    var stateDot = state === 'running' ? 'green' : (state === 'waiting_user' ? 'orange' : (state === 'failed' ? 'red' : 'gray'));
+    var stateLabel = state === 'waiting_user' ? 'aguardando' : state;
     var ts = getSessionLastMessageAtTs(s);
-    var timeText = ts ? new Date(ts).toLocaleString('pt-BR') : 'sem mensagens';
+    var timeText = ts ? new Date(ts).toLocaleString('pt-BR') : '-';
 
     html += '<div class="subagent-session-row">';
     html +=   '<div class="subagent-session-main">';
-    html +=     '<div class="subagent-session-title">' + escapeHtml(String(sid)) + '</div>';
-    html +=     '<div class="subagent-session-meta">' + escapeHtml(userLabel) + ' · Última mensagem: ' + escapeHtml(timeText) + '</div>';
+    html +=     '<div class="subagent-session-title">' + escapeHtml(String(name)) + '</div>';
+    if (task) {
+      html +=   '<div class="subagent-session-meta">' + escapeHtml(task) + '</div>';
+    }
+    html +=     '<div class="subagent-session-meta">' + escapeHtml(stateLabel) + ' · ' + escapeHtml(timeText) + '</div>';
     html +=   '</div>';
-    html +=   '<div class="settings-status optional" style="margin:0;white-space:nowrap;"><span class="status-dot ' + stateDot + '"></span>' + escapeHtml(String(state)) + '</div>';
+    html +=   '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">';
+    html +=     '<span class="status-dot ' + stateDot + '"></span>';
+    html +=     '<button class="subagent-session-kill" onclick="killSubagentSession(\'' + escapeAttr(String(sid)) + '\', this)" title="Encerrar sessao">&times;</button>';
+    html +=   '</div>';
     html += '</div>';
   }
 
@@ -5367,6 +5404,26 @@ function openSubagentActiveSessionsModal() {
 function closeSubagentActiveSessionsModal() {
   document.getElementById('subagent-sessions-overlay').classList.remove('visible');
   document.getElementById('subagent-sessions-modal').classList.remove('visible');
+}
+
+function killSubagentSession(sessionId, btn) {
+  if (!sessionId) return;
+  if (btn) btn.disabled = true;
+
+  // Reuse sidebar killSession — sends WS kill_session + cleans sidebar state
+  killSession(sessionId);
+
+  // Remove from metrics cache and re-render modal
+  subagentActiveSessionsCache = subagentActiveSessionsCache.filter(function(s) {
+    return (s.sessionId || s.id) !== sessionId;
+  });
+  renderSubagentActiveSessionsModal();
+  updateLiveSessionsClickable(subagentActiveSessionsCache.length);
+
+  // Close modal if no more sessions
+  if (subagentActiveSessionsCache.length === 0) {
+    setTimeout(closeSubagentActiveSessionsModal, 300);
+  }
 }
 
 function loadSubagentMetrics() {
