@@ -9,6 +9,7 @@ const execFileAsync = promisify(execFile);
 const CURRENT_IMAGE = "subagent:current";
 const NEXT_IMAGE = "subagent:next";
 const LEGACY_IMAGE = "subagent";
+const BASE_IMAGE = "subagent-base:chrome";
 
 export const SUBAGENT_RUNTIME_IMAGE = CURRENT_IMAGE;
 
@@ -20,7 +21,14 @@ class SubagentImageBuilder {
   private inFlightFingerprint: string | null = null;
   private readyFingerprint: string | null = null;
 
-  private getLocalFingerprint(): { hash: string; version: string; fingerprint: string; dockerfilePath: string; dockerDir: string } {
+  private getLocalFingerprint(): {
+    hash: string;
+    version: string;
+    fingerprint: string;
+    dockerfilePath: string;
+    fastDockerfilePath: string;
+    dockerDir: string;
+  } {
     const localAppDir = process.cwd();
     const dockerDir = `${localAppDir}/docker`;
     const agentMjsPath = `${dockerDir}/agent.mjs`;
@@ -32,6 +40,7 @@ class SubagentImageBuilder {
     const promptMjsPath = `${dockerDir}/prompt.mjs`;
     const subagentPackagePath = `${dockerDir}/subagent.package.json`;
     const dockerfilePath = `${dockerDir}/subagent.Dockerfile`;
+    const fastDockerfilePath = `${dockerDir}/subagent-fast.Dockerfile`;
     const versionFilePath = `${localAppDir}/.rick-version`;
     const packageJsonPath = `${localAppDir}/package.json`;
 
@@ -53,6 +62,8 @@ class SubagentImageBuilder {
       .update(readFileSync(subagentPackagePath))
       .update("\n---\n")
       .update(readFileSync(dockerfilePath))
+      .update("\n---\n")
+      .update(readFileSync(fastDockerfilePath))
       .digest("hex")
       .substring(0, 16);
 
@@ -77,6 +88,7 @@ class SubagentImageBuilder {
       version,
       fingerprint: `${hash}|${version}`,
       dockerfilePath,
+      fastDockerfilePath,
       dockerDir,
     };
   }
@@ -137,8 +149,44 @@ class SubagentImageBuilder {
     }
   }
 
-  private async buildAndPromote(local: { hash: string; version: string; dockerfilePath: string; dockerDir: string }): Promise<void> {
-    logger.info({ hash: local.hash, version: local.version }, "Building subagent image from docker/subagent.Dockerfile");
+  private async ensureBaseImageExists(): Promise<void> {
+    if (await this.imageExists(BASE_IMAGE)) return;
+
+    if (await this.imageExists(CURRENT_IMAGE)) {
+      try {
+        await execFileAsync("docker", ["tag", CURRENT_IMAGE, BASE_IMAGE], { timeout: 10_000 });
+        logger.info({ source: CURRENT_IMAGE, target: BASE_IMAGE }, "Seeded local subagent base image");
+        return;
+      } catch (err) {
+        logger.warn({ err }, "Failed to seed local base image from current tag");
+      }
+    }
+
+    if (await this.imageExists(LEGACY_IMAGE)) {
+      try {
+        await execFileAsync("docker", ["tag", LEGACY_IMAGE, BASE_IMAGE], { timeout: 10_000 });
+        logger.info({ source: LEGACY_IMAGE, target: BASE_IMAGE }, "Seeded local subagent base image from legacy tag");
+      } catch (err) {
+        logger.warn({ err }, "Failed to seed local base image from legacy tag");
+      }
+    }
+  }
+
+  private async buildAndPromote(local: { hash: string; version: string; dockerfilePath: string; fastDockerfilePath: string; dockerDir: string }): Promise<void> {
+    const hasBaseImage = await this.imageExists(BASE_IMAGE);
+    const selectedDockerfile = hasBaseImage ? local.fastDockerfilePath : local.dockerfilePath;
+    const buildMode = hasBaseImage ? "fast" : "bootstrap";
+
+    logger.info(
+      {
+        hash: local.hash,
+        version: local.version,
+        buildMode,
+        dockerfile: selectedDockerfile,
+        hasBaseImage,
+      },
+      "Building subagent image",
+    );
 
     await execFileAsync(
       "docker",
@@ -151,7 +199,7 @@ class SubagentImageBuilder {
         "--label",
         `rick.version=${local.version}`,
         "-f",
-        local.dockerfilePath,
+        selectedDockerfile,
         local.dockerDir,
       ],
       { timeout: 600_000 },
@@ -160,6 +208,11 @@ class SubagentImageBuilder {
     await execFileAsync("docker", ["tag", NEXT_IMAGE, CURRENT_IMAGE], { timeout: 10_000 });
     await execFileAsync("docker", ["tag", NEXT_IMAGE, LEGACY_IMAGE], { timeout: 10_000 });
 
+    // Keep a local reusable base image to speed up future builds when CI is not available.
+    await execFileAsync("docker", ["tag", NEXT_IMAGE, BASE_IMAGE], { timeout: 10_000 }).catch((err) => {
+      logger.warn({ err }, "Failed to refresh local subagent base image tag");
+    });
+
     // Clean up the old image that became dangling after re-tagging
     execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 }).catch(() => {});
 
@@ -167,7 +220,7 @@ class SubagentImageBuilder {
     logger.info({ hash: local.hash, version: local.version }, "subagent image built and promoted successfully");
   }
 
-  private async buildWithLock(local: { hash: string; version: string; fingerprint: string; dockerfilePath: string; dockerDir: string }): Promise<void> {
+  private async buildWithLock(local: { hash: string; version: string; fingerprint: string; dockerfilePath: string; fastDockerfilePath: string; dockerDir: string }): Promise<void> {
     // If there's already a build in-flight for the SAME fingerprint, just wait for it
     if (this.inFlightBuild && this.inFlightFingerprint === local.fingerprint) {
       await this.inFlightBuild;
@@ -197,7 +250,7 @@ class SubagentImageBuilder {
     await buildPromise;
   }
 
-  private startBackgroundBuild(local: { hash: string; version: string; fingerprint: string; dockerfilePath: string; dockerDir: string }, reason: string): void {
+  private startBackgroundBuild(local: { hash: string; version: string; fingerprint: string; dockerfilePath: string; fastDockerfilePath: string; dockerDir: string }, reason: string): void {
     if (this.inFlightBuild) return;
     this.buildWithLock(local)
       .then(() => logger.info({ reason }, "Subagent image background build completed"))
@@ -208,6 +261,7 @@ class SubagentImageBuilder {
     const local = this.getLocalFingerprint();
 
     await this.ensureCurrentTagExists();
+    await this.ensureBaseImageExists();
 
     // Fast path: in-memory cache says image is up to date
     if (this.readyFingerprint === local.fingerprint && await this.imageExists(CURRENT_IMAGE)) {
@@ -299,6 +353,7 @@ class SubagentImageBuilder {
       return;
     }
     this.ensureCurrentTagExists()
+      .then(() => this.ensureBaseImageExists())
       .then(() => this.imageFingerprint(CURRENT_IMAGE))
       .then((image) => {
         if (image?.fingerprint === local.fingerprint) {
@@ -322,11 +377,7 @@ class SubagentImageBuilder {
           logger.error({ err, reason, retries: this.warmupRetries }, "Subagent image warmup failed — max retries reached, giving up");
           return;
         }
-        // Try to free disk space before retrying
-        try {
-          await execFileAsync("docker", ["builder", "prune", "-f"], { timeout: 30_000 });
-          logger.info("Pruned Docker build cache before subagent image retry");
-        } catch { /* best effort */ }
+        // Keep Docker builder cache: pruning here slows down subsequent retries.
         logger.warn({ err, reason, retry: this.warmupRetries }, "Subagent image warmup failed — scheduling retry in 60s");
         setTimeout(() => this.warmup(`${reason}_retry`), 60_000);
       });

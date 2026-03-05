@@ -119,7 +119,7 @@ Tables are automatically pruned to prevent unbounded growth:
 All delegated tasks (coding, research, browser automation) are handled by a **single unified sub-agent** container with:
 
 - **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro → Gemini 3.0 Flash (automatic failover on rate limits or errors, with automatic retry on timeout before falling through). The session viewer also lets you pick a primary model per session; the selected model is tried first, then the cascade continues from that point. Claude/OpenAI OAuth can be configured per user directly in the sub-agent session viewer (Gemini remains global); when a user has no personal OAuth, the sub-agent falls back to the admin connection. Providers are re-evaluated per turn, so a session started with only Gemini will automatically gain Claude/GPT access when they are connected later via OAuth. Conversation context is shared across providers via a common transcript, so a cascade switch does not cause amnesia.
-- **Tools**: Browser (Playwright + headless Chromium), shell commands, file I/O, HTTP fetch, read-only PostgreSQL access
+- **Tools**: Browser (Playwright MCP + Chrome channel), shell commands, file I/O, HTTP fetch, read-only PostgreSQL access
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
 - **Context rotation**: Automatic summarization when context window fills up
 - **Prompt layering**: System prompt is composed from a shared base + provider-specific overlay + runtime environment block + project instructions loaded from `AGENTS.md`/`CLAUDE.md` in the workspace
@@ -131,6 +131,7 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 - **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick's read-only API for memories, credentials, semantic search, conversations, and config — all scoped to the owner's data.
 - **Session recovery**: Running containers are recovered after Rick restarts
 - **Image freshness**: `subagent` image is rebuilt automatically whenever bundle hash or Rick version label differs (no stale image reuse across versions)
+- **Local fast-build fallback**: when `subagent-base:chrome` exists, builds use a fast Dockerfile that only copies runtime `.mjs` files; if base is missing, Rick first seeds it from `subagent:current`/`subagent` when available, otherwise falls back to full bootstrap build and re-tags base locally
 - **Centralized image builder**: main container warms the `subagent` image in background at startup; new sessions reuse `subagent:current`, while a new version builds in the background and is promoted atomically when ready
 
 Each sub-agent gets a unique variant name assigned sequentially per user. When `AGENT_NAME=Rick`, names come from canonical Rick and Morty characters (Pickle Rick, Evil Rick, Doofus Rick, etc. — 130+ variants). For other agent names, generic suffixes are used (Alpha, Beta, Quantum, Nebula, etc. — 90+ variants). Names are persisted in the `variant_name` column and served to all clients from the server.
@@ -285,7 +286,8 @@ rick-ai/
 │   ├── tool-declarations.mjs          # Tool schemas for LLM function calling
 │   ├── rick-api.mjs                   # Rick API client, agent-specific tools (memory, web_fetch)
 │   ├── mcp-playwright.mjs             # MCP Playwright bridge for browser tools
-│   ├── subagent.Dockerfile            # Chromium + Playwright + Node.js container image
+│   ├── subagent.Dockerfile            # Full bootstrap image (Chrome + Playwright deps)
+│   ├── subagent-fast.Dockerfile       # Fast rebuild image (FROM subagent-base:chrome + runtime files)
 │   └── subagent.package.json          # Runtime dependencies for the container
 ├── scripts/
 │   └── deploy.sh                      # Safe deploy pipeline (backup → build → smoke → swap → watchdog)
@@ -322,7 +324,7 @@ Host Docker (cluster-24g)
 │   └── Port 80                    # HTTP + WebSocket (web UI, health, API)
 │
 └── subagent-<id>                  # Ephemeral, created per task (unified)
-    └── agent.mjs + Playwright + Chromium
+    └── agent.mjs + Playwright MCP + Chrome
 ```
 
 ## Environment Variables
@@ -468,7 +470,7 @@ For manual setup, copy `.env.example` to `.env`, fill in at least `GEMINI_API_KE
 - **Web UI**: Vanilla HTML/CSS/JS (zero dependencies, single HTML file served by Express-less `http.createServer`)
 - **WebSocket**: `ws` library for real-time Web UI communication
 - **LLMs**: Gemini (Google AI SDK), Anthropic SDK, OpenAI SDK
-- **Browser Automation**: Playwright (headless Chromium) inside sub-agent containers
+- **Browser Automation**: Playwright MCP with Google Chrome inside sub-agent containers
 - **Databases**: PostgreSQL 16 + pgvector (production), SQLite via `better-sqlite3` (fallback)
 - **Embeddings**: Gemini Embedding 001 (768 dimensions)
 - **Containers**: Docker + Docker Compose
