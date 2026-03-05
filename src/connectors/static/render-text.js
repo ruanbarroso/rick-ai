@@ -13,7 +13,7 @@
 // eslint-disable-next-line no-unused-vars
 function escapeHtml(str) {
   if (!str) return '';
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // eslint-disable-next-line no-unused-vars
@@ -137,6 +137,9 @@ function getFileIcon(mimeType) {
   if (mimeType === 'application/xml' || mimeType === 'text/xml') return '\uD83D\uDCCB';
   if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return '\uD83D\uDCDC';
   if (mimeType.startsWith('application/zip') || mimeType.includes('compressed') || mimeType.includes('zip')) return '\uD83D\uDDDC\uFE0F';
+  if (mimeType.startsWith('application/vnd.ms-excel') || mimeType.includes('spreadsheet')) return '\uD83D\uDCCA';
+  if (mimeType.startsWith('application/vnd.ms-powerpoint') || mimeType.includes('presentation')) return '\uD83D\uDCCA';
+  if (mimeType.startsWith('application/msword') || mimeType.includes('wordprocessing')) return '\uD83D\uDCDD';
   if (mimeType.startsWith('video/')) return '\uD83C\uDFAC';
   return '\uD83D\uDCCE';
 }
@@ -196,7 +199,7 @@ function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
     html += '<div class="audio-message">';
     html += '<audio controls preload="metadata" src="' + audioUrl + '"></audio>';
     if (!audioTranscription && remainingText) {
-      var isPlaceholder = /^O usuario enviou um audio/i.test(remainingText) || remainingText === '[audio]';
+      var isPlaceholder = /^O usuario enviou um audio/i.test(remainingText) || /^\[audio\]$/i.test(remainingText.trim());
       if (!isPlaceholder) {
         var cleanText = remainingText.replace(/^aqui\s+est[a\u00E1]\s+a\s+transcri[c\u00E7][a\u00E3]o.*?:\s*/i, '');
         cleanText = cleanText.replace(/^["\u201C\u201D](.+)["\u201C\u201D]$/, '$1');
@@ -208,6 +211,8 @@ function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
     }
     if (audioTranscription) {
       html += '<blockquote class="audio-transcription">' + renderText(audioTranscription) + '</blockquote>';
+    } else {
+      html += '<blockquote class="audio-transcription processing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span> Processando \u00e1udio...</blockquote>';
     }
     html += '</div>';
   }
@@ -237,7 +242,7 @@ function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
   if (hasImages || audioUrl) {
     if (remainingText) {
       var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(remainingText);
-      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(remainingText);
+      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(remainingText) || /^\[audio\]$/i.test(remainingText.trim());
       if (!isImgPlaceholder && !isAudioPlaceholder) {
         html += renderText(remainingText);
       }
@@ -255,15 +260,17 @@ function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
 
 // eslint-disable-next-line no-unused-vars
 function openImageFullscreen(src) {
-  var overlay = document.getElementById('image-overlay');
+  // Support both DOM ID conventions: #image-overlay (viewers) and #image-fullscreen (web-ui)
+  var overlay = document.getElementById('image-overlay') || document.getElementById('image-fullscreen');
   if (overlay) {
-    document.getElementById('fullscreen-img').src = src;
+    var img = document.getElementById('fullscreen-img') || overlay.querySelector('img');
+    if (img) img.src = src;
     overlay.classList.add('visible');
   }
 }
 
 // eslint-disable-next-line no-unused-vars
 function closeImageFullscreen() {
-  var overlay = document.getElementById('image-overlay');
+  var overlay = document.getElementById('image-overlay') || document.getElementById('image-fullscreen');
   if (overlay) overlay.classList.remove('visible');
 }

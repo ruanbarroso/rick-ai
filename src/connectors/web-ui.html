@@ -794,214 +794,7 @@
     text-align: right;
   }
 
-  .message code {
-    background: rgba(0,0,0,0.3);
-    padding: 1px 5px;
-    border-radius: 4px;
-    font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.88em;
-  }
-
-  .message pre {
-    background: rgba(0,0,0,0.4);
-    padding: 10px 12px;
-    border-radius: 8px;
-    overflow-x: auto;
-    margin: 6px 0;
-    font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.85em;
-    line-height: 1.4;
-  }
-
-  .message pre code {
-    background: none;
-    padding: 0;
-  }
-
-  .message h1, .message h2, .message h3 {
-    margin: 10px 0 4px;
-    font-weight: 700;
-    line-height: 1.3;
-    white-space: normal;
-  }
-
-  .message h1 { font-size: 1.1em; }
-  .message h2 { font-size: 1.0em; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 3px; }
-  .message h3 { font-size: 0.95em; color: var(--text-muted); }
-
-  .message hr {
-    border: none;
-    border-top: 1px solid rgba(255,255,255,0.12);
-    margin: 10px 0;
-  }
-
-  .message ul, .message ol {
-    margin: 4px 0;
-    padding-left: 22px;
-    white-space: normal;
-  }
-
-  .message li {
-    margin: 2px 0;
-    line-height: 1.5;
-  }
-
-  .message a {
-    color: #93c5fd;
-    text-decoration: underline;
-    text-decoration-color: rgba(147, 197, 253, 0.45);
-    text-underline-offset: 2px;
-  }
-
-  .message a:hover {
-    color: #bfdbfe;
-    text-decoration-color: rgba(191, 219, 254, 0.75);
-  }
-
-  .message pre .code-lang {
-    display: block;
-    font-size: 0.75em;
-    color: #8b949e;
-    margin-bottom: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  /* Media messages — override pre-wrap to allow block layout */
-  .message:has(.audio-message),
-  .message:has(.image-message),
-  .message:has(.file-attachment) {
-    white-space: normal;
-    min-width: 260px;
-  }
-
-  /* Tool-use terminal block — loaded from /static/tool-blocks.css */
-
-  /* Image messages */
-  .image-message {
-    margin-bottom: 4px;
-  }
-
-  .image-message img {
-    display: block;
-    max-width: 100%;
-    max-height: 300px;
-    border-radius: 8px;
-    cursor: pointer;
-    object-fit: contain;
-  }
-
-  /* Fullscreen image overlay */
-  .image-fullscreen-overlay {
-    display: none;
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.9);
-    z-index: 9999;
-    justify-content: center;
-    align-items: center;
-    cursor: pointer;
-  }
-
-  .image-fullscreen-overlay.visible {
-    display: flex;
-  }
-
-  .image-fullscreen-overlay img {
-    max-width: 95vw;
-    max-height: 95vh;
-    object-fit: contain;
-    border-radius: 4px;
-  }
-
-  .audio-message {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .audio-message audio {
-    display: block;
-    width: 100%;
-    min-width: 240px;
-    height: 40px;
-    border-radius: 8px;
-  }
-
-  .audio-transcription {
-    margin: 4px 0 0 0;
-    padding: 6px 10px;
-    border-left: 3px solid var(--text-muted);
-    color: var(--text-muted);
-    font-size: 0.85em;
-    font-style: italic;
-    line-height: 1.4;
-    white-space: pre-wrap;
-  }
-  
-  .audio-transcription.processing {
-    opacity: 0.7;
-    animation: pulse 1.5s infinite;
-  }
-  
-  @keyframes pulse {
-    0% { opacity: 0.4; }
-    50% { opacity: 0.8; }
-    100% { opacity: 0.4; }
-  }
-
-  /* Generic file attachment cards (non-image/audio) shown in chat history */
-  .message:has(.file-attachment) {
-    white-space: normal;
-    min-width: 180px;
-  }
-
-  .file-attachment {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 10px;
-    max-width: 280px;
-    margin-bottom: 4px;
-    text-decoration: none;
-    color: inherit;
-    transition: background 0.15s;
-  }
-
-  .file-attachment:hover {
-    background: var(--bg-hover, rgba(255,255,255,0.06));
-  }
-
-  .file-attachment .file-icon {
-    font-size: 1.5rem;
-    flex-shrink: 0;
-    line-height: 1;
-  }
-
-  .file-attachment .file-details {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .file-attachment .file-name {
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .file-attachment .file-type {
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    margin-top: 2px;
-  }
+  /* Message rendering styles (code, links, headings, media) loaded from /static/message-styles.css */
 
   /* Typing indicator */
   .typing-indicator {
@@ -2253,17 +2046,9 @@
       height: 38px;
     }
 
-    .audio-preview-bar audio,
-    .audio-message audio {
+    .audio-preview-bar audio {
       width: 100%;
       min-width: 0;
-    }
-
-    .message:has(.audio-message),
-    .message:has(.image-message),
-    .message:has(.file-attachment) {
-      min-width: 0;
-      max-width: 96%;
     }
 
     .attachment-chip {
@@ -2273,6 +2058,7 @@
   }
 </style>
 <link rel="stylesheet" href="/static/tool-blocks.css">
+<link rel="stylesheet" href="/static/message-styles.css">
 </head>
 <body>
 
@@ -2863,6 +2649,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="/static/tool-blocks.js"></script>
+<script src="/static/render-text.js"></script>
 <script>
 // ==================== DEFAULT AVATAR SVG (base64) ====================
 var DEFAULT_AVATAR = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><clipPath id="c"><circle cx="50" cy="50" r="50"/></clipPath></defs><g clip-path="url(#c)"><rect width="100" height="100" fill="#1a1a2e"/><ellipse cx="50" cy="62" rx="32" ry="36" fill="#F5D6B8"/><ellipse cx="50" cy="95" rx="28" ry="18" fill="#C8C8C8"/><path d="M18 42 Q20 15 32 18 Q34 5 44 12 Q48 2 55 10 Q60 0 66 8 Q72 2 74 14 Q82 10 80 22 Q90 20 84 35 Q78 38 70 38 Q60 32 50 34 Q40 32 30 38 Q22 38 18 42Z" fill="#8EC8D8"/><path d="M22 44 Q24 28 34 26 Q36 16 44 20 Q48 12 54 18 Q58 8 64 14 Q70 8 72 20 Q78 16 78 28 Q86 26 82 38 Q76 42 68 40 Q58 36 50 38 Q42 36 32 40 Q24 42 22 44Z" fill="#A8D8EA"/><ellipse cx="38" cy="52" rx="12" ry="13" fill="white"/><ellipse cx="62" cy="52" rx="12" ry="13" fill="white"/><circle cx="40" cy="52" r="5" fill="#2a1a0a"/><circle cx="64" cy="52" r="5" fill="#2a1a0a"/><circle cx="42" cy="50" r="2" fill="white"/><circle cx="66" cy="50" r="2" fill="white"/><path d="M26 43 Q34 38 42 42 Q50 40 58 42 Q66 38 74 43" stroke="#444" stroke-width="2.5" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="60" rx="2.5" ry="1.5" fill="#D4A88C"/><path d="M38 70 Q44 76 50 74 Q56 76 62 70" stroke="#C4756A" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M42 74 Q44 76 50 74 Q56 76 58 74" fill="#8B3A3A"/><path d="M54 74 Q55 80 56 88" stroke="#A8D8EA" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.7"/><circle cx="56" cy="90" rx="2.5" ry="3" fill="#A8D8EA" opacity="0.5"/></g></svg>');
@@ -3687,136 +3474,8 @@ function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType, fileIn
   scrollToBottom();
 }
 
-// Returns an emoji icon for a given MIME type
-function getFileIcon(mimeType) {
-  if (!mimeType) return '📄';
-  if (mimeType.startsWith('text/')) return '📝';
-  if (mimeType === 'application/pdf') return '📕';
-  if (mimeType === 'application/json') return '📋';
-  if (mimeType === 'application/xml' || mimeType === 'text/xml') return '📋';
-  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return '📜';
-  if (mimeType.startsWith('application/zip') || mimeType.includes('compressed') || mimeType.includes('zip')) return '🗜️';
-  if (mimeType.startsWith('application/vnd.ms-excel') || mimeType.includes('spreadsheet')) return '📊';
-  if (mimeType.startsWith('application/vnd.ms-powerpoint') || mimeType.includes('presentation')) return '📊';
-  if (mimeType.startsWith('application/msword') || mimeType.includes('wordprocessing')) return '📝';
-  if (mimeType.startsWith('video/')) return '🎬';
-  return '📎';
-}
-
-// Returns a short human-readable label for a MIME type
-function getFileTypeLabel(mimeType) {
-  if (!mimeType) return 'Arquivo';
-  if (mimeType === 'text/plain') return 'Texto';
-  if (mimeType === 'text/csv') return 'CSV';
-  if (mimeType === 'text/html') return 'HTML';
-  if (mimeType === 'application/pdf') return 'PDF';
-  if (mimeType === 'application/json') return 'JSON';
-  if (mimeType === 'application/xml' || mimeType === 'text/xml') return 'XML';
-  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return 'JavaScript';
-  var parts = mimeType.split('/');
-  return parts[1] ? parts[1].toUpperCase().substring(0, 10) : 'Arquivo';
-}
-
-function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
-  var html = '';
-  var hasImages = imageUrls && imageUrls.length > 0;
-  var hasFileInfos = fileInfos && fileInfos.length > 0;
-
-  // Strip embedded file content blocks from displayed text when fileInfos is available
-  // The backend embeds file content as: \n\n[Conteúdo do arquivo "name"]:\ncontent...
-  var displayText = text;
-  if (hasFileInfos && displayText) {
-    // Remove all [Conteúdo do arquivo "..."]:\n... blocks from the displayed text
-    displayText = displayText.replace(/\n\n\[Conteúdo do arquivo "[^"]*"\]:[\s\S]*/g, '').trim();
-  }
-
-  var remainingText = displayText || '';
-  var audioTranscricao = null;
-
-  if (audioUrl && remainingText) {
-    var transcricaoMatch = remainingText.match(/\n?\[Áudio transcrito:\s*"([\s\S]+?)"\]\s*$/i)
-      || remainingText.match(/\n?\[Áudio transcrito\]:\s*([\s\S]+)$/i);
-    if (transcricaoMatch) {
-      audioTranscricao = (transcricaoMatch[1] || '').trim();
-      remainingText = remainingText.replace(transcricaoMatch[0], '').trim();
-    }
-  }
-
-  // Image attachments (supports multiple)
-  if (hasImages) {
-    for (var ii = 0; ii < imageUrls.length; ii++) {
-      html += '<div class="image-message">';
-      html += '<img src="' + imageUrls[ii] + '" alt="Imagem" loading="lazy" onclick="openImageFullscreen(this.src)">';
-      html += '</div>';
-    }
-  }
-
-  // Audio attachment
-  if (audioUrl) {
-    html += '<div class="audio-message">';
-    html += '<audio controls preload="metadata" src="' + audioUrl + '"></audio>';
-    if (!audioTranscricao && remainingText) {
-      var isPlaceholder = /^O usuario enviou um audio/i.test(remainingText) || remainingText === '[audio]';
-      if (!isPlaceholder) {
-        var cleanText = remainingText.replace(/^aqui\s+est[aá]\s+a\s+transcri[cç][aã]o.*?:\s*/i, '');
-        cleanText = cleanText.replace(/^[""](.+)[""]$/, '$1');
-        if (cleanText.trim()) {
-          audioTranscricao = cleanText.trim();
-          remainingText = '';
-        }
-      }
-    }
-    if (audioTranscricao) {
-      html += '<blockquote class="audio-transcription">' + renderText(audioTranscricao) + '</blockquote>';
-    } else {
-       html += '<blockquote class="audio-transcription processing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span> Processando áudio...</blockquote>';
-    }
-    html += '</div>';
-  }
-
-  // Generic file attachment cards (non-image/audio files)
-  if (hasFileInfos) {
-    for (var fi = 0; fi < fileInfos.length; fi++) {
-      var fi_info = fileInfos[fi];
-      var fi_icon = getFileIcon(fi_info.mimeType);
-      var fi_label = getFileTypeLabel(fi_info.mimeType);
-      var fi_name = fi_info.name || 'arquivo';
-      if (fi_info.url) {
-        // Has server URL — render as download link
-        html += '<a class="file-attachment" href="' + fi_info.url + '" download="' + fi_name.replace(/"/g, '&quot;') + '" target="_blank">';
-      } else {
-        // No URL yet (pending server echo) — render as non-clickable card
-        html += '<div class="file-attachment">';
-      }
-      html += '<span class="file-icon">' + fi_icon + '</span>';
-      html += '<div class="file-details">';
-      html += '<span class="file-name" title="' + fi_name.replace(/"/g, '&quot;') + '">' + escapeHtml(fi_name) + '</span>';
-      html += '<span class="file-type">' + escapeHtml(fi_label) + '</span>';
-      html += '</div>';
-      html += fi_info.url ? '</a>' : '</div>';
-    }
-  }
-
-  // If we had media, only show text if it's not a placeholder
-  if (hasImages || audioUrl) {
-    if (remainingText) {
-      var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(remainingText);
-      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(remainingText);
-      if (!isImgPlaceholder && !isAudioPlaceholder) {
-        html += renderText(remainingText);
-      }
-    }
-    return html || renderText(remainingText || displayText);
-  }
-
-  // If we have file attachments, show remaining user text (not the embedded content)
-  if (hasFileInfos) {
-    if (displayText) html += renderText(displayText);
-    return html || '';
-  }
-
-  return renderText(text);
-}
+// escapeHtml(), renderText(), renderMessageContent(), getFileIcon(), getFileTypeLabel(),
+// openImageFullscreen(), closeImageFullscreen() are loaded from /static/render-text.js
 
 function handleTranscription(audioUrl, transcription) {
   if (!audioUrl || !transcription) return;
@@ -3891,114 +3550,6 @@ function handleTranscription(audioUrl, transcription) {
   }
 }
 
-function renderText(text) {
-  if (!text) return '';
-
-  text = text.trim();
-
-  // 1. Escape HTML
-  var escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
-  // 2. Extrair blocos de código (substituir por placeholder para não processar internamente)
-  var codeBlocks = [];
-  escaped = escaped.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
-    var langLabel = lang ? '<span class="code-lang">' + lang + '</span>' : '';
-    var block = '<pre>' + langLabel + '<code>' + code.trim() + '</code></pre>';
-    codeBlocks.push(block);
-    return '\x00CB' + (codeBlocks.length - 1) + '\x00';
-  });
-
-  // 3. Inline code
-  escaped = escaped.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-
-  // 4. URLs clicáveis
-  escaped = escaped.replace(/(https?:\/\/[^\s<>"']+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-
-  // 5. Processamento linha a linha (headers, listas, hr)
-  function inlineFmt(t) {
-    // Bold (**...**)
-    t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // Italic (*...*)  — simples asterisco = itálico
-    t = t.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
-    // Italic (_..._)
-    t = t.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em>$1</em>');
-    // Strikethrough (~~...~~)
-    t = t.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
-    return t;
-  }
-
-  var lines = escaped.split('\n');
-  var result = [];
-  var inList = false;
-  var listType = null;
-
-  function closeList() {
-    if (inList) { result.push('</' + listType + '>'); inList = false; listType = null; }
-  }
-
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i];
-
-    // Placeholder de bloco de código
-    if (/\x00CB\d+\x00/.test(line)) {
-      closeList();
-      result.push(line.replace(/\x00CB(\d+)\x00/g, function(_, idx) { return codeBlocks[+idx]; }));
-      continue;
-    }
-
-    // Linha horizontal (--- / *** / ___)
-    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      closeList();
-      result.push('<hr>');
-      continue;
-    }
-
-    // Cabeçalhos (# ## ###)
-    var hm = line.match(/^(#{1,3})\s+(.+)$/);
-    if (hm) {
-      closeList();
-      var lvl = hm[1].length;
-      result.push('<h' + lvl + '>' + inlineFmt(hm[2]) + '</h' + lvl + '>');
-      continue;
-    }
-
-    // Lista não-ordenada (- / * / +)
-    var ulm = line.match(/^[\-\*\+]\s+(.+)$/);
-    if (ulm) {
-      if (!inList || listType !== 'ul') { closeList(); result.push('<ul>'); inList = true; listType = 'ul'; }
-      result.push('<li>' + inlineFmt(ulm[1]) + '</li>');
-      continue;
-    }
-
-    // Lista ordenada (1. 2. …)
-    var olm = line.match(/^\d+\.\s+(.+)$/);
-    if (olm) {
-      if (!inList || listType !== 'ol') { closeList(); result.push('<ol>'); inList = true; listType = 'ol'; }
-      result.push('<li>' + inlineFmt(olm[1]) + '</li>');
-      continue;
-    }
-
-    // Linha vazia
-    if (line.trim() === '') {
-      closeList();
-      result.push('<br>');
-      continue;
-    }
-
-    closeList();
-    result.push(inlineFmt(line) + '<br>');
-  }
-
-  closeList();
-
-  var finalHtml = result.join('');
-  // Remove <br> extras no inicio e no final
-  finalHtml = finalHtml.replace(/^(<br>\s*)+/, '').replace(/(<br>\s*)+$/, '');
-  return finalHtml;
-}
 
 function showTyping(composing) {
   var el = document.getElementById('typing-indicator');
@@ -6275,18 +5826,10 @@ function blobToBase64(blob) {
   });
 }
 
-function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+// escapeHtml and openImageFullscreen are loaded from /static/render-text.js
 
 function escapeAttr(str) {
   return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-}
-
-function openImageFullscreen(src) {
-  var overlay = document.getElementById('image-fullscreen');
-  overlay.querySelector('img').src = src;
-  overlay.classList.add('visible');
 }
 
 document.addEventListener('keydown', function(e) {
