@@ -1881,6 +1881,12 @@ rl.on("line", async (line) => {
   } else {
     currentTurnStats.phase = "reporting";
 
+    // Save original result from provider — already emitted via emitMessage() inside the loop.
+    // If post-processing changes result, we need to emit the new version.
+    // If unchanged, emitWaitingUser should NOT re-send (host already has it).
+    const originalProviderResult = result;
+    let postProcessed = false;
+
     if (
       currentTurnPolicy.executionMode !== "plan"
       && !currentTurnPolicy.planningOnly
@@ -1892,8 +1898,8 @@ rl.on("line", async (line) => {
       && looksLikeTechnicalCompletion(result)
       && !acknowledgesPriorExecution(result)
     ) {
-      const guarded = buildNoExecutionGuardMessage();
-      result = guarded;
+      result = buildNoExecutionGuardMessage();
+      postProcessed = true;
     }
 
     if (
@@ -1908,6 +1914,7 @@ rl.on("line", async (line) => {
       } else {
         result = "Falha operacional: esta rodada exigia execucao, mas o modelo encerrou sem chamar ferramentas. Nenhuma alteracao foi aplicada.";
       }
+      postProcessed = true;
     }
 
     if (
@@ -1920,6 +1927,7 @@ rl.on("line", async (line) => {
       const missing = missingExpectedActions();
       if (missing.length > 0) {
         result = `Falha operacional: esta rodada exigia execucao de ${missing.join(", ")}, mas essas acoes nao foram executadas. Nenhuma conclusao tecnica foi assumida.`;
+        postProcessed = true;
       }
     }
 
@@ -1932,6 +1940,7 @@ rl.on("line", async (line) => {
 
     if (shouldAppendReceipt) {
       result = `${String(result || "").trim()}${buildExecutionReceipt()}`.trim();
+      postProcessed = true;
     }
 
     if (
@@ -1942,6 +1951,13 @@ rl.on("line", async (line) => {
     ) {
       result = "Ainda nao tentei executar ferramentas suficientes nesta rodada para concluir que existe bloqueio real de acesso. Posso executar agora os passos tecnicos e te trazer evidencias objetivas.";
       emitProviderError("Guardrail de bloqueio: resposta ajustada para evitar alegacao de falta de acesso sem erro real de ferramenta.");
+      postProcessed = true;
+    }
+
+    // If post-processing changed the result, emit the new version so the user sees it.
+    // If unchanged, the provider loop already emitted it — don't duplicate.
+    if (postProcessed) {
+      emitMessage(result);
     }
 
     // Record successful turn in provider-agnostic transcript (for cascade seeding)
@@ -1956,8 +1972,9 @@ rl.on("line", async (line) => {
       pendingContinuation = null;
     }
     // Signal that we're done processing this turn but ready for more input.
-    // The session stays alive — the host will show the compose bar again.
-    emitWaitingUser(maxStepsTriggered ? undefined : result);
+    // Don't re-send the result text — it was already emitted via emitMessage()
+    // (either by the provider loop or by the post-processing block above).
+    emitWaitingUser();
     currentTurnStats = null;
     currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
   }
