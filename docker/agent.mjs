@@ -171,6 +171,7 @@ let currentTurnPolicy = {
   allowPush: false,
   allowPr: false,
   executionRequired: false,
+  technicalRequest: false,
   expectedActions: { gitPull: false, gitCommit: false, gitPush: false },
   planningOnly: false,
   executionMode: "build",
@@ -1633,6 +1634,7 @@ rl.on("line", async (line) => {
     ...parsedPolicy,
     executionMode: requestedMode,
     executionRequired: requestedMode === "plan" ? false : parsedPolicy.executionRequired,
+    technicalRequest: requestedMode === "plan" ? false : parsedPolicy.technicalRequest,
     expectedActions: requestedMode === "plan"
       ? { gitPull: false, gitCommit: false, gitPush: false }
       : parsedPolicy.expectedActions,
@@ -1694,7 +1696,7 @@ rl.on("line", async (line) => {
   if (isSuperseded()) {
     currentAbortController = null;
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
     return;
   }
@@ -1812,7 +1814,7 @@ rl.on("line", async (line) => {
             emitWaitingUser();
           }
           currentTurnStats = null;
-          currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
+          currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
           pendingContinuation = null;
           return;
         }
@@ -1880,7 +1882,7 @@ rl.on("line", async (line) => {
   // Check if superseded before emitting response
   if (isSuperseded()) {
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
     return;
   }
@@ -1888,7 +1890,7 @@ rl.on("line", async (line) => {
   if (lastErr) {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
     pendingContinuation = null;
   } else {
     currentTurnStats.phase = "reporting";
@@ -2014,7 +2016,7 @@ rl.on("line", async (line) => {
     // (either by the provider loop or by the post-processing block above).
     emitWaitingUser();
     currentTurnStats = null;
-    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
+    currentTurnPolicy = { allowCommit: false, allowPush: false, allowPr: false, executionRequired: false, technicalRequest: false, expectedActions: { gitPull: false, gitCommit: false, gitPush: false }, planningOnly: false, executionMode: "build" };
   }
 });
 

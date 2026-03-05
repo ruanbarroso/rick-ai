@@ -14,7 +14,7 @@ export function looksLikeTechnicalCompletion(text) {
 
 export function looksLikeTechnicalActionRequest(text) {
   const normalized = String(text || "").toLowerCase();
-  return /(commit|push|pull request|pr\b|git|corrig|ajust|remov|alter|refator|implemen|adicion|cria|bug|erro|teste|build|codigo|code|arquivo|repo|reposit)/.test(normalized);
+  return /(commit|push|pull request|pr\b|git|corrig|ajust|remov|alter|refator|implemen|adicion|cria|bug|erro|teste|build|codigo|code|arquivo|repo|reposit|execute|executa|executar|aplica|aplicar|fa[çc]a|\bfaz\b|\bfazer\b)/.test(normalized);
 }
 
 export function looksLikeExecutionNowRequest(text) {
@@ -24,7 +24,7 @@ export function looksLikeExecutionNowRequest(text) {
 
 export function looksLikeConcreteExecutionRequest(text) {
   const normalized = String(text || "").toLowerCase();
-  return /(execute|executa|executar|aplica|aplicar|implement|corrig|ajust|alter|remov|refator|rode|rodar|roda|fa[çc]a|git\s+pull|git\s+commit|git\s+push|checkout|clone|clona|cria\s+pr|abre\s+pr)/.test(normalized);
+  return /(execute|executa|executar|aplica|aplicar|implement|corrig|ajust|alter|remov|refator|rode|rodar|roda|fa[çc]a|\bfaz\b|\bfazer\b|git\s+pull|git\s+commit|git\s+push|checkout|clone|clona|cria\s+pr|abre\s+pr)/.test(normalized);
 }
 
 export function looksLikeExecutionPromise(text) {
@@ -143,7 +143,7 @@ export function detectPlanningOnlyToolBlock(toolName, policy) {
  * Parse user text to determine turn policy flags.
  * @param {string} text
  * @param {object} recentGitPolicy — carried-over git policy from recent turns
- * @returns {{ allowCommit, allowPush, allowPr, executionRequired, expectedActions, planningOnly, executionMode, updatedGitPolicy }}
+ * @returns {{ allowCommit, allowPush, allowPr, executionRequired, technicalRequest, expectedActions, planningOnly, executionMode, updatedGitPolicy }}
  */
 export function parseTurnPolicy(text, recentGitPolicy) {
   const normalized = String(text || "").toLowerCase();
@@ -169,13 +169,14 @@ export function parseTurnPolicy(text, recentGitPolicy) {
   const allowCommit = explicitAllowCommit || (inheritRecentGitPolicy && recentGitPolicy.allowCommit);
   const allowPush = explicitAllowPush || (inheritRecentGitPolicy && recentGitPolicy.allowPush);
   const allowPr = explicitAllowPr || (inheritRecentGitPolicy && recentGitPolicy.allowPr);
+  const technicalRequest = looksLikeTechnicalActionRequest(normalized);
   const executionRequired = !looksLikePlanDraftRequest(normalized) && looksLikeConcreteExecutionRequest(normalized);
   const expectedActions = {
     gitPull: /\bgit\s+pull\b|\bpull\s+--rebase\b/.test(normalized),
     gitCommit: /\bgit\s+commit\b|\bcommit\b|\bcommitar\b/.test(normalized),
     gitPush: /\bgit\s+push\b|\bpush\b|\benviar para o remoto\b|\bsubir para o remoto\b/.test(normalized),
   };
-  return { allowCommit, allowPush, allowPr, executionRequired, expectedActions, planningOnly: false, executionMode: "build", updatedGitPolicy };
+  return { allowCommit, allowPush, allowPr, executionRequired, technicalRequest, expectedActions, planningOnly: false, executionMode: "build", updatedGitPolicy };
 }
 
 export function missingExpectedActions(policy, stats) {
@@ -226,10 +227,14 @@ export function shouldForceExecutionRetry(taskText, resultText, policy, stats) {
 }
 
 export function shouldSuppressInterimClaim(text, policy, stats) {
-  if (!policy?.executionRequired) return false;
+  if (!policy?.technicalRequest) return false;
   if (policy.executionMode !== "build") return false;
+  if (policy.planningOnly) return false;
   if (!stats) return false;
   const normalized = String(text || "").toLowerCase();
+  if (looksLikeNoExecutionCapabilityClaim(normalized) && (stats.executedToolCalls ?? 0) > 0) {
+    return true;
+  }
   return looksLikeExecutionPromise(normalized)
     || (looksLikeExecutionClaim(normalized) && (stats.executedToolCalls ?? 0) === 0);
 }
