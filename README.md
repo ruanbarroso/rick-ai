@@ -144,7 +144,7 @@ The Web UI (`https://rick.barroso.tec.br`) provides a full browser-based interfa
 - **User management**: View pending/active/blocked users, assign roles (dev/business), block/unblock, view user profiles, conversation history, and sub-agent sessions. Pending user badge with real-time count updates.
 - **Sub-agent sessions**: View active sessions, send follow-up messages, kill sessions, view session history
 - **Public main-session viewer**: Shareable link (`/m/:token`) for real-time main conversation with full media support (text, audio recording, file attachments, paste images)
-- **Public session viewer**: Shareable link (`/s/:sessionId`) for real-time sub-agent output
+- **Public session viewer**: Shareable link (`/s/:sessionId`) for real-time sub-agent output; append `?t=<token>` to enable interaction (without token, online view is read-only)
 - **Public sessions dashboard**: Per-user sessions list (`/u/:token`) with all sessions ordered by last activity, linking to individual session viewers
 - **Settings panel**: View/edit API keys, database URLs, agent config — all persisted via config store
 - **Sub-agent runtime dashboard**: In Settings, live counters/gauges for fallback depth, retries, max-steps guard hits, tool-call outcomes, and active/waiting sessions
@@ -204,7 +204,7 @@ WebSocket endpoints:
 |----------|------|-------------|
 | `ws://host/ws` | Password | Authenticated Web UI real-time chat + settings + user management |
 | `ws://host/ws/main?t=<token>` | Token | Public main-session viewer real-time chat (text + audio + files) |
-| `ws://host/ws/session?id=<id>` | None | Public session viewer real-time messages |
+| `ws://host/ws/session?id=<id>&t=<token>` | None (token optional) | Public session viewer real-time stream; write actions require a valid owner token |
 
 WebSocket message types (admin-only, via `/ws`):
 

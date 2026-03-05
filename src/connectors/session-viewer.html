@@ -920,6 +920,7 @@ body {
 // ==================== STATE ====================
 var sessionId = location.pathname.replace(/^\/s\//, '');
 var userToken = new URLSearchParams(location.search).get('t') || '';
+var hasWriteAccess = !!userToken;
 var ws = null;
 var reconnectAttempts = 0;
 var reconnectTimer = null;
@@ -1299,14 +1300,28 @@ function updateSessionState(state) {
   if (state === 'running' || state === 'starting') {
     dot.classList.add('running');
     text.textContent = 'Digitando...';
-    banner.classList.remove('visible');
-    composeBar.style.display = 'flex';
+    if (hasWriteAccess) {
+      banner.classList.remove('visible');
+      composeBar.style.display = 'flex';
+    } else {
+      banner.textContent = 'Sessao online — somente leitura';
+      banner.classList.add('visible');
+      composeBar.style.display = 'none';
+      attachPreview.classList.remove('visible');
+    }
     typing.classList.add('visible');
   } else if (state === 'waiting_user') {
     dot.classList.add('waiting');
     text.textContent = 'Online';
-    banner.classList.remove('visible');
-    composeBar.style.display = 'flex';
+    if (hasWriteAccess) {
+      banner.classList.remove('visible');
+      composeBar.style.display = 'flex';
+    } else {
+      banner.textContent = 'Sessao online — somente leitura';
+      banner.classList.add('visible');
+      composeBar.style.display = 'none';
+      attachPreview.classList.remove('visible');
+    }
     typing.classList.remove('visible');
   } else if (state === 'done') {
     dot.classList.add('done');
@@ -1340,7 +1355,7 @@ function updateSessionState(state) {
 
   // Show/hide kill button: only if user has a token and session is active
   var killBtn = document.getElementById('kill-btn');
-  if (userToken && (state === 'running' || state === 'starting' || state === 'waiting_user')) {
+  if (hasWriteAccess && (state === 'running' || state === 'starting' || state === 'waiting_user')) {
     killBtn.classList.add('visible');
   } else {
     killBtn.classList.remove('visible');
@@ -1390,7 +1405,7 @@ function showErrorModal(message) {
 
 // ==================== KILL SESSION ====================
 function killCurrentSession() {
-  if (!userToken) return;
+  if (!hasWriteAccess || !userToken) return;
   openConfirmModal(
     'Encerrar sessao?',
     'A sessao sera encerrada e nao podera ser retomada.',
@@ -1424,6 +1439,9 @@ function updateHeaderIcon() {
 function connect() {
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   var url = proto + '//' + location.host + '/ws/session?id=' + encodeURIComponent(sessionId);
+  if (userToken) {
+    url += '&t=' + encodeURIComponent(userToken);
+  }
 
   ws = new WebSocket(url);
 
@@ -1478,6 +1496,9 @@ function connect() {
 
       case 'session_info':
         if (msg.session) {
+          if (typeof msg.session.canWrite === 'boolean') {
+            hasWriteAccess = msg.session.canWrite;
+          }
           // Update variant name from server (computed server-side)
           if (msg.session.variantName) {
             sessionName = msg.session.variantName;
@@ -1653,6 +1674,7 @@ function updateRecordingTimer() {
 
 // ==================== AUDIO RECORDING ====================
 function startRecording() {
+  if (!hasWriteAccess) return;
   if (isRecording) return;
   if (pendingAudio) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
@@ -1724,6 +1746,7 @@ function discardAudio() {
 
 // ==================== FILE ATTACHMENTS ====================
 function handleFileSelect(event) {
+  if (!hasWriteAccess) return;
   var files = event.target.files;
   if (!files || files.length === 0) return;
   for (var i = 0; i < files.length; i++) {
@@ -1746,6 +1769,7 @@ function handleFileSelect(event) {
 }
 
 function handlePaste(event) {
+  if (!hasWriteAccess) return;
   var items = event.clipboardData && event.clipboardData.items;
   if (!items) return;
   var hasImage = false;
@@ -1800,6 +1824,7 @@ function blobToBase64(blob) {
 }
 
 function sendMessage() {
+  if (!hasWriteAccess) return;
   // Guard: reject sends on ended sessions
   if (sessionState === 'done' || sessionState === 'killed') return;
 

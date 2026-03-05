@@ -437,6 +437,8 @@ export class WebConnector implements Connector {
     this.sessionWss.on("connection", (ws: WebSocket, request: IncomingMessage) => {
       const url = new URL(request.url || "", "http://localhost");
       const sessionId = url.searchParams.get("id") || "";
+      const sessionToken = url.searchParams.get("t") || "";
+      let canWrite = false;
 
       if (!sessionId) {
         ws.close(4000, "Missing session ID");
@@ -455,6 +457,7 @@ export class WebConnector implements Connector {
       if (this.agentBridge) {
         this.agentBridge.getSessionHistory(sessionId).then(async (history) => {
           if (ws.readyState !== WebSocket.OPEN) return;
+          const tokenUserId = sessionToken ? await resolveSessionsToken(sessionToken) : null;
 
           // Check if session exists (live) or has history (was alive before)
           const sessions = this.agentBridge!.getSessionsForUI();
@@ -462,6 +465,7 @@ export class WebConnector implements Connector {
 
           const agentName = config.agentName;
           if (session) {
+            canWrite = tokenUserId != null && tokenUserId === session.numericUserId;
             // Session is live — send history + info
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
             const canManageProviders = session.numericUserId != null && session.numericUserId !== 1;
@@ -476,12 +480,14 @@ export class WebConnector implements Connector {
                 executionMode: session.executionMode || DEFAULT_SUBAGENT_EXECUTION_MODE,
                 availableModels: SUBAGENT_MODELS,
                 canManageProviders,
+                canWrite,
                 agentName,
               },
             }));
           } else if (history.length > 0) {
             // Session is no longer in memory — check DB for the real status
             const dbInfo = await this.agentBridge!.getSessionInfoFromDB(sessionId);
+            canWrite = tokenUserId != null && tokenUserId === (dbInfo?.numericUserId ?? null);
             // Map DB status ('active'|'done'|'killed') to viewer state
             const state = dbInfo?.status === "killed" ? "killed" : "done";
             const variantName = dbInfo?.variantName || undefined;
@@ -498,6 +504,7 @@ export class WebConnector implements Connector {
                 executionMode: DEFAULT_SUBAGENT_EXECUTION_MODE,
                 availableModels: SUBAGENT_MODELS,
                 canManageProviders,
+                canWrite,
               },
             }));
           } else {
@@ -518,6 +525,7 @@ export class WebConnector implements Connector {
                 executionMode: DEFAULT_SUBAGENT_EXECUTION_MODE,
                 availableModels: SUBAGENT_MODELS,
                 canManageProviders: false,
+                canWrite: false,
               },
             }));
           }
@@ -529,6 +537,19 @@ export class WebConnector implements Connector {
         try {
           const raw = typeof data === "string" ? data : data.toString("utf-8");
           const msg = JSON.parse(raw);
+
+          const isWriteAction =
+            msg.type === "interrupt" ||
+            msg.type === "set_model" ||
+            msg.type === "set_mode" ||
+            msg.type === "session_oauth_start" ||
+            msg.type === "session_oauth_exchange" ||
+            msg.type === "session_oauth_disconnect" ||
+            msg.type === "message";
+          if (isWriteAction && !canWrite) {
+            ws.send(JSON.stringify({ type: "error", text: "Sessao online — somente leitura" }));
+            return;
+          }
 
           if (msg.type === "interrupt" && this.agentBridge) {
             // Interrupt the sub-agent session
