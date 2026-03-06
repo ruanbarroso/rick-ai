@@ -302,6 +302,30 @@ export class OpenAIOAuthService {
     }
   }
 
+  /**
+   * Returns OAuth bundle in OpenCode-compatible shape.
+   * Ensures token freshness first, then returns access+refresh+expiry+account.
+   */
+  async getAuthBundle(userId: number, forceRefresh = false): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+    accountId: string | null;
+  } | null> {
+    const valid = await this.getValidToken(userId, forceRefresh);
+    if (!valid?.accessToken) return null;
+
+    const stored = await this.loadTokens(userId);
+    if (!stored?.refreshToken) return null;
+
+    return {
+      accessToken: valid.accessToken,
+      refreshToken: stored.refreshToken,
+      expiresAt: stored.expiresAt,
+      accountId: valid.accountId,
+    };
+  }
+
   async isConnected(userId: number): Promise<{ connected: boolean; email?: string }> {
     const stored = await this.loadTokens(userId);
     if (!stored) return { connected: false };

@@ -324,6 +324,28 @@ export class ClaudeOAuthService {
   }
 
   /**
+   * Returns OAuth bundle in OpenCode-compatible shape.
+   * Ensures token freshness first, then returns access+refresh+expiry.
+   */
+  async getAuthBundle(userId: number, forceRefresh = false): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+  } | null> {
+    const accessToken = await this.getValidToken(userId, forceRefresh);
+    if (!accessToken) return null;
+
+    const stored = await this.loadTokens(userId);
+    if (!stored?.refreshToken) return null;
+
+    return {
+      accessToken,
+      refreshToken: stored.refreshToken,
+      expiresAt: stored.expiresAt,
+    };
+  }
+
+  /**
    * Invalidate the in-memory cache for a user.
    * Call this when tokens are known to be invalid (e.g. 401 from external service).
    */

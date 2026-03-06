@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "lsp": {
+    "jdtls": {
+      "disabled": true
+    }
+  },
+  "permission": "allow",
+  "mcp": {
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp@latest", "--browser", "chrome"],
+      "enabled": true
+    },
+    "rick": {
+      "type": "local",
+      "command": ["node", "/app/rick-mcp.mjs"],
+      "enabled": true
+    }
+  }
+}

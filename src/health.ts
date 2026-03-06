@@ -8,12 +8,12 @@ import { query } from "./memory/database.js";
 import { config } from "./config/env.js";
 import { configGet } from "./memory/config-store.js";
 import { verifyAgentToken, type AgentTokenPayload } from "./subagent/agent-token.js";
-import { isSensitiveCategory } from "./memory/crypto.js";
 import { resolveSessionsToken, getSessionVariantName, getMainSessionName } from "./subagent/session-manager.js";
 import type { SubAgentMetricsSnapshot } from "./subagent/types.js";
 import type { MemoryService } from "./memory/memory-service.js";
 import type { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
+import type { UserRole } from "./auth/permissions.js";
 
 /**
  * HTTP server that serves:
@@ -600,12 +600,8 @@ async function handleAgentApiGet(
       return;
     }
 
-    // GET /api/agent/llm-token?provider=claude|openai[&force=true] — Fresh LLM OAuth access token.
-    // Allows sub-agents to refresh their LLM credentials when an OAuth token expires
-    // mid-task (401 from provider) without restarting the container.
-    // When force=true, bypasses the cache and DB expiry check to get a genuinely fresh
-    // token via the refresh-token flow (used after 401 when the provider revoked the token
-    // before its nominal expiry).
+    // GET /api/agent/llm-token?provider=claude|openai[&force=true]
+    // Backward-compatible endpoint returning access token only.
     if (path === "/api/agent/llm-token") {
       const provider = url.searchParams.get("provider") || "claude";
       if (provider !== "claude" && provider !== "openai") {
@@ -650,6 +646,62 @@ async function handleAgentApiGet(
       return;
     }
 
+    // GET /api/agent/llm-auth-bundle?provider=claude|openai[&force=true]
+    // Returns OAuth bundle in OpenCode-compatible shape (access+refresh+expiry).
+    if (path === "/api/agent/llm-auth-bundle") {
+      const provider = url.searchParams.get("provider") || "claude";
+      if (provider !== "claude" && provider !== "openai") {
+        jsonResponse(res, 400, { error: "Provider invalido. Use 'claude' ou 'openai'" });
+        return;
+      }
+      const forceRefresh = url.searchParams.get("force") === "true";
+
+      const userId = await resolveUserId(session, registeredMemoryService);
+      if (!userId) {
+        jsonResponse(res, 503, { error: "MemoryService nao disponivel para resolver usuario" });
+        return;
+      }
+
+      const adminUserId = 1;
+      const userIdsToTry = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
+
+      let auth: Record<string, any> | null = null;
+      for (const uid of userIdsToTry) {
+        if (auth) break;
+        if (provider === "claude") {
+          const bundle = await claudeOAuthService.getAuthBundle(uid, forceRefresh);
+          if (bundle) {
+            auth = {
+              type: "oauth",
+              accessToken: bundle.accessToken,
+              refreshToken: bundle.refreshToken,
+              expiresAt: bundle.expiresAt,
+            };
+          }
+        } else {
+          const bundle = await openaiOAuthService.getAuthBundle(uid, forceRefresh);
+          if (bundle) {
+            auth = {
+              type: "oauth",
+              accessToken: bundle.accessToken,
+              refreshToken: bundle.refreshToken,
+              expiresAt: bundle.expiresAt,
+              accountId: bundle.accountId,
+            };
+          }
+        }
+      }
+
+      if (!auth) {
+        jsonResponse(res, 404, { error: `OAuth nao disponivel para provider '${provider}'` });
+        return;
+      }
+
+      logger.info({ sessionId: session.sessionId, provider, forceRefresh }, "Agent API: LLM auth bundle requested");
+      jsonResponse(res, 200, { provider, auth });
+      return;
+    }
+
     // Unknown /api/agent/* path
     jsonResponse(res, 404, { error: "Endpoint nao encontrado" });
   } catch (err) {
@@ -671,7 +723,7 @@ async function handleAgentApiPost(
   const path = url.pathname;
 
   try {
-    // POST /api/agent/memory — Save a new memory (non-sensitive categories only).
+    // POST /api/agent/memory — Save a new memory (principal validates overwrite rules).
     // Body: { key: string, value: string, category?: string }
     if (path === "/api/agent/memory") {
       if (!registeredMemoryService) {
@@ -697,24 +749,16 @@ async function handleAgentApiPost(
         return;
       }
 
-      // Subagentes só podem escrever em categorias não-sensíveis.
-      // Credenciais e tokens devem ser gerenciados pelo Rick principal.
-      if (isSensitiveCategory(category)) {
-        jsonResponse(res, 403, {
-          error: `Categoria '${category}' e protegida. Subagentes so podem escrever em categorias nao-sensiveis (ex: geral, notas, preferencias)`,
-        });
-        return;
-      }
-
       const userId = await resolveUserId(session, registeredMemoryService);
       if (!userId) {
         jsonResponse(res, 503, { error: "MemoryService nao disponivel para resolver usuario" });
         return;
       }
+      const userRole = await resolveUserRole(userId);
       const result = await registeredMemoryService.rememberV2(
         key, value, category,
         userId,
-        "dev",  // subagentes escrevem como 'dev' — não sobrescrevem memórias de admin
+        userRole,
         { source: "subagent", sessionId: session.sessionId },
       );
 
@@ -870,6 +914,20 @@ async function resolveUserId(
   if (!memoryService) return null;
   const user = await memoryService.getOrCreateUser(session.userPhone);
   return user.id;
+}
+
+async function resolveUserRole(userId: number): Promise<UserRole> {
+  try {
+    const result = await query(
+      "SELECT role FROM users WHERE id = $1 LIMIT 1",
+      [userId],
+    );
+    const role = result.rows[0]?.role;
+    if (role === "admin" || role === "dev") return role;
+  } catch {
+    // ignore and fall back
+  }
+  return "dev";
 }
 
 // ==================== VERSION ====================

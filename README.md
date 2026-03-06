@@ -118,20 +118,13 @@ Tables are automatically pruned to prevent unbounded growth:
 
 All delegated tasks (coding, research, browser automation) are handled by a **single unified sub-agent** container with:
 
-- **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro → Gemini 3.0 Flash (automatic failover on rate limits or errors, with automatic retry on timeout before falling through). The session viewer also lets you pick a primary model per session; the selected model is tried first, then the cascade continues from that point. Claude/OpenAI OAuth can be configured per user directly in the sub-agent session viewer (Gemini remains global); when a user has no personal OAuth, the sub-agent falls back to the admin connection. Providers are re-evaluated per turn, so a session started with only Gemini will automatically gain Claude/GPT access when they are connected later via OAuth. Conversation context is shared across providers via a common transcript, so a cascade switch does not cause amnesia.
-- **Tools**: Browser (Playwright MCP + Chrome channel), shell commands, file I/O (`read_file` with offset/limit, resilient `edit_file` with multi-strategy matching, multi-file `apply_patch`), native `glob`/`grep`, `todo_write`, HTTP fetch with HTML-to-text normalization, read-only PostgreSQL access
+- **OpenCode runtime**: The sub-agent delegates the full agentic loop to OpenCode CLI (`opencode run --format json`) and streams OpenCode events back to Rick over NDJSON.
+- **Model selection**: Session primary model is mapped to OpenCode provider/model IDs (`anthropic/*`, `openai/*`, `google/*`) while preserving per-session model switching in the viewer.
+- **Tools via MCP**: Browser tools come from Playwright MCP (Chrome), and Rick memory/search/save/config/conversations are exposed to OpenCode through a local `rick` MCP server that calls `/api/agent/*`.
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
-- **Context rotation**: Automatic summarization when context window fills up (LLM-assisted summary with fallback to textual compaction)
-- **Prompt layering**: System prompt is composed from a shared base + provider-specific overlay + runtime environment block + project instructions loaded from `AGENTS.md`/`CLAUDE.md` in the workspace
-- **Execution guardrails**: Per-turn max tool-step cap prevents endless loops; for code-change requests, the sub-agent refuses to claim technical completion when no tool execution happened in that turn
-- **Autonomous continuation loop**: Internal multi-pass execution budget (time + passes) keeps progressing without user interruptions until completion criteria or hard limits are reached
-- **Turn observability**: Emits per-turn metrics (duration, retries, fallback depth, tool counts, validation count) for session analysis/debugging
-- **SWE-lite benchmark harness**: `docker/benchmark-swe-lite.mjs` runs regression tasks against the sub-agent and measures pass/fail + autonomy metrics
-- **Git safety gate**: `git commit`, `git push`, and `gh pr create` are blocked unless explicitly requested in the current user turn
-- **Build/Plan mode**: Session viewer has a mode selector (default `Build`); `Plan` mode answers with strategy-first behavior and allows only read/inspection tools (blocks write/edit/command-mutation actions)
-- **Playwright MCP runtime**: Browser tools run via local Playwright MCP command (`RICK_PLAYWRIGHT_MCP_COMMAND`), mirroring OpenCode-style MCP integration
-- **Credential injection**: OAuth tokens and stored passwords injected at runtime (never in task descriptions). Sensitive memories are pre-resolved and injected as `RICK_SECRET_*` env vars (decrypted, no encryption key exposed).
-- **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick's read-only API for memories, credentials, semantic search, conversations, and config — all scoped to the owner's data.
+- **Build/Plan mode**: Session viewer mode is preserved; Rick maps mode to OpenCode agent (`build` or `plan`).
+- **Credential injection**: Sub-agent syncs Claude/OpenAI auth to OpenCode `auth.json` using Rick Agent API OAuth bundles (`access`, `refresh`, `expires`, `accountId` when applicable). API-key fallback remains supported.
+- **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick APIs from MCP tools — scoped to the owner's data.
 - **Session recovery**: Running containers are recovered after Rick restarts
 - **Image freshness**: `subagent` image is rebuilt automatically whenever bundle hash or Rick version label differs (no stale image reuse across versions)
 - **Local fast-build fallback**: when `subagent-base:chrome` exists, builds use a fast Dockerfile that only copies runtime `.mjs` files; if base is missing, Rick first seeds it from `subagent:current`/`subagent` when available, otherwise falls back to full bootstrap build and re-tags base locally
@@ -200,6 +193,8 @@ There are no slash commands — all interaction is via natural language. The age
 | `/api/agent/memory` | GET | JWT | Sub-agent: get specific memory. `?category=x&key=y` |
 | `/api/agent/search` | GET | JWT | Sub-agent: semantic vector search. `?q=text&limit=5` |
 | `/api/agent/conversations` | GET | JWT | Sub-agent: recent conversation history. `?limit=20` |
+| `/api/agent/llm-token` | GET | JWT | Sub-agent: backward-compatible OAuth access token only. `?provider=claude\|openai&force=true` |
+| `/api/agent/llm-auth-bundle` | GET | JWT | Sub-agent: OpenCode auth bundle (`accessToken`, `refreshToken`, `expiresAt`, optional `accountId`). `?provider=claude\|openai&force=true` |
 
 WebSocket endpoints:
 
@@ -289,6 +284,8 @@ rick-ai/
 │   ├── tool-declarations.mjs          # Tool schemas for LLM function calling
 │   ├── rick-api.mjs                   # Rick API client, agent-specific tools (memory, web_fetch)
 │   ├── mcp-playwright.mjs             # MCP Playwright bridge for browser tools
+│   ├── rick-mcp.mjs                   # Local MCP server exposing Rick memory/search/save/config tools
+│   ├── opencode.json                  # OpenCode runtime config used by sub-agent container
 │   ├── benchmark-swe-lite.mjs         # SWE-lite benchmark harness for sub-agent autonomy
 │   ├── benchmark-tasks.example.json   # Example benchmark task set
 │   ├── subagent.Dockerfile            # Full bootstrap image (Chrome + Playwright deps)

@@ -27,6 +27,8 @@ COPY tools.mjs /app/tools.mjs
 COPY tool-declarations.mjs /app/tool-declarations.mjs
 COPY rick-api.mjs /app/rick-api.mjs
 COPY mcp-playwright.mjs /app/mcp-playwright.mjs
+COPY rick-mcp.mjs /app/rick-mcp.mjs
+COPY opencode.json /app/opencode.json
 COPY policy.mjs /app/policy.mjs
 COPY prompt.mjs /app/prompt.mjs
 COPY agent.mjs /app/agent.mjs
