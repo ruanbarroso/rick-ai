@@ -354,6 +354,9 @@ function runOpencodeTurn({ text, model, mode, images }) {
       }
     }
 
+    // Use --print-logs so OpenCode writes detailed logs to stderr (including rate limit errors)
+    args.push("--print-logs");
+
     args.push(text);
 
     // Build env: OpenCode/ai-sdk expects GOOGLE_GENERATIVE_AI_API_KEY for Gemini,
@@ -460,6 +463,14 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
     child.stderr.on("data", (chunk) => {
       stderrBuffer += chunk.toString();
+      // Detect rate limit from OpenCode logs (enabled via --print-logs)
+      // Log format includes patterns like "rate_limit", "Too Many Requests", "usage limit"
+      if (isRateLimitError(stderrBuffer) && !lastRunHadRateLimitError) {
+        lastRunHadRateLimitError = true;
+        // Kill immediately - no point waiting for timeout when we know it's rate limited
+        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        finish(new Error("Rate limit detectado nos logs do OpenCode"));
+      }
     });
 
     const finish = (err, resultText = "") => {
