@@ -15,8 +15,9 @@ const MODEL_MAP = {
 const DEFAULT_MODEL_ID = "claude-opus-4-6";
 const HISTORY_MAX_MESSAGES = 120;
 
-/** Max time to wait for the first meaningful LLM output (text or tool_use) before killing the process. */
-const LLM_FIRST_OUTPUT_TIMEOUT_MS = 30_000; // 30 seconds (matches OpenCode's max retry delay)
+/** Safety-net timeout: kill the process if it produces absolutely no output for this long.
+ *  Rate limit detection is handled via stderr/stdout — this only catches total hangs. */
+const LLM_HANG_TIMEOUT_MS = 300_000; // 5 minutes — generous to allow slow free-tier providers
 
 let currentGeneration = 0;
 let processingGeneration = 0;
@@ -395,17 +396,15 @@ function runOpencodeTurn({ text, model, mode, images }) {
     let gotMeaningfulOutput = false;
     let finished = false;
 
-    // Timeout: if no meaningful output (text or tool_use) within LLM_FIRST_OUTPUT_TIMEOUT_MS,
-    // kill the process. This catches silent retry loops (e.g. rate limit with exponential backoff).
-    // OpenCode does retries internally for rate limits but doesn't emit NDJSON events during retry,
-    // so we rely on timeout as the safety net.
-    const firstOutputTimer = setTimeout(() => {
+    // Safety-net timeout: kill the process only if it produces no output at all for a very
+    // long time (total hang). Rate limit detection is handled proactively via stderr logs
+    // (--print-logs) and stdout JSON error events — no need for an aggressive timeout here.
+    const hangTimer = setTimeout(() => {
       if (!gotMeaningfulOutput && !finished) {
-        lastRunHadRateLimitError = true; // Assume rate limit when provider is unresponsive
         try { child.kill("SIGTERM"); } catch { /* ignore */ }
-        finish(new Error("LLM timeout: nenhuma resposta em " + (LLM_FIRST_OUTPUT_TIMEOUT_MS / 1000) + "s — possivel rate limit ou provedor indisponivel"));
+        finish(new Error("LLM hang: nenhuma resposta em " + (LLM_HANG_TIMEOUT_MS / 1000) + "s — processo travado"));
       }
-    }, LLM_FIRST_OUTPUT_TIMEOUT_MS);
+    }, LLM_HANG_TIMEOUT_MS);
 
     child.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk.toString();
@@ -489,7 +488,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const finish = (err, resultText = "") => {
       if (finished) return;
       finished = true;
-      clearTimeout(firstOutputTimer);
+      clearTimeout(hangTimer);
       if (activeResolve) {
         activeResolve = null;
       }
@@ -662,7 +661,7 @@ async function handleTurn(payload) {
     }
     const errorMsg = err?.message || "Falha ao processar com OpenCode";
     emitError(errorMsg);
-    emitWaitingUser(errorMsg);
+    emitWaitingUser("");
   } finally {
     processingGeneration = 0;
   }
