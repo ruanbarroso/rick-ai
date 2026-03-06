@@ -183,6 +183,11 @@ class SubagentImageBuilder {
     const selectedDockerfile = hasBaseImage ? local.fastDockerfilePath : local.dockerfilePath;
     const buildMode = hasBaseImage ? "fast" : "bootstrap";
 
+    // Bootstrap builds install Playwright + Chrome + system deps (~300MB+) and
+    // can easily take 15-20 minutes on modest hardware or slow networks.
+    // Fast builds only copy source files and run `npm install`, finishing in ~2 min.
+    const buildTimeout = buildMode === "bootstrap" ? 1_800_000 : 600_000; // 30 min / 10 min
+
     logger.info(
       {
         hash: local.hash,
@@ -190,6 +195,7 @@ class SubagentImageBuilder {
         buildMode,
         dockerfile: selectedDockerfile,
         hasBaseImage,
+        timeoutMs: buildTimeout,
       },
       "Building subagent image",
     );
@@ -208,7 +214,7 @@ class SubagentImageBuilder {
         selectedDockerfile,
         local.dockerDir,
       ],
-      { timeout: 600_000 },
+      { timeout: buildTimeout, maxBuffer: 50 * 1024 * 1024 },
     );
 
     await execFileAsync("docker", ["tag", NEXT_IMAGE, CURRENT_IMAGE], { timeout: 10_000 });
