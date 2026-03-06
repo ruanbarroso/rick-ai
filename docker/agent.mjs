@@ -356,12 +356,19 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
     args.push(text);
 
+    // Build env: OpenCode/ai-sdk expects GOOGLE_GENERATIVE_AI_API_KEY for Gemini,
+    // but our container receives GEMINI_API_KEY from the main process.
+    const childEnv = {
+      ...process.env,
+      OPENCODE_CONFIG_CONTENT: configContent,
+    };
+    if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+      childEnv.GOOGLE_GENERATIVE_AI_API_KEY = process.env.GEMINI_API_KEY;
+    }
+
     const child = spawn("npx", args, {
       cwd: "/workspace",
-      env: {
-        ...process.env,
-        OPENCODE_CONFIG_CONTENT: configContent,
-      },
+      env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
