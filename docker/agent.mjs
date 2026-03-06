@@ -620,6 +620,11 @@ async function handleTurn(payload) {
       toolStarted.clear();
 
       if (i > 0) {
+        // Reset session so the new model starts fresh.
+        // Without this, --print-logs replays the previous model's error logs
+        // (including rate-limit messages), causing a false-positive detection
+        // that kills the new model before it even starts.
+        openCodeSessionId = "";
         emitStatus(`Modelo '${modelsToTry[i - 1]}' falhou (rate limit), tentando '${tryModelId}'...`);
         emit({ type: "model_active", modelId: tryModelId, modelName: tryModelId });
       }
