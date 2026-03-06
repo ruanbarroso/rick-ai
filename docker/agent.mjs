@@ -16,6 +16,9 @@ const MODEL_MAP = {
 const DEFAULT_MODEL_ID = "claude-opus-4-6";
 const HISTORY_MAX_MESSAGES = 120;
 
+/** Max time to wait for the first meaningful LLM output (text or tool_use) before killing the process. */
+const LLM_FIRST_OUTPUT_TIMEOUT_MS = 120_000; // 2 minutes
+
 let currentGeneration = 0;
 let processingGeneration = 0;
 let runChain = Promise.resolve();
@@ -236,8 +239,8 @@ function providerForModel(opencodeModel) {
  * when the primary provider's auth is unavailable.
  */
 const MODEL_FALLBACK_ORDER = {
-  "claude-opus-4-6": ["gpt-5.3-codex", "gemini-3.1-pro"],
-  "gpt-5.3-codex": ["claude-opus-4-6", "gemini-3.1-pro"],
+  "claude-opus-4-6": ["gemini-3.1-pro", "gpt-5.3-codex"],
+  "gpt-5.3-codex": ["gemini-3.1-pro", "claude-opus-4-6"],
   "gemini-3.1-pro": ["claude-opus-4-6", "gpt-5.3-codex"],
   "gemini-3.0-flash": ["gemini-3.1-pro", "claude-opus-4-6", "gpt-5.3-codex"],
 };
@@ -315,10 +318,19 @@ function parseTextEvent(event, collector) {
   emitMessage(text);
 }
 
+/** Detect rate-limit / usage-limit patterns in error messages. */
+function isRateLimitError(message) {
+  const lower = String(message || "").toLowerCase();
+  return lower.includes("usage limit") || lower.includes("rate limit") || lower.includes("429") || lower.includes("quota") || lower.includes("too many requests");
+}
+
+let lastRunHadRateLimitError = false;
+
 function runOpencodeTurn({ text, model, mode, images }) {
   return new Promise((resolve, reject) => {
     const configContent = JSON.stringify(buildOpencodeConfig());
     const selectedModel = pickModel(model);
+    lastRunHadRateLimitError = false;
 
     const args = [
       "opencode-ai",
@@ -356,6 +368,18 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const collectedText = [];
     let stdoutBuffer = "";
     let stderrBuffer = "";
+    let gotMeaningfulOutput = false;
+    let finished = false;
+
+    // Timeout: if no meaningful output (text or tool_use) within LLM_FIRST_OUTPUT_TIMEOUT_MS,
+    // kill the process. This catches silent retry loops (e.g. rate limit with exponential backoff).
+    const firstOutputTimer = setTimeout(() => {
+      if (!gotMeaningfulOutput && !finished) {
+        lastRunHadRateLimitError = true; // Assume rate limit when provider is unresponsive
+        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        finish(new Error("LLM timeout: nenhuma resposta em " + (LLM_FIRST_OUTPUT_TIMEOUT_MS / 1000) + "s — possivel rate limit ou provedor indisponivel"));
+      }
+    }, LLM_FIRST_OUTPUT_TIMEOUT_MS);
 
     child.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk.toString();
@@ -378,11 +402,13 @@ function runOpencodeTurn({ text, model, mode, images }) {
         }
 
         if (event.type === "tool_use") {
+          gotMeaningfulOutput = true;
           parseToolEvent(event);
           continue;
         }
 
         if (event.type === "text") {
+          gotMeaningfulOutput = true;
           parseTextEvent(event, collectedText);
           continue;
         }
@@ -406,6 +432,14 @@ function runOpencodeTurn({ text, model, mode, images }) {
             if (String(err.name || "").includes("Auth") || String(message).includes("401") || String(message).includes("auth")) {
               lastRunHadAuthError = true;
             }
+            // Detect rate limit / usage limit errors for provider cascade
+            if (isRateLimitError(message)) {
+              lastRunHadRateLimitError = true;
+              // Kill the process immediately — no point retrying the same provider
+              try { child.kill("SIGTERM"); } catch { /* ignore */ }
+              finish(new Error(`Rate limit: ${message}`));
+              return;
+            }
           } else {
             message = "erro do opencode";
           }
@@ -416,9 +450,16 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
     child.stderr.on("data", (chunk) => {
       stderrBuffer += chunk.toString();
+      // Also check stderr for rate limit patterns (OpenCode may log errors there)
+      if (isRateLimitError(stderrBuffer)) {
+        lastRunHadRateLimitError = true;
+      }
     });
 
     const finish = (err, resultText = "") => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(firstOutputTimer);
       if (activeResolve) {
         activeResolve = null;
       }
@@ -444,12 +485,18 @@ function runOpencodeTurn({ text, model, mode, images }) {
     child.on("close", (code, signal) => {
       const finalText = collectedText.join("\n\n").trim();
       if (interrupted || signal === "SIGTERM") {
+        // If we already finished (e.g. from timeout or rate limit kill), don't double-finish
+        if (finished) return;
         finish(new Error("Interrupted"));
         return;
       }
 
       if (code !== 0) {
         const detail = stderrBuffer.trim() || stdoutBuffer.trim() || `opencode run exited with code ${code}`;
+        // Check if the exit was due to rate limiting
+        if (isRateLimitError(detail)) {
+          lastRunHadRateLimitError = true;
+        }
         finish(new Error(detail));
         return;
       }
@@ -506,40 +553,76 @@ async function handleTurn(payload) {
       images: Array.isArray(payload.images) ? payload.images : [],
     };
 
-    let result;
-    try {
-      result = await runOpencodeTurn(runArgs);
-    } catch (runErr) {
-      // If the run failed AND we detected an auth error in the stream, retry with refreshed tokens
-      if (lastRunHadAuthError && !isSuperseded() && !interrupted) {
-        emitStatus("Renovando credenciais e tentando novamente...");
-        lastRunHadAuthError = false;
-        const freshProviders = await syncOpenCodeAuth(true);
-        toolStarted.clear();
-
-        // Re-resolve model with fresh providers (auth refresh may have made new providers available)
-        const freshResolved = resolveModel(requestedModel, freshProviders);
-        if (freshResolved) {
-          runArgs.model = freshResolved.modelId;
-        }
-
-        result = await runOpencodeTurn(runArgs);
-      } else {
-        throw runErr;
+    // Build the ordered list of models to try: primary + fallbacks
+    const modelsToTry = [effectiveModelId];
+    const fallbacks = MODEL_FALLBACK_ORDER[requestedModel] || Object.keys(MODEL_MAP).filter((k) => k !== requestedModel);
+    for (const altModelId of fallbacks) {
+      const altOpencodeModel = pickModel(altModelId);
+      const altProvider = providerForModel(altOpencodeModel);
+      if (altProvider && availableProviders.has(altProvider) && !modelsToTry.includes(altModelId)) {
+        modelsToTry.push(altModelId);
       }
     }
 
-    // If the run succeeded but reported auth errors (e.g. partial failure), refresh for next time
-    if (lastRunHadAuthError && !isSuperseded() && !interrupted) {
-      emitStatus("Renovando credenciais e tentando novamente...");
-      lastRunHadAuthError = false;
-      const freshProviders = await syncOpenCodeAuth(true);
+    let result;
+    let lastError;
+
+    for (let i = 0; i < modelsToTry.length; i++) {
+      const tryModelId = modelsToTry[i];
+      runArgs.model = tryModelId;
       toolStarted.clear();
-      const freshResolved = resolveModel(requestedModel, freshProviders);
-      if (freshResolved) {
-        runArgs.model = freshResolved.modelId;
+
+      if (i > 0) {
+        emitStatus(`Modelo '${modelsToTry[i - 1]}' falhou (rate limit), tentando '${tryModelId}'...`);
+        emit({ type: "model_active", modelId: tryModelId, modelName: tryModelId });
       }
-      result = await runOpencodeTurn(runArgs);
+
+      if (isSuperseded() || interrupted) break;
+
+      try {
+        result = await runOpencodeTurn(runArgs);
+
+        // If the run succeeded but reported auth errors, refresh tokens and retry once
+        if (lastRunHadAuthError && !isSuperseded() && !interrupted) {
+          emitStatus("Renovando credenciais e tentando novamente...");
+          lastRunHadAuthError = false;
+          await syncOpenCodeAuth(true);
+          toolStarted.clear();
+          result = await runOpencodeTurn(runArgs);
+        }
+
+        lastError = null;
+        break; // Success — exit the cascade
+      } catch (runErr) {
+        lastError = runErr;
+
+        // Auth error: refresh tokens and retry the SAME model once before cascading
+        if (lastRunHadAuthError && !lastRunHadRateLimitError && !isSuperseded() && !interrupted) {
+          emitStatus("Renovando credenciais e tentando novamente...");
+          lastRunHadAuthError = false;
+          await syncOpenCodeAuth(true);
+          toolStarted.clear();
+          try {
+            result = await runOpencodeTurn(runArgs);
+            lastError = null;
+            break;
+          } catch (retryErr) {
+            lastError = retryErr;
+          }
+        }
+
+        // Rate limit / timeout: cascade to next model
+        if (lastRunHadRateLimitError) {
+          continue;
+        }
+
+        // Other error: don't cascade, just fail
+        break;
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
     }
 
     emitWaitingUser(result || "Tarefa concluida.");
