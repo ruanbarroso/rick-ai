@@ -22,19 +22,20 @@ RUN cd /app && npm install --omit=dev
 # Chrome (not Chromium) for better site compatibility with SPAs, iframes, etc.
 RUN cd /app && npx playwright install chrome --with-deps
 
-# Copy agent entry point and shared modules
-COPY tools.mjs /app/tools.mjs
-COPY tool-declarations.mjs /app/tool-declarations.mjs
-COPY rick-api.mjs /app/rick-api.mjs
-COPY mcp-playwright.mjs /app/mcp-playwright.mjs
-COPY rick-mcp.mjs /app/rick-mcp.mjs
-COPY opencode.json /app/opencode.json
-COPY policy.mjs /app/policy.mjs
-COPY prompt.mjs /app/prompt.mjs
-COPY agent.mjs /app/agent.mjs
-
+# Fix ownership of npm-installed files (created as root)
+RUN chown -R agent:agent /app/package.json /app/package-lock.json /app/node_modules 2>/dev/null; true
 RUN chmod -R a+rX /ms-playwright
-RUN chown -R agent:agent /app
+
+# Copy agent entry point and shared modules
+COPY --chown=agent:agent tools.mjs /app/tools.mjs
+COPY --chown=agent:agent tool-declarations.mjs /app/tool-declarations.mjs
+COPY --chown=agent:agent rick-api.mjs /app/rick-api.mjs
+COPY --chown=agent:agent mcp-playwright.mjs /app/mcp-playwright.mjs
+COPY --chown=agent:agent rick-mcp.mjs /app/rick-mcp.mjs
+COPY --chown=agent:agent opencode.json /app/opencode.json
+COPY --chown=agent:agent policy.mjs /app/policy.mjs
+COPY --chown=agent:agent prompt.mjs /app/prompt.mjs
+COPY --chown=agent:agent agent.mjs /app/agent.mjs
 
 USER agent
 WORKDIR /workspace
