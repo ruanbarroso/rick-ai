@@ -8,6 +8,7 @@ USER agent
 RUN cd /app && npm install --omit=dev
 USER root
 
+COPY --chown=agent:agent AGENTS.md /app/AGENTS.md
 COPY --chown=agent:agent tools.mjs /app/tools.mjs
 COPY --chown=agent:agent tool-declarations.mjs /app/tool-declarations.mjs
 COPY --chown=agent:agent rick-api.mjs /app/rick-api.mjs

@@ -27,6 +27,7 @@ RUN cd /app && npx playwright install chrome --with-deps
 RUN chmod -R a+rX /ms-playwright
 
 # Copy agent entry point and shared modules
+COPY --chown=agent:agent AGENTS.md /app/AGENTS.md
 COPY --chown=agent:agent tools.mjs /app/tools.mjs
 COPY --chown=agent:agent tool-declarations.mjs /app/tool-declarations.mjs
 COPY --chown=agent:agent rick-api.mjs /app/rick-api.mjs

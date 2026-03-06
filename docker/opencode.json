@@ -6,6 +6,7 @@
     }
   },
   "permission": "allow",
+  "instructions": ["/app/AGENTS.md"],
   "mcp": {
     "playwright": {
       "type": "local",

@@ -112,6 +112,7 @@ function buildOpencodeConfig() {
   return {
     $schema: "https://opencode.ai/config.json",
     permission: "allow",
+    instructions: ["/app/AGENTS.md"],
     lsp: {
       jdtls: {
         disabled: true,
