@@ -235,15 +235,16 @@ function providerForModel(opencodeModel) {
 }
 
 /**
- * Ordered fallback list: for each model the user might request, try these alternatives
- * when the primary provider's auth is unavailable.
+ * Global fallback order (strongest to weakest).
+ * When the requested model fails, we walk this list top-to-bottom skipping the
+ * model that already failed and any model whose provider has no credentials.
  */
-const MODEL_FALLBACK_ORDER = {
-  "claude-opus-4-6": ["gemini-3.1-pro", "gpt-5.3-codex"],
-  "gpt-5.3-codex": ["gemini-3.1-pro", "claude-opus-4-6"],
-  "gemini-3.1-pro": ["claude-opus-4-6", "gpt-5.3-codex"],
-  "gemini-3.0-flash": ["gemini-3.1-pro", "claude-opus-4-6", "gpt-5.3-codex"],
-};
+const GLOBAL_FALLBACK_ORDER = [
+  "claude-opus-4-6",
+  "gpt-5.3-codex",
+  "gemini-3.1-pro",
+  "gemini-3.0-flash",
+];
 
 /**
  * Given the requested model and available providers, return the best model to use.
@@ -256,9 +257,9 @@ function resolveModel(requestedModelId, availableProviders) {
     return { modelId: requestedModelId, opencodeModel };
   }
 
-  // Try fallbacks
-  const fallbacks = MODEL_FALLBACK_ORDER[requestedModelId] || Object.keys(MODEL_MAP).filter((k) => k !== requestedModelId);
-  for (const altModelId of fallbacks) {
+  // Walk the global fallback order, skipping the requested model (already failed)
+  for (const altModelId of GLOBAL_FALLBACK_ORDER) {
+    if (altModelId === requestedModelId) continue;
     const altOpencodeModel = pickModel(altModelId);
     const altProvider = providerForModel(altOpencodeModel);
     if (altProvider && availableProviders.has(altProvider)) {
@@ -553,13 +554,13 @@ async function handleTurn(payload) {
       images: Array.isArray(payload.images) ? payload.images : [],
     };
 
-    // Build the ordered list of models to try: primary + fallbacks
+    // Build the ordered list of models to try: primary first, then global fallback order
     const modelsToTry = [effectiveModelId];
-    const fallbacks = MODEL_FALLBACK_ORDER[requestedModel] || Object.keys(MODEL_MAP).filter((k) => k !== requestedModel);
-    for (const altModelId of fallbacks) {
+    for (const altModelId of GLOBAL_FALLBACK_ORDER) {
+      if (modelsToTry.includes(altModelId)) continue;
       const altOpencodeModel = pickModel(altModelId);
       const altProvider = providerForModel(altOpencodeModel);
-      if (altProvider && availableProviders.has(altProvider) && !modelsToTry.includes(altModelId)) {
+      if (altProvider && availableProviders.has(altProvider)) {
         modelsToTry.push(altModelId);
       }
     }
