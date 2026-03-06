@@ -165,8 +165,13 @@ async function fetchAgentJson(path) {
   }
 }
 
+/**
+ * Syncs LLM credentials into OpenCode's auth.json.
+ * Returns a Set of available provider keys (e.g. "anthropic", "openai", "google").
+ */
 async function syncOpenCodeAuth(forceRefresh = false) {
   const auth = {};
+  const available = new Set();
   const forceParam = forceRefresh ? "&force=true" : "";
 
   const claudeBundle = await fetchAgentJson(`/api/agent/llm-auth-bundle?provider=claude${forceParam}`);
@@ -177,11 +182,13 @@ async function syncOpenCodeAuth(forceRefresh = false) {
       refresh: String(claudeBundle.auth.refreshToken || ""),
       expires: Number(claudeBundle.auth.expiresAt || 0),
     };
+    available.add("anthropic");
   } else if (process.env.ANTHROPIC_API_KEY) {
     auth.anthropic = {
       type: "api",
       key: process.env.ANTHROPIC_API_KEY,
     };
+    available.add("anthropic");
   }
 
   const openAIBundle = await fetchAgentJson(`/api/agent/llm-auth-bundle?provider=openai${forceParam}`);
@@ -194,16 +201,68 @@ async function syncOpenCodeAuth(forceRefresh = false) {
     };
     if (openAIBundle.auth.accountId) oauth.accountId = String(openAIBundle.auth.accountId);
     auth.openai = oauth;
+    available.add("openai");
   } else if (process.env.OPENAI_API_KEY) {
     auth.openai = {
       type: "api",
       key: process.env.OPENAI_API_KEY,
     };
+    available.add("openai");
+  }
+
+  // Gemini uses GEMINI_API_KEY env var directly (not stored in auth.json)
+  if (process.env.GEMINI_API_KEY) {
+    available.add("google");
   }
 
   const dataDir = join(homedir(), ".local", "share", "opencode");
   await mkdir(dataDir, { recursive: true });
   await writeFile(join(dataDir, "auth.json"), JSON.stringify(auth, null, 2), { mode: 0o600 });
+  return available;
+}
+
+/**
+ * Maps an OpenCode model string (e.g. "anthropic/claude-opus-4-6") to its provider key.
+ */
+function providerForModel(opencodeModel) {
+  if (opencodeModel.startsWith("anthropic/")) return "anthropic";
+  if (opencodeModel.startsWith("openai/")) return "openai";
+  if (opencodeModel.startsWith("google/")) return "google";
+  return null;
+}
+
+/**
+ * Ordered fallback list: for each model the user might request, try these alternatives
+ * when the primary provider's auth is unavailable.
+ */
+const MODEL_FALLBACK_ORDER = {
+  "claude-opus-4-6": ["gpt-5.3-codex", "gemini-3.1-pro"],
+  "gpt-5.3-codex": ["claude-opus-4-6", "gemini-3.1-pro"],
+  "gemini-3.1-pro": ["claude-opus-4-6", "gpt-5.3-codex"],
+  "gemini-3.0-flash": ["gemini-3.1-pro", "claude-opus-4-6", "gpt-5.3-codex"],
+};
+
+/**
+ * Given the requested model and available providers, return the best model to use.
+ * Returns { modelId, opencodeModel } or null if no provider is available.
+ */
+function resolveModel(requestedModelId, availableProviders) {
+  const opencodeModel = pickModel(requestedModelId);
+  const provider = providerForModel(opencodeModel);
+  if (provider && availableProviders.has(provider)) {
+    return { modelId: requestedModelId, opencodeModel };
+  }
+
+  // Try fallbacks
+  const fallbacks = MODEL_FALLBACK_ORDER[requestedModelId] || Object.keys(MODEL_MAP).filter((k) => k !== requestedModelId);
+  for (const altModelId of fallbacks) {
+    const altOpencodeModel = pickModel(altModelId);
+    const altProvider = providerForModel(altOpencodeModel);
+    if (altProvider && availableProviders.has(altProvider)) {
+      return { modelId: altModelId, opencodeModel: altOpencodeModel };
+    }
+  }
+  return null;
 }
 
 function summarizeOutput(value) {
@@ -407,16 +466,32 @@ async function handleTurn(payload) {
   interrupted = false;
   toolStarted.clear();
 
-  const model = typeof payload.model === "string" ? payload.model : DEFAULT_MODEL_ID;
+  const requestedModel = typeof payload.model === "string" ? payload.model : DEFAULT_MODEL_ID;
   const mode = payload.mode === "plan" ? "plan" : "build";
   const userText = String(payload.text || "").trim();
 
-  emit({ type: "model_active", modelId: model, modelName: model });
+  emit({ type: "model_active", modelId: requestedModel, modelName: requestedModel });
   emitStatus(`Processando com OpenCode (${mode})...`);
 
   try {
-    await syncOpenCodeAuth();
+    const availableProviders = await syncOpenCodeAuth();
     lastRunHadAuthError = false;
+
+    // Resolve model: if requested provider's auth is missing, fall back to an available one
+    const resolved = resolveModel(requestedModel, availableProviders);
+    if (!resolved) {
+      const providerList = [...availableProviders].join(", ") || "nenhum";
+      const errorMsg = `Nenhum provedor LLM disponivel para o modelo '${requestedModel}'. Provedores com credenciais: ${providerList}. Configure OAuth ou API keys para pelo menos um provedor.`;
+      emitProviderError(errorMsg);
+      emitWaitingUser(errorMsg);
+      return;
+    }
+
+    const { modelId: effectiveModelId, opencodeModel } = resolved;
+    if (effectiveModelId !== requestedModel) {
+      emitStatus(`Modelo '${requestedModel}' indisponivel, usando '${effectiveModelId}' como fallback.`);
+      emit({ type: "model_active", modelId: effectiveModelId, modelName: effectiveModelId });
+    }
 
     let prompt = userText;
     if (!openCodeSessionId && historyMessages.length > 0) {
@@ -426,19 +501,44 @@ async function handleTurn(payload) {
 
     const runArgs = {
       text: prompt,
-      model,
+      model: effectiveModelId,
       mode,
       images: Array.isArray(payload.images) ? payload.images : [],
     };
 
-    let result = await runOpencodeTurn(runArgs);
+    let result;
+    try {
+      result = await runOpencodeTurn(runArgs);
+    } catch (runErr) {
+      // If the run failed AND we detected an auth error in the stream, retry with refreshed tokens
+      if (lastRunHadAuthError && !isSuperseded() && !interrupted) {
+        emitStatus("Renovando credenciais e tentando novamente...");
+        lastRunHadAuthError = false;
+        const freshProviders = await syncOpenCodeAuth(true);
+        toolStarted.clear();
 
-    // If the run reported an auth error, force-refresh tokens and retry once
+        // Re-resolve model with fresh providers (auth refresh may have made new providers available)
+        const freshResolved = resolveModel(requestedModel, freshProviders);
+        if (freshResolved) {
+          runArgs.model = freshResolved.modelId;
+        }
+
+        result = await runOpencodeTurn(runArgs);
+      } else {
+        throw runErr;
+      }
+    }
+
+    // If the run succeeded but reported auth errors (e.g. partial failure), refresh for next time
     if (lastRunHadAuthError && !isSuperseded() && !interrupted) {
       emitStatus("Renovando credenciais e tentando novamente...");
       lastRunHadAuthError = false;
-      await syncOpenCodeAuth(true);
+      const freshProviders = await syncOpenCodeAuth(true);
       toolStarted.clear();
+      const freshResolved = resolveModel(requestedModel, freshProviders);
+      if (freshResolved) {
+        runArgs.model = freshResolved.modelId;
+      }
       result = await runOpencodeTurn(runArgs);
     }
 
@@ -448,8 +548,9 @@ async function handleTurn(payload) {
       emitWaitingUser("Interrompido.");
       return;
     }
-    emitError(err?.message || "Falha ao processar com OpenCode");
-    emitWaitingUser("");
+    const errorMsg = err?.message || "Falha ao processar com OpenCode";
+    emitError(errorMsg);
+    emitWaitingUser(errorMsg);
   } finally {
     processingGeneration = 0;
   }

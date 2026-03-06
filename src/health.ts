@@ -693,6 +693,7 @@ async function handleAgentApiGet(
       }
 
       if (!auth) {
+        logger.info({ sessionId: session.sessionId, provider, forceRefresh }, "Agent API: LLM auth bundle not available (no OAuth)");
         jsonResponse(res, 404, { error: `OAuth nao disponivel para provider '${provider}'` });
         return;
       }
