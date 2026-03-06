@@ -26,6 +26,7 @@ let historyMessages = [];
 let interrupted = false;
 let toolSeq = 0;
 const toolStarted = new Set();
+let lastRunHadAuthError = false;
 
 function emit(obj) {
   process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -164,10 +165,11 @@ async function fetchAgentJson(path) {
   }
 }
 
-async function syncOpenCodeAuth() {
+async function syncOpenCodeAuth(forceRefresh = false) {
   const auth = {};
+  const forceParam = forceRefresh ? "&force=true" : "";
 
-  const claudeBundle = await fetchAgentJson("/api/agent/llm-auth-bundle?provider=claude");
+  const claudeBundle = await fetchAgentJson(`/api/agent/llm-auth-bundle?provider=claude${forceParam}`);
   if (claudeBundle?.auth?.type === "oauth") {
     auth.anthropic = {
       type: "oauth",
@@ -182,7 +184,7 @@ async function syncOpenCodeAuth() {
     };
   }
 
-  const openAIBundle = await fetchAgentJson("/api/agent/llm-auth-bundle?provider=openai");
+  const openAIBundle = await fetchAgentJson(`/api/agent/llm-auth-bundle?provider=openai${forceParam}`);
   if (openAIBundle?.auth?.type === "oauth") {
     const oauth = {
       type: "oauth",
@@ -214,23 +216,21 @@ function parseToolEvent(event) {
   const part = event?.part;
   if (!part || typeof part !== "object" || part.type !== "tool") return;
 
-  const callId = toolCallId(part.id);
+  // OpenCode uses part.callID as the tool-call identifier (part.id is the internal part ID)
+  const callId = toolCallId(part.callID || part.id);
   const name = String(part.tool || "tool");
   const state = part.state || {};
   const status = String(state.status || "");
   const input = state.input && typeof state.input === "object" ? state.input : {};
-  const startedAt = part.time?.start ? Number(new Date(part.time.start).getTime()) : 0;
-  const endedAt = part.time?.end ? Number(new Date(part.time.end).getTime()) : 0;
+
+  // Timestamps live inside state.time (not part.time) and are epoch-ms numbers
+  const time = state.time || {};
+  const startedAt = typeof time.start === "number" ? time.start : 0;
+  const endedAt = typeof time.end === "number" ? time.end : 0;
   const durationMs = startedAt > 0 && endedAt >= startedAt ? endedAt - startedAt : undefined;
 
-  if (status === "running") {
-    if (!toolStarted.has(callId)) {
-      toolStarted.add(callId);
-      emitToolStart(callId, name, input);
-    }
-    return;
-  }
-
+  // OpenCode only emits tool_use events for completed/error states (not running),
+  // but we still emit a start event first so the UI shows the tool invocation.
   if (!toolStarted.has(callId)) {
     toolStarted.add(callId);
     emitToolStart(callId, name, input);
@@ -328,8 +328,28 @@ function runOpencodeTurn({ text, model, mode, images }) {
           continue;
         }
 
+        if (event.type === "step_start") {
+          emitStatus("Pensando...");
+          continue;
+        }
+
+        if (event.type === "step_finish") {
+          continue;
+        }
+
         if (event.type === "error") {
-          const message = event.error ? JSON.stringify(event.error) : "erro do opencode";
+          // session.error has { error: { name, data? } }
+          const err = event.error;
+          let message;
+          if (err && typeof err === "object") {
+            message = (err.data && err.data.message) ? String(err.data.message) : String(err.name || JSON.stringify(err));
+            // Detect auth errors so handleTurn can retry with refreshed tokens
+            if (String(err.name || "").includes("Auth") || String(message).includes("401") || String(message).includes("auth")) {
+              lastRunHadAuthError = true;
+            }
+          } else {
+            message = "erro do opencode";
+          }
           emitProviderError(message);
         }
       }
@@ -396,6 +416,7 @@ async function handleTurn(payload) {
 
   try {
     await syncOpenCodeAuth();
+    lastRunHadAuthError = false;
 
     let prompt = userText;
     if (!openCodeSessionId && historyMessages.length > 0) {
@@ -403,12 +424,23 @@ async function handleTurn(payload) {
       historyMessages = [];
     }
 
-    const result = await runOpencodeTurn({
+    const runArgs = {
       text: prompt,
       model,
       mode,
       images: Array.isArray(payload.images) ? payload.images : [],
-    });
+    };
+
+    let result = await runOpencodeTurn(runArgs);
+
+    // If the run reported an auth error, force-refresh tokens and retry once
+    if (lastRunHadAuthError && !isSuperseded() && !interrupted) {
+      emitStatus("Renovando credenciais e tentando novamente...");
+      lastRunHadAuthError = false;
+      await syncOpenCodeAuth(true);
+      toolStarted.clear();
+      result = await runOpencodeTurn(runArgs);
+    }
 
     emitWaitingUser(result || "Tarefa concluida.");
   } catch (err) {
