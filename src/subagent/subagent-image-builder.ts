@@ -132,16 +132,12 @@ class SubagentImageBuilder {
 
   /**
    * Re-label the existing image with updated version metadata (no rebuild).
-   * Uses `docker build` with a trivial FROM+LABEL Dockerfile piped via stdin.
-   * Context is /tmp to avoid sending the entire project tree to the daemon.
+   * Uses `docker tag` (zero new layers) to avoid accumulating overlay depth
+   * that leads to "max depth exceeded" errors on overlay2 storage driver.
    */
   private async relabel(imageRef: string, targetTag: string, local: { hash: string; version: string }): Promise<void> {
     logger.info({ hash: local.hash, version: local.version, imageRef }, "Re-labeling subagent image (content unchanged, version updated)");
-    const { execSync } = await import("node:child_process");
-    execSync(
-      `printf 'FROM ${imageRef}\\nLABEL agent.bundle.hash=${local.hash} rick.version=${local.version}\\n' | docker build -t ${targetTag} -f - /tmp`,
-      { timeout: 30_000 },
-    );
+    await execFileAsync("docker", ["tag", imageRef, targetTag], { timeout: 10_000 });
     execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 }).catch(() => {});
     logger.info({ hash: local.hash, version: local.version }, "subagent image re-labeled successfully");
   }
@@ -183,13 +179,13 @@ class SubagentImageBuilder {
 
   private async buildAndPromote(local: { hash: string; version: string; dockerfilePath: string; fastDockerfilePath: string; dockerDir: string }): Promise<void> {
     const hasBaseImage = await this.imageExists(BASE_IMAGE);
-    const selectedDockerfile = hasBaseImage ? local.fastDockerfilePath : local.dockerfilePath;
-    const buildMode = hasBaseImage ? "fast" : "bootstrap";
+    let selectedDockerfile = hasBaseImage ? local.fastDockerfilePath : local.dockerfilePath;
+    let buildMode = hasBaseImage ? "fast" : "bootstrap";
 
     // Bootstrap builds install Playwright + Chrome + system deps (~300MB+) and
     // can easily take 15-20 minutes on modest hardware or slow networks.
     // Fast builds only copy source files and run `npm install`, finishing in ~2 min.
-    const buildTimeout = buildMode === "bootstrap" ? 1_800_000 : 600_000; // 30 min / 10 min
+    let buildTimeout = buildMode === "bootstrap" ? 1_800_000 : 600_000; // 30 min / 10 min
 
     logger.info(
       {
@@ -203,22 +199,54 @@ class SubagentImageBuilder {
       "Building subagent image",
     );
 
-    await execFileAsync(
-      "docker",
-      [
-        "build",
-        "-t",
-        NEXT_IMAGE,
-        "--label",
-        `agent.bundle.hash=${local.hash}`,
-        "--label",
-        `rick.version=${local.version}`,
-        "-f",
-        selectedDockerfile,
-        local.dockerDir,
-      ],
-      { timeout: buildTimeout, maxBuffer: 50 * 1024 * 1024 },
-    );
+    try {
+      await execFileAsync(
+        "docker",
+        [
+          "build",
+          "-t",
+          NEXT_IMAGE,
+          "--label",
+          `agent.bundle.hash=${local.hash}`,
+          "--label",
+          `rick.version=${local.version}`,
+          "-f",
+          selectedDockerfile,
+          local.dockerDir,
+        ],
+        { timeout: buildTimeout, maxBuffer: 50 * 1024 * 1024 },
+      );
+    } catch (buildErr: unknown) {
+      const errMsg = String((buildErr as Error)?.message || buildErr);
+      // overlay2 "max depth exceeded": base image has too many layers from
+      // repeated fast rebuilds / relabels.  Drop the stale base and retry
+      // with a full bootstrap build from node:22-slim.
+      if (buildMode === "fast" && /max depth exceeded/i.test(errMsg)) {
+        logger.warn("Fast build hit overlay2 max depth — falling back to full bootstrap build");
+        try { await execFileAsync("docker", ["rmi", "-f", BASE_IMAGE], { timeout: 15_000 }); } catch { /* ignore */ }
+        selectedDockerfile = local.dockerfilePath;
+        buildMode = "bootstrap";
+        buildTimeout = 1_800_000;
+        await execFileAsync(
+          "docker",
+          [
+            "build",
+            "-t",
+            NEXT_IMAGE,
+            "--label",
+            `agent.bundle.hash=${local.hash}`,
+            "--label",
+            `rick.version=${local.version}`,
+            "-f",
+            selectedDockerfile,
+            local.dockerDir,
+          ],
+          { timeout: buildTimeout, maxBuffer: 50 * 1024 * 1024 },
+        );
+      } else {
+        throw buildErr;
+      }
+    }
 
     await execFileAsync("docker", ["tag", NEXT_IMAGE, CURRENT_IMAGE], { timeout: 10_000 });
     await execFileAsync("docker", ["tag", NEXT_IMAGE, LEGACY_IMAGE], { timeout: 10_000 });
@@ -232,7 +260,7 @@ class SubagentImageBuilder {
     execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 }).catch(() => {});
 
     this.readyFingerprint = `${local.hash}|${local.version}`;
-    logger.info({ hash: local.hash, version: local.version }, "subagent image built and promoted successfully");
+    logger.info({ hash: local.hash, version: local.version, buildMode }, "subagent image built and promoted successfully");
   }
 
   private async buildWithLock(local: { hash: string; version: string; fingerprint: string; dockerfilePath: string; fastDockerfilePath: string; dockerDir: string }): Promise<void> {

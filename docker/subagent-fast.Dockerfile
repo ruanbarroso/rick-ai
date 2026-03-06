@@ -8,16 +8,10 @@ USER agent
 RUN cd /app && npm install --omit=dev
 USER root
 
-COPY --chown=agent:agent AGENTS.md /app/AGENTS.md
-COPY --chown=agent:agent tools.mjs /app/tools.mjs
-COPY --chown=agent:agent tool-declarations.mjs /app/tool-declarations.mjs
-COPY --chown=agent:agent rick-api.mjs /app/rick-api.mjs
-COPY --chown=agent:agent mcp-playwright.mjs /app/mcp-playwright.mjs
-COPY --chown=agent:agent rick-mcp.mjs /app/rick-mcp.mjs
-COPY --chown=agent:agent opencode.json /app/opencode.json
-COPY --chown=agent:agent policy.mjs /app/policy.mjs
-COPY --chown=agent:agent prompt.mjs /app/prompt.mjs
-COPY --chown=agent:agent agent.mjs /app/agent.mjs
+# Copy all runtime files in a single layer to minimise overlay depth.
+COPY --chown=agent:agent AGENTS.md tools.mjs tool-declarations.mjs \
+     rick-api.mjs mcp-playwright.mjs rick-mcp.mjs opencode.json \
+     policy.mjs prompt.mjs agent.mjs /app/
 
 USER agent
 WORKDIR /workspace
