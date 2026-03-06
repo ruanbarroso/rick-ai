@@ -1,11 +1,12 @@
 FROM subagent-base:chrome
 
-USER root
-
 # Fast rebuild path: refresh runtime deps + copy bridge/runtime files.
-COPY subagent.package.json /app/package.json
-RUN cd /app && npm install --omit=dev \
-    && chown -R agent:agent /app/package.json /app/package-lock.json /app/node_modules 2>/dev/null; true
+# Run npm install as agent (base image already owns /app as agent:agent)
+# to avoid costly chown -R on node_modules over slow overlay+HDD.
+COPY --chown=agent:agent subagent.package.json /app/package.json
+USER agent
+RUN cd /app && npm install --omit=dev
+USER root
 
 COPY --chown=agent:agent tools.mjs /app/tools.mjs
 COPY --chown=agent:agent tool-declarations.mjs /app/tool-declarations.mjs

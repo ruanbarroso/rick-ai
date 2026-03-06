@@ -13,17 +13,17 @@ RUN useradd -m -u 1001 -s /bin/bash agent \
     && chown -R agent:agent /app /ms-playwright
 
 # Install runtime deps in a cache-friendly layer.
-# Keep this before copying frequently changed agent source files.
-COPY subagent.package.json /app/package.json
+# Run npm install as agent (owns /app) to avoid costly chown -R on node_modules.
+COPY --chown=agent:agent subagent.package.json /app/package.json
+USER agent
 RUN cd /app && npm install --omit=dev
+USER root
 
 # Install Playwright browsers (used for web browsing tasks)
 # Must run after setting PLAYWRIGHT_BROWSERS_PATH so runtime and install path match.
 # Chrome (not Chromium) for better site compatibility with SPAs, iframes, etc.
+# Runs as root because --with-deps installs system packages via apt.
 RUN cd /app && npx playwright install chrome --with-deps
-
-# Fix ownership of npm-installed files (created as root)
-RUN chown -R agent:agent /app/package.json /app/package-lock.json /app/node_modules 2>/dev/null; true
 RUN chmod -R a+rX /ms-playwright
 
 # Copy agent entry point and shared modules
