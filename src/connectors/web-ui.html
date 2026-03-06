@@ -2380,7 +2380,7 @@
       </div>
     </div>
 
-    <!-- AI Providers -->
+      <!-- AI Providers -->
     <div class="settings-section">
       <div class="settings-section-header collapsed" onclick="toggleSection(this)">
         <h3>Provedores de IA</h3>
@@ -2389,9 +2389,24 @@
       <div class="settings-section-body collapsed">
         <div class="provider-block">
           <div class="provider-head">
-            <div class="provider-name">Google Gemini (obrigatorio)</div>
+            <div class="provider-name">MiniMax M2.5 (gratuito)</div>
+            <span class="settings-status optional" id="minimax-connection-status"><span class="status-dot gray"></span>Nao configurado</span>
+          </div>
+          <p class="settings-hint" style="margin-bottom:8px;">Provedor gratuito usado por padrao. Nenhuma chave necesaria.</p>
+          <div class="settings-input-wrap">
+            <input type="password" class="settings-input" id="setting-minimax-key" placeholder="Chave de API (opcional)" onblur="autoSaveApiKey('minimax')">
+            <button class="eye-toggle" onclick="toggleEye(this, 'setting-minimax-key')">
+              <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="provider-block">
+          <div class="provider-head">
+            <div class="provider-name">Google Gemini (opcional)</div>
             <span class="settings-status optional" id="gemini-connection-status"><span class="status-dot gray"></span>Nao configurado</span>
           </div>
+          <p class="settings-hint" style="margin-bottom:8px;">Usado como fallback se MiniMax falhar. Obtenha chave em https://aistudio.google.com/apikey</p>
           <div class="settings-input-wrap">
             <input type="password" class="settings-input" id="setting-gemini-key" placeholder="Chave de API" onblur="autoSaveApiKey('gemini')">
             <button class="eye-toggle" onclick="toggleEye(this, 'setting-gemini-key')">
@@ -4620,6 +4635,9 @@ function populateSettings(settings) {
   if (settings.geminiApiKey) {
     document.getElementById('setting-gemini-key').value = settings.geminiApiKey;
   }
+  if (settings.minimaxApiKey) {
+    document.getElementById('setting-minimax-key').value = settings.minimaxApiKey;
+  }
   if (settings.anthropicApiKey) {
     document.getElementById('setting-anthropic-key').value = settings.anthropicApiKey;
   }
@@ -4633,6 +4651,7 @@ function populateSettings(settings) {
     document.getElementById('setting-vector-database-url').value = settings.vectorDatabaseUrl;
   }
   var geminiConnected = !!settings.geminiApiKeySet;
+  var minimaxConnected = !!settings.minimaxApiKeySet;
   var anthropicOAuthConnected = !!settings.anthropicOAuthConnected;
   var openaiOAuthConnected = !!settings.openaiOAuthConnected;
   var anthropicApiConnected = !!settings.anthropicApiKeySet;
@@ -4644,11 +4663,13 @@ function populateSettings(settings) {
   oauthConnected = anthropicOAuthConnected || openaiOAuthConnected;
 
   // One badge per provider header
+  setStatusBadge('minimax-connection-status', minimaxConnected);
   setStatusBadge('gemini-connection-status', geminiConnected);
   setStatusBadge('anthropic-connection-status', anthropicAny);
   setStatusBadge('openai-connection-status', openaiAny);
 
   // API key input visual feedback
+  setApiKeyInputState('setting-minimax-key', minimaxConnected);
   setApiKeyInputState('setting-gemini-key', geminiConnected);
   setApiKeyInputState('setting-anthropic-key', anthropicApiConnected);
   setApiKeyInputState('setting-openai-key', openaiApiConnected);
@@ -4735,8 +4756,8 @@ function setApiKeyInputState(inputId, isValid) {
 }
 
 function autoSaveApiKey(provider) {
-  var keyMap = { gemini: 'setting-gemini-key', anthropic: 'setting-anthropic-key', openai: 'setting-openai-key' };
-  var settingMap = { gemini: 'geminiApiKey', anthropic: 'anthropicApiKey', openai: 'openaiApiKey' };
+  var keyMap = { minimax: 'setting-minimax-key', gemini: 'setting-gemini-key', anthropic: 'setting-anthropic-key', openai: 'setting-openai-key' };
+  var settingMap = { minimax: 'minimaxApiKey', gemini: 'geminiApiKey', anthropic: 'anthropicApiKey', openai: 'openaiApiKey' };
   var input = document.getElementById(keyMap[provider]);
   if (!input) return;
   var val = input.value.trim();
@@ -5193,10 +5214,12 @@ function toggleEye(btn, inputId) {
 
 function saveAIProviders() {
   var settings = {};
+  var minimax = document.getElementById('setting-minimax-key').value.trim();
   var gemini = document.getElementById('setting-gemini-key').value.trim();
   var anthropic = document.getElementById('setting-anthropic-key').value.trim();
   var openai = document.getElementById('setting-openai-key').value.trim();
 
+  if (minimax && minimax.indexOf('****') === -1) settings.minimaxApiKey = minimax;
   if (gemini && gemini.indexOf('****') === -1) settings.geminiApiKey = gemini;
 
   if (providerModes.anthropic === 'api') {

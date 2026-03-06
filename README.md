@@ -80,6 +80,7 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 
 | Model | Provider | Used For |
 |-------|----------|----------|
+| MiniMax M2.5 Free | MiniMax (OpenCode Zen) | Default chat (when Gemini not configured) |
 | Gemini 3.0 Flash | Google | Default chat, classifier, audio transcription, memory extraction |
 | Claude Opus 4.6 | Anthropic | Sub-agent primary (via OAuth) |
 | GPT-5.3 Codex | OpenAI | Sub-agent fallback (via OAuth) |
@@ -87,6 +88,8 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 | Gemini 3.0 Flash | Google | Sub-agent fallback |
 
 No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect via your existing Pro/Max subscriptions. API key fallback models (`claude-opus-4-6`, `gpt-5.3-codex`) are used when OAuth is not configured.
+
+The main session uses MiniMax M2.5 Free by default (no API key required). If Gemini is configured, it's used as primary with MiniMax as fallback.
 
 OAuth refresh is coordinated with in-memory deduplication per provider/user, avoiding duplicate refresh calls within the running Rick instance.
 
@@ -333,8 +336,11 @@ Host Docker (cluster-24g)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GEMINI_API_KEY` | Yes | — | Google AI Studio API key |
+| `GEMINI_API_KEY` | No | — | Google AI Studio API key. If not set, MiniMax is used as primary provider. |
 | `GEMINI_MODEL` | No | `gemini-3-flash-preview` | Override Gemini model name |
+| `MINIMAX_API_KEY` | No | — | MiniMax API key. If not set, uses OpenCode Zen free tier. |
+| `MINIMAX_BASE_URL` | No | `https://opencode.ai/zen` | MiniMax API base URL |
+| `MINIMAX_MODEL` | No | `minimax-m2.5-free` | MiniMax model to use |
 | `ANTHROPIC_API_KEY` | No | — | Anthropic API key (alternative to OAuth) |
 | `ANTHROPIC_MODEL` | No | `claude-opus-4-6` | Override Anthropic model name |
 | `OPENAI_API_KEY` | No | — | OpenAI API key (alternative to OAuth) |

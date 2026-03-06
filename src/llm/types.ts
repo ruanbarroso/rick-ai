@@ -35,12 +35,12 @@ export interface LLMProvider {
 export interface ModelConfig {
   id: string;
   alias: string;
-  provider: "gemini";
+  provider: "gemini" | "minimax";
   modelId: string;
 }
 
 /**
- * Main session models — Gemini only.
+ * Main session models — Gemini + MiniMax fallback.
  * Claude and OpenAI are used exclusively in sub-agents
  * (docker/agent.mjs), not in the main session.
  */
@@ -56,5 +56,11 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     alias: "Gemini 3.1 Pro",
     provider: "gemini",
     modelId: "gemini-3.1-pro-preview",
+  },
+  {
+    id: "minimax-free",
+    alias: "MiniMax M2.5 Free",
+    provider: "minimax",
+    modelId: "minimax-m2.5-free",
   },
 ];

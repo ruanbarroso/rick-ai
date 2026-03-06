@@ -31,6 +31,11 @@ function buildConfig() {
       apiKey: process.env.OPENAI_API_KEY || "",
       model: process.env.OPENAI_MODEL || "gpt-5.3-codex",
     },
+    minimax: {
+      apiKey: process.env.MINIMAX_API_KEY || "",
+      baseUrl: process.env.MINIMAX_BASE_URL || "https://opencode.ai/zen",
+      model: process.env.MINIMAX_MODEL || "minimax-m2.5-free",
+    },
 
     // Database
     /** PostgreSQL connection string. If empty, Rick uses SQLite. */
@@ -76,8 +81,10 @@ export function validateConfig(): void {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  if (!config.gemini.apiKey) {
-    errors.push("GEMINI_API_KEY is required. Get one at https://aistudio.google.com/apikey");
+  if (!config.gemini.apiKey && !config.minimax.apiKey) {
+    warnings.push("Nenhum provedor LLM configurado. Configure GEMINI_API_KEY ou MINIMAX_API_KEY para usar o chat.");
+  } else if (!config.gemini.apiKey) {
+    warnings.push("GEMINI_API_KEY não configurado — usando MiniMax como provedor principal.");
   }
   if (!config.webAuthPassword) {
     warnings.push("WEB_AUTH_PASSWORD not set — Web UI will be disabled");

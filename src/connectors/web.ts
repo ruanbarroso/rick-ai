@@ -1318,6 +1318,7 @@ export class WebConnector implements Connector {
         val && val.length > 6 ? val.substring(0, 3) + "****" + val.substring(val.length - 3) : val ? "****" : "";
 
       // Read current effective values (process.env has config store + .env merged)
+      const minimaxKey = process.env.MINIMAX_API_KEY || "";
       const geminiKey = process.env.GEMINI_API_KEY || "";
       const anthropicKey = process.env.ANTHROPIC_API_KEY || "";
       const openaiKey = process.env.OPENAI_API_KEY || "";
@@ -1352,6 +1353,8 @@ export class WebConnector implements Connector {
       this.send(ws, {
         type: "settings",
         settings: {
+          minimaxApiKey: mask(minimaxKey),
+          minimaxApiKeySet: !!minimaxKey,
           geminiApiKey: mask(geminiKey),
           geminiApiKeySet: !!geminiKey,
           anthropicApiKey: mask(anthropicKey),
