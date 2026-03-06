@@ -387,7 +387,14 @@ function runOpencodeTurn({ text, model, mode, images }) {
       cwd: "/workspace",
       env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true, // Create a new process group so we can kill the entire tree
     });
+
+    // Kill the entire process group (npx → opencode → MCP servers → Chrome).
+    // With detached: true, child.pid is the process group leader.
+    const killTree = () => {
+      try { process.kill(-child.pid, "SIGTERM"); } catch { /* ignore */ }
+    };
 
     activeProcess = child;
     const collectedText = [];
@@ -401,7 +408,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     // (--print-logs) and stdout JSON error events — no need for an aggressive timeout here.
     const hangTimer = setTimeout(() => {
       if (!gotMeaningfulOutput && !finished) {
-        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        killTree();
         finish(new Error("LLM hang: nenhuma resposta em " + (LLM_HANG_TIMEOUT_MS / 1000) + "s — processo travado"));
       }
     }, LLM_HANG_TIMEOUT_MS);
@@ -461,7 +468,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
             if (isRateLimitError(message)) {
               lastRunHadRateLimitError = true;
               // Kill the process immediately — no point retrying the same provider
-              try { child.kill("SIGTERM"); } catch { /* ignore */ }
+              killTree();
               finish(new Error(`Rate limit: ${message}`));
               return;
             }
@@ -480,7 +487,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
       if (isRateLimitError(stderrBuffer) && !lastRunHadRateLimitError) {
         lastRunHadRateLimitError = true;
         // Kill immediately - no point waiting for timeout when we know it's rate limited
-        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        killTree();
         finish(new Error("Rate limit detectado nos logs do OpenCode"));
       }
     });
@@ -502,7 +509,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
     activeResolve = () => {
       try {
-        child.kill("SIGTERM");
+        killTree();
       } catch {
         // ignore
       }
