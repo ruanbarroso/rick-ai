@@ -120,7 +120,7 @@ function buildOpencodeConfig() {
     mcp: {
       playwright: {
         type: "local",
-        command: ["npx", "-y", "@playwright/mcp@latest", "--browser", "chrome"],
+        command: ["node", "/app/node_modules/@playwright/mcp/cli.js", "--browser", "chrome", "--no-sandbox"],
         enabled: true,
       },
       rick: {

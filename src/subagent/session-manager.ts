@@ -943,7 +943,7 @@ export class SessionManager {
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
     agentEnv.RICK_PLAYWRIGHT_MCP_COMMAND = process.env.RICK_PLAYWRIGHT_MCP_COMMAND
-      || JSON.stringify(["node", "/app/node_modules/@playwright/mcp/cli.js", "--browser", "chromium"]);
+      || JSON.stringify(["node", "/app/node_modules/@playwright/mcp/cli.js", "--browser", "chrome", "--no-sandbox"]);
 
     const gitIdentity = await this.buildSubagentGitIdentity(session, agentEnv);
     agentEnv.GIT_AUTHOR_NAME = gitIdentity.name;
