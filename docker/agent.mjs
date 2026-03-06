@@ -547,7 +547,6 @@ async function handleTurn(payload) {
   const userText = String(payload.text || "").trim();
 
   emit({ type: "model_active", modelId: requestedModel, modelName: requestedModel });
-  emitStatus(`Processando com OpenCode (${mode})...`);
 
   try {
     const availableProviders = await syncOpenCodeAuth();
