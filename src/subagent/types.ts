@@ -30,8 +30,7 @@ export interface PendingDelegation {
 export const SUBAGENT_MODELS = [
   { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
   { id: "gpt-5.3-codex", label: "GPT 5.3 Codex" },
-  { id: "gemini-3.1-pro", label: "Gemini 3.1 Pro" },
-  { id: "gemini-3.0-flash", label: "Gemini 3.0 Flash" },
+  { id: "minimax-m2.5-free", label: "MiniMax M2.5 Free" },
 ] as const;
 
 export type SubAgentModelId = (typeof SUBAGENT_MODELS)[number]["id"];

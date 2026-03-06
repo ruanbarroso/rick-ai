@@ -9,8 +9,7 @@ import { homedir } from "node:os";
 const MODEL_MAP = {
   "claude-opus-4-6": "anthropic/claude-opus-4-6",
   "gpt-5.3-codex": "openai/gpt-5.3-codex",
-  "gemini-3.1-pro": "google/gemini-3.1-pro-preview",
-  "gemini-3.0-flash": "google/gemini-3-flash-preview",
+  "minimax-m2.5-free": "opencode/minimax-m2.5-free",
 };
 
 const DEFAULT_MODEL_ID = "claude-opus-4-6";
@@ -133,6 +132,8 @@ function buildOpencodeConfig() {
   };
 }
 
+
+
 function buildHistoryPrelude() {
   if (!Array.isArray(historyMessages) || historyMessages.length === 0) return "";
   const lines = [
@@ -218,6 +219,15 @@ async function syncOpenCodeAuth(forceRefresh = false) {
     available.add("google");
   }
 
+  // OpenCode Zen: MiniMax M2.5 Free is available through the Zen gateway.
+  // Uses MINIMAX_API_KEY if set, otherwise a dummy key (free tier doesn't require auth).
+  const zenKey = process.env.MINIMAX_API_KEY || "dummy-key-for-free-tier";
+  auth.opencode = {
+    type: "api",
+    key: zenKey,
+  };
+  available.add("opencode");
+
   const dataDir = join(homedir(), ".local", "share", "opencode");
   await mkdir(dataDir, { recursive: true });
   await writeFile(join(dataDir, "auth.json"), JSON.stringify(auth, null, 2), { mode: 0o600 });
@@ -231,6 +241,7 @@ function providerForModel(opencodeModel) {
   if (opencodeModel.startsWith("anthropic/")) return "anthropic";
   if (opencodeModel.startsWith("openai/")) return "openai";
   if (opencodeModel.startsWith("google/")) return "google";
+  if (opencodeModel.startsWith("opencode/")) return "opencode";
   return null;
 }
 
@@ -242,8 +253,7 @@ function providerForModel(opencodeModel) {
 const GLOBAL_FALLBACK_ORDER = [
   "claude-opus-4-6",
   "gpt-5.3-codex",
-  "gemini-3.1-pro",
-  "gemini-3.0-flash",
+  "minimax-m2.5-free",
 ];
 
 /**
@@ -690,7 +700,7 @@ function handleHistory(payload) {
 
 emit({
   type: "ready",
-  providers: ["claude-opus-4-6", "gpt-5.3-codex", "gemini-3.1-pro", "gemini-3.0-flash"],
+  providers: ["claude-opus-4-6", "gpt-5.3-codex", "minimax-m2.5-free"],
   tools: ["opencode"],
 });
 
