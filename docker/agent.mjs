@@ -220,8 +220,10 @@ async function syncOpenCodeAuth(forceRefresh = false) {
   }
 
   // OpenCode Zen: MiniMax M2.5 Free is available through the Zen gateway.
-  // Uses MINIMAX_API_KEY if set, otherwise a dummy key (free tier doesn't require auth).
-  const zenKey = process.env.MINIMAX_API_KEY || "dummy-key-for-free-tier";
+  // The Zen server recognises the literal key "public" as anonymous access
+  // for models flagged allowAnonymous (free-tier models like minimax-m2.5-free).
+  // If the user has a real Zen API key in OPENCODE_ZEN_API_KEY, use that instead.
+  const zenKey = process.env.OPENCODE_ZEN_API_KEY || "public";
   auth.opencode = {
     type: "api",
     key: zenKey,
@@ -652,7 +654,7 @@ async function handleTurn(payload) {
       throw lastError;
     }
 
-    emitWaitingUser(result || "Tarefa concluida.");
+    emitWaitingUser(result || "");
   } catch (err) {
     if (String(err?.message || "").includes("Interrupted")) {
       emitWaitingUser("Interrompido.");
