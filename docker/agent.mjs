@@ -17,7 +17,7 @@ const DEFAULT_MODEL_ID = "claude-opus-4-6";
 const HISTORY_MAX_MESSAGES = 120;
 
 /** Max time to wait for the first meaningful LLM output (text or tool_use) before killing the process. */
-const LLM_FIRST_OUTPUT_TIMEOUT_MS = 120_000; // 2 minutes
+const LLM_FIRST_OUTPUT_TIMEOUT_MS = 30_000; // 30 seconds (matches OpenCode's max retry delay)
 
 let currentGeneration = 0;
 let processingGeneration = 0;
@@ -325,6 +325,9 @@ function isRateLimitError(message) {
   return lower.includes("usage limit") || lower.includes("rate limit") || lower.includes("429") || lower.includes("quota") || lower.includes("too many requests");
 }
 
+/** Max consecutive rate limit errors before giving up on this provider. */
+const MAX_RATE_LIMIT_RETRIES = 2;
+
 let lastRunHadRateLimitError = false;
 
 function runOpencodeTurn({ text, model, mode, images }) {
@@ -332,6 +335,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const configContent = JSON.stringify(buildOpencodeConfig());
     const selectedModel = pickModel(model);
     lastRunHadRateLimitError = false;
+    let rateLimitRetryCount = 0;
 
     const args = [
       "opencode-ai",
@@ -379,6 +383,16 @@ function runOpencodeTurn({ text, model, mode, images }) {
     let gotMeaningfulOutput = false;
     let finished = false;
 
+    // Kill function for rate limit detection
+    const killForRateLimit = () => {
+      rateLimitRetryCount++;
+      if (rateLimitRetryCount >= MAX_RATE_LIMIT_RETRIES && !finished) {
+        lastRunHadRateLimitError = true;
+        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        finish(new Error(`Rate limit: ${MAX_RATE_LIMIT_RETRIES} tentativas excedidas`));
+      }
+    };
+
     // Timeout: if no meaningful output (text or tool_use) within LLM_FIRST_OUTPUT_TIMEOUT_MS,
     // kill the process. This catches silent retry loops (e.g. rate limit with exponential backoff).
     const firstOutputTimer = setTimeout(() => {
@@ -391,6 +405,11 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
     child.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk.toString();
+      // Also check for rate limit patterns in raw stdout (not just NDJSON events)
+      // OpenCode may log errors to stdout without emitting NDJSON
+      if (isRateLimitError(stdoutBuffer)) {
+        killForRateLimit();
+      }
       let newlineIndex = stdoutBuffer.indexOf("\n");
       while (newlineIndex >= 0) {
         const rawLine = stdoutBuffer.slice(0, newlineIndex).trim();
@@ -460,7 +479,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
       stderrBuffer += chunk.toString();
       // Also check stderr for rate limit patterns (OpenCode may log errors there)
       if (isRateLimitError(stderrBuffer)) {
-        lastRunHadRateLimitError = true;
+        killForRateLimit();
       }
     });
 
