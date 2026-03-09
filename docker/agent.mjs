@@ -17,11 +17,7 @@ const HISTORY_MAX_MESSAGES = 120;
 
 
 
-/** Idle timeout: kill the process if it produces no new output for this long.
- *  Resets on every meaningful event (text, tool_use, step_start).
- *  Catches providers that hang mid-turn (e.g. Zen API stops responding
- *  after tool results are sent back for the next generation round). */
-const LLM_IDLE_TIMEOUT_MS = 120_000; // 2 minutes of silence → kill
+
 
 let currentGeneration = 0;
 let processingGeneration = 0;
@@ -440,22 +436,6 @@ function runOpencodeTurn({ text, model, mode, images }) {
     let gotMeaningfulOutput = false;
     let finished = false;
 
-    // Rolling idle timer: resets every time the process emits meaningful output.
-    // If the process goes silent for LLM_IDLE_TIMEOUT_MS (e.g. Zen API hangs
-    // mid-turn after tool results), kill it so the cascade can try another model.
-    let idleTimer = setTimeout(onIdle, LLM_IDLE_TIMEOUT_MS);
-    function resetIdleTimer() {
-      clearTimeout(idleTimer);
-      idleTimer = setTimeout(onIdle, LLM_IDLE_TIMEOUT_MS);
-    }
-    function onIdle() {
-      if (finished) return;
-      emitStatus(`[diag] Idle timeout (${LLM_IDLE_TIMEOUT_MS / 1000}s) — treating as rate limit for cascade`);
-      lastRunHadRateLimitError = true; // treat prolonged silence as provider issue → cascade
-      killTree();
-      finish(new Error("LLM idle timeout: nenhuma resposta em " + (LLM_IDLE_TIMEOUT_MS / 1000) + "s — provedor parou de responder"));
-    }
-
     child.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk.toString();
       let newlineIndex = stdoutBuffer.indexOf("\n");
@@ -478,31 +458,26 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
         if (event.type === "tool_use") {
           gotMeaningfulOutput = true;
-          resetIdleTimer();
           parseToolEvent(event);
           continue;
         }
 
         if (event.type === "text") {
           gotMeaningfulOutput = true;
-          resetIdleTimer();
           parseTextEvent(event, collectedText);
           continue;
         }
 
         if (event.type === "step_start") {
-          resetIdleTimer();
           emitStatus("Pensando...");
           continue;
         }
 
         if (event.type === "step_finish") {
-          resetIdleTimer();
           continue;
         }
 
         if (event.type === "error") {
-          resetIdleTimer();
           // OpenCode --format json emits: { type: "error", error: { name, data: { message, statusCode, isRetryable, ... } } }
           const err = event.error;
           let message;
@@ -554,7 +529,6 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const finish = (err, resultText = "") => {
       if (finished) return;
       finished = true;
-      clearTimeout(idleTimer);
       if (activeResolve) {
         activeResolve = null;
       }
