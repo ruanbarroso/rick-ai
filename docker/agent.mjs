@@ -16,11 +16,12 @@ const DEFAULT_MODEL_ID = "claude-opus-4-6";
 const HISTORY_MAX_MESSAGES = 120;
 
 /** Models with short-lived rate limits that clear after a few seconds.
- *  For these, we retry up to RATE_LIMIT_MAX_RETRIES times with a delay
- *  instead of cascading or failing on the first hit. */
+ *  For these, we count consecutive rate-limit errors and only kill
+ *  after RATE_LIMIT_MAX_RETRIES hits. If a normal event arrives in
+ *  between (text, tool_use, step_start), the counter resets — OpenCode
+ *  recovered on its own via its internal exponential backoff. */
 const RATE_LIMIT_TOLERANT_MODELS = new Set(["minimax-m2.5-free"]);
 const RATE_LIMIT_MAX_RETRIES = 3;
-const RATE_LIMIT_RETRY_DELAY_MS = 10_000; // 10 seconds between retries
 
 /** Idle timeout: kill the process if it produces no new output for this long.
  *  Resets on every meaningful event (text, tool_use, step_start).
@@ -354,6 +355,9 @@ function runOpencodeTurn({ text, model, mode, images }) {
   return new Promise((resolve, reject) => {
     const configContent = JSON.stringify(buildOpencodeConfig());
     const selectedModel = pickModel(model);
+    const isTolerant = RATE_LIMIT_TOLERANT_MODELS.has(model);
+    const maxRateLimits = isTolerant ? RATE_LIMIT_MAX_RETRIES : 1;
+    let rateLimitCount = 0;
     lastRunHadRateLimitError = false;
 
     const args = [
@@ -449,6 +453,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
         if (event.type === "tool_use") {
           gotMeaningfulOutput = true;
+          rateLimitCount = 0; // recovered — reset consecutive rate limit counter
           resetIdleTimer();
           parseToolEvent(event);
           continue;
@@ -456,12 +461,14 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
         if (event.type === "text") {
           gotMeaningfulOutput = true;
+          rateLimitCount = 0; // recovered — reset consecutive rate limit counter
           resetIdleTimer();
           parseTextEvent(event, collectedText);
           continue;
         }
 
         if (event.type === "step_start") {
+          rateLimitCount = 0; // recovered — reset consecutive rate limit counter
           resetIdleTimer();
           emitStatus("Pensando...");
           continue;
@@ -485,11 +492,16 @@ function runOpencodeTurn({ text, model, mode, images }) {
             }
             // Detect rate limit / usage limit errors for provider cascade
             if (isRateLimitError(message)) {
-              lastRunHadRateLimitError = true;
-              // Kill the process immediately — no point retrying the same provider
-              killTree();
-              finish(new Error(`Rate limit: ${message}`));
-              return;
+              rateLimitCount++;
+              if (rateLimitCount >= maxRateLimits) {
+                lastRunHadRateLimitError = true;
+                killTree();
+                finish(new Error(`Rate limit: ${message}`));
+                return;
+              }
+              // Tolerant model — let OpenCode's internal retries handle it
+              emitStatus(`Rate limit temporário (${rateLimitCount}/${maxRateLimits}), OpenCode retentando...`);
+              return; // don't emit as provider error, just wait
             }
           } else {
             message = "erro do opencode";
@@ -500,12 +512,14 @@ function runOpencodeTurn({ text, model, mode, images }) {
     });
 
     child.stderr.on("data", (chunk) => {
-      stderrBuffer += chunk.toString();
-      // Detect rate limit from OpenCode logs (enabled via --print-logs)
-      // Log format includes patterns like "rate_limit", "Too Many Requests", "usage limit"
-      if (isRateLimitError(stderrBuffer) && !lastRunHadRateLimitError) {
+      const text = chunk.toString();
+      stderrBuffer += text;
+      // Detect rate limit from OpenCode logs (enabled via --print-logs).
+      // For tolerant models (MiniMax), we let OpenCode handle retries internally
+      // and only count via structured stdout error events to avoid double-counting.
+      // For non-tolerant models, kill immediately from stderr (faster detection).
+      if (!isTolerant && isRateLimitError(text) && !lastRunHadRateLimitError) {
         lastRunHadRateLimitError = true;
-        // Kill immediately - no point waiting for timeout when we know it's rate limited
         killTree();
         finish(new Error("Rate limit detectado nos logs do OpenCode"));
       }
@@ -638,71 +652,46 @@ async function handleTurn(payload) {
 
       if (isSuperseded() || interrupted) break;
 
-      const isTolerant = RATE_LIMIT_TOLERANT_MODELS.has(tryModelId);
-      const maxAttempts = isTolerant ? RATE_LIMIT_MAX_RETRIES : 1;
+      try {
+        result = await runOpencodeTurn(runArgs);
 
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        if (isSuperseded() || interrupted) break;
-
-        try {
+        // If the run succeeded but reported auth errors, refresh tokens and retry once
+        if (lastRunHadAuthError && !isSuperseded() && !interrupted) {
+          emitStatus("Renovando credenciais e tentando novamente...");
+          lastRunHadAuthError = false;
+          await syncOpenCodeAuth(true);
+          toolStarted.clear();
           result = await runOpencodeTurn(runArgs);
-
-          // If the run succeeded but reported auth errors, refresh tokens and retry once
-          if (lastRunHadAuthError && !isSuperseded() && !interrupted) {
-            emitStatus("Renovando credenciais e tentando novamente...");
-            lastRunHadAuthError = false;
-            await syncOpenCodeAuth(true);
-            toolStarted.clear();
-            result = await runOpencodeTurn(runArgs);
-          }
-
-          lastError = null;
-          break; // Success — exit the retry loop
-        } catch (runErr) {
-          lastError = runErr;
-
-          // Auth error: refresh tokens and retry the SAME model once before cascading
-          if (lastRunHadAuthError && !lastRunHadRateLimitError && !isSuperseded() && !interrupted) {
-            emitStatus("Renovando credenciais e tentando novamente...");
-            lastRunHadAuthError = false;
-            await syncOpenCodeAuth(true);
-            toolStarted.clear();
-            try {
-              result = await runOpencodeTurn(runArgs);
-              lastError = null;
-              break;
-            } catch (retryErr) {
-              lastError = retryErr;
-            }
-          }
-
-          // Rate limit hit — retry for tolerant models, cascade for others
-          if (lastRunHadRateLimitError) {
-            if (isTolerant && attempt < maxAttempts && !isSuperseded() && !interrupted) {
-              emitStatus(`Rate limit temporário (${attempt}/${maxAttempts}), aguardando ${RATE_LIMIT_RETRY_DELAY_MS / 1000}s...`);
-              await new Promise((r) => setTimeout(r, RATE_LIMIT_RETRY_DELAY_MS));
-              // Reset session so the retry starts clean (no log replay)
-              openCodeSessionId = "";
-              continue; // retry same model
-            }
-            break; // exhausted retries or not tolerant → exit retry loop
-          }
-
-          // Other error: don't retry
-          break;
         }
+
+        lastError = null;
+        break; // Success — exit the cascade
+      } catch (runErr) {
+        lastError = runErr;
+
+        // Auth error: refresh tokens and retry the SAME model once before cascading
+        if (lastRunHadAuthError && !lastRunHadRateLimitError && !isSuperseded() && !interrupted) {
+          emitStatus("Renovando credenciais e tentando novamente...");
+          lastRunHadAuthError = false;
+          await syncOpenCodeAuth(true);
+          toolStarted.clear();
+          try {
+            result = await runOpencodeTurn(runArgs);
+            lastError = null;
+            break;
+          } catch (retryErr) {
+            lastError = retryErr;
+          }
+        }
+
+        // Rate limit / timeout: cascade to next model
+        if (lastRunHadRateLimitError) {
+          continue;
+        }
+
+        // Other error: don't cascade, just fail
+        break;
       }
-
-      // If we got a result, exit the cascade
-      if (!lastError) break;
-
-      // Rate limit after all retries: cascade to next model
-      if (lastRunHadRateLimitError) {
-        continue;
-      }
-
-      // Other error: don't cascade, just fail
-      break;
     }
 
     if (lastError) {
