@@ -441,6 +441,8 @@ export class WhatsAppConnector implements Connector {
       // is available for playback in the main-session viewer.
       let earlyAudioUrl: string | undefined;
       let earlyAudioBuffer: Buffer | undefined;
+      let earlyImageUrl: string | undefined;
+      let earlyFileInfo: { url: string; name: string; mimeType: string } | undefined;
       if (audioInfo) {
         try {
           earlyAudioBuffer = await downloadMediaMessage(msg, "buffer", {}) as Buffer;
@@ -464,8 +466,10 @@ export class WhatsAppConnector implements Connector {
       }
 
       // Save message to conversation history regardless of status (for admin visibility)
-      const messageText = text || (audioInfo ? "[audio]" : "[imagem]");
-      await this.memory.saveMessageByUserId(user.id, "user", messageText, undefined, undefined, earlyAudioUrl, undefined, undefined, undefined, "whatsapp");
+      const messageText = text || (audioInfo ? "[audio]" : docInfo ? `[arquivo: ${docInfo.fileName}]` : "[imagem]");
+      const earlyImageUrls = earlyImageUrl ? [earlyImageUrl] : undefined;
+      const earlyFileInfos = earlyFileInfo ? [earlyFileInfo] : undefined;
+      await this.memory.saveMessageByUserId(user.id, "user", messageText, undefined, undefined, earlyAudioUrl, earlyImageUrls, undefined, earlyFileInfos, "whatsapp");
 
       // Notify pending user listeners (for badge updates)
       if (isNewPending) {
@@ -517,8 +521,22 @@ export class WhatsAppConnector implements Connector {
             data: buffer as Buffer,
             mimeType: imageInfo.mimeType,
           };
+          // Save image blob for viewer display (same pattern as audio blobs)
+          try {
+            const { query: dbQuery } = await import("../memory/db.js");
+            const id = Array.from({ length: 8 }, () =>
+              Math.floor(Math.random() * 256).toString(16).padStart(2, "0")
+            ).join("");
+            await dbQuery(
+              `INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`,
+              [id, buffer, imageInfo.mimeType]
+            );
+            earlyImageUrl = `/img/${id}`;
+          } catch (blobErr) {
+            logger.warn({ err: blobErr }, "Failed to save WhatsApp image blob");
+          }
           logger.info(
-            { from: senderId, type: "image", mimeType: imageInfo.mimeType, hasCaption: !!text },
+            { from: senderId, type: "image", mimeType: imageInfo.mimeType, hasCaption: !!text, imageUrl: earlyImageUrl },
             "Image message received"
           );
         } catch (err) {
@@ -534,6 +552,20 @@ export class WhatsAppConnector implements Connector {
             mimeType: docInfo.mimeType,
             fileName: docInfo.fileName,
           };
+          // Save document blob for viewer display
+          try {
+            const { query: dbQuery } = await import("../memory/db.js");
+            const id = Array.from({ length: 8 }, () =>
+              Math.floor(Math.random() * 256).toString(16).padStart(2, "0")
+            ).join("");
+            await dbQuery(
+              `INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`,
+              [id, buffer, docInfo.mimeType]
+            );
+            earlyFileInfo = { url: `/img/${id}`, name: docInfo.fileName, mimeType: docInfo.mimeType };
+          } catch (blobErr) {
+            logger.warn({ err: blobErr }, "Failed to save WhatsApp document blob");
+          }
           logger.info(
             { from: senderId, type: "document", mimeType: docInfo.mimeType, fileName: docInfo.fileName, hasCaption: !!text },
             "Document message received"
@@ -572,6 +604,13 @@ export class WhatsAppConnector implements Connector {
       await this.sock?.sendPresenceUpdate("composing", chatJid);
 
       // Build IncomingMessage and route through ConnectorManager
+      // For images: pass as both media (for Gemini vision) and imageMedias (for sub-agent injection)
+      const incomingImageMedias: MediaAttachment[] = [];
+      if (media && imageInfo) incomingImageMedias.push(media);
+      // For documents: pass as media (for main session) and also as imageMedias
+      // so they get docker-cp'd into sub-agent containers via injectImages()
+      if (media && docInfo) incomingImageMedias.push(media);
+
       const incoming: IncomingMessage = {
         connectorName: this.name,
         userId: senderId,
@@ -581,7 +620,10 @@ export class WhatsAppConnector implements Connector {
         userName: user.displayName || pushName,
         text: promptText,
         media,
+        imageMedias: incomingImageMedias.length > 0 ? incomingImageMedias : undefined,
         audioUrl,
+        imageUrls: earlyImageUrl ? [earlyImageUrl] : undefined,
+        fileInfos: earlyFileInfo ? [earlyFileInfo] : undefined,
         quotedText: quotedText || undefined,
       };
 

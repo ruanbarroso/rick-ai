@@ -330,9 +330,11 @@ export class Agent {
       // Keep OAuth tokens fresh — needed for sub-agent LLM fallback
       await this.ensureOAuthTokens(user.id);
 
-      // Collect all images for potential sub-agent forwarding
+      // Collect all media (images, PDFs, documents) for potential sub-agent forwarding.
+      // The session-manager's injectImages() handles both images and non-image files
+      // (it uses "img" prefix for images, "file" prefix for documents).
       const allImageMedias: MediaAttachment[] = [];
-      if (routingMedia && routingMedia.mimeType.startsWith("image/")) allImageMedias.push(routingMedia);
+      if (routingMedia) allImageMedias.push(routingMedia);
       if (imageMedias) {
         for (const img of imageMedias) {
           if (!allImageMedias.includes(img)) allImageMedias.push(img);
@@ -404,14 +406,26 @@ export class Agent {
       // Simple chat — Gemini Flash handles directly (classifier said SELF or user can't delegate)
       logger.info({ userPhone, userRole }, "Handling via simple chat (no delegation)");
       // Combine all image media: routingMedia (first image or single image) + imageMedias (remaining)
-      let allMedia: MediaAttachment | MediaAttachment[] | undefined = routingMedia;
-      if (routingMedia && imageMedias && imageMedias.length > 0) {
-        // If we have routingMedia, it is ALWAYS imageMedias[0].
-        // imageMedias ALREADY contains all images. So we just use imageMedias directly.
-        allMedia = imageMedias;
-      } else if (!routingMedia && imageMedias && imageMedias.length > 0) {
-        allMedia = imageMedias.length === 1 ? imageMedias[0] : imageMedias;
+      // Filter out formats Gemini cannot process (docx, xlsx, pptx, zip, etc.)
+      // Gemini supports: image/*, audio/*, application/pdf, text/*
+      const geminiSupportedMime = (mime: string) =>
+        mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("text/") || mime === "application/pdf";
+
+      let allMedia: MediaAttachment | MediaAttachment[] | undefined;
+      const candidates = imageMedias && imageMedias.length > 0
+        ? imageMedias
+        : routingMedia ? [routingMedia] : [];
+      const supported = candidates.filter(m => geminiSupportedMime(m.mimeType));
+      const unsupported = candidates.filter(m => !geminiSupportedMime(m.mimeType));
+
+      if (unsupported.length > 0) {
+        const names = unsupported.map(m => m.fileName || m.mimeType).join(", ");
+        logger.info({ unsupported: names }, "Stripping unsupported media formats for Gemini — sub-agent can handle these");
+        // Append a note to the prompt so Gemini knows there was a file it can't see
+        fullText += `\n\n[O usuario enviou arquivo(s) em formato nao suportado para analise direta: ${names}. Sugira delegar a um sub-agente se precisar analisar o conteudo.]`;
       }
+
+      allMedia = supported.length === 0 ? undefined : supported.length === 1 ? supported[0] : supported;
       return this.handleSimpleChat(userPhone, user.displayName, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, user.id, connectorName, signal, generation);
     } finally {
       // Clean up abort controller for this generation (only if it's still the current one)
