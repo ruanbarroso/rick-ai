@@ -450,6 +450,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     }
     function onIdle() {
       if (finished) return;
+      emitStatus(`[diag] Idle timeout (${LLM_IDLE_TIMEOUT_MS / 1000}s) — treating as rate limit for cascade`);
       lastRunHadRateLimitError = true; // treat prolonged silence as provider issue → cascade
       killTree();
       finish(new Error("LLM idle timeout: nenhuma resposta em " + (LLM_IDLE_TIMEOUT_MS / 1000) + "s — provedor parou de responder"));
@@ -515,6 +516,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
             // This is the most reliable path — OpenCode already exhausted its internal retries.
             if (isStructuredRateLimitError(err)) {
               const statusCode = err.data?.statusCode || "";
+              emitStatus(`[diag] Rate limit via JSON error: name=${err.name}, statusCode=${statusCode}, isRetryable=${err.data?.isRetryable}, message=${String(message).substring(0, 200)}`);
               lastRunHadRateLimitError = true;
               killTree();
               finish(new Error(`Rate limit (${statusCode}): ${message}`));
@@ -539,8 +541,10 @@ function runOpencodeTurn({ text, model, mode, images }) {
       if (isStderrRateLimitError(chunk.toString()) && !lastRunHadRateLimitError) {
         if (Date.now() < ignoreStderrRateLimitUntil) {
           // Grace period: this is likely log replay from the previous model, ignore it
+          emitStatus(`[diag] Stderr rate limit IGNORED (grace period): ${chunk.toString().substring(0, 200)}`);
           return;
         }
+        emitStatus(`[diag] Rate limit via stderr: ${chunk.toString().substring(0, 300)}`);
         lastRunHadRateLimitError = true;
         killTree();
         finish(new Error("Rate limit detectado nos logs do OpenCode"));
@@ -588,6 +592,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
         // Use the stricter stderr function since `detail` contains the full
         // debug log buffer which may have "429" in harmless contexts.
         if (isStderrRateLimitError(detail)) {
+          emitStatus(`[diag] Rate limit via process exit (code=${code}): ${detail.substring(0, 300)}`);
           lastRunHadRateLimitError = true;
         }
         finish(new Error(detail));
