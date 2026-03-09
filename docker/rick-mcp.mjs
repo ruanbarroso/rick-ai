@@ -89,6 +89,19 @@ const tools = [
     },
   },
   {
+    name: "rick_delete_memory",
+    description: "Remove uma memoria incorreta, desatualizada ou lixo do Rick. Use quando encontrar memorias com dados errados ou que nao fazem sentido.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Chave da memoria a remover" },
+        category: { type: "string", description: "Categoria da memoria (opcional, para filtrar)" },
+      },
+      required: ["key"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "rick_conversations",
     description: "Lista conversas recentes do usuario no Rick.",
     inputSchema: {
@@ -145,6 +158,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const data = await callRick("/api/agent/memory", {
         method: "POST",
         body: JSON.stringify({ key, value, category }),
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    }
+
+    if (name === "rick_delete_memory") {
+      const key = String(input.key || "").trim();
+      if (!key) throw new Error("Parametro 'key' e obrigatorio");
+      const category = typeof input.category === "string" && input.category.trim()
+        ? `&category=${encodeURIComponent(input.category.trim())}`
+        : "";
+      const data = await callRick(`/api/agent/memory?key=${encodeURIComponent(key)}${category}`, {
+        method: "DELETE",
       });
       return {
         content: [{ type: "text", text: JSON.stringify(data, null, 2) }],

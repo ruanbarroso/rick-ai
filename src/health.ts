@@ -378,6 +378,13 @@ export function startHealthServer(port: number): void {
       return;
     }
 
+    if (req.url?.startsWith("/api/agent/") && req.method === "DELETE") {
+      const agentSession = authenticateAgentRequest(req, res);
+      if (!agentSession) return;
+      await handleAgentApiDelete(req, res, agentSession);
+      return;
+    }
+
     // ==================== PUBLIC IDENTITY (no auth) ====================
     // Returns the agent's display name and logo so the login screen can show
     // the correct branding on the very first visit (before localStorage is populated).
@@ -777,6 +784,49 @@ async function handleAgentApiPost(
     jsonResponse(res, 404, { error: "Endpoint nao encontrado" });
   } catch (err) {
     logger.error({ err, path, sessionId: session.sessionId }, "Agent API POST request failed");
+    jsonResponse(res, 500, { error: "Erro interno" });
+  }
+}
+
+/**
+ * Route handler for DELETE /api/agent/* endpoints.
+ * Allows sub-agents to delete memories they identify as incorrect or outdated.
+ */
+async function handleAgentApiDelete(
+  req: IncomingMessage,
+  res: ServerResponse,
+  session: AgentTokenPayload,
+): Promise<void> {
+  const url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+  const path = url.pathname;
+
+  try {
+    // DELETE /api/agent/memory?key=x&category=y — Delete a memory by key (optionally filtered by category)
+    if (path === "/api/agent/memory") {
+      if (!registeredMemoryService) {
+        jsonResponse(res, 503, { error: "MemoryService nao disponivel" });
+        return;
+      }
+
+      const key = url.searchParams.get("key")?.trim();
+      const category = url.searchParams.get("category")?.trim() || undefined;
+
+      if (!key) {
+        jsonResponse(res, 400, { error: "Parametro 'key' e obrigatorio" });
+        return;
+      }
+
+      const deleted = await registeredMemoryService.forgetGlobal(key, category);
+
+      logger.info({ sessionId: session.sessionId, key, category, deleted }, "Agent API: memory deleted");
+      jsonResponse(res, 200, { deleted, key, category: category || null });
+      return;
+    }
+
+    // Unknown /api/agent/* DELETE path
+    jsonResponse(res, 404, { error: "Endpoint nao encontrado" });
+  } catch (err) {
+    logger.error({ err, path, sessionId: session.sessionId }, "Agent API DELETE request failed");
     jsonResponse(res, 500, { error: "Erro interno" });
   }
 }

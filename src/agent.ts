@@ -1595,17 +1595,23 @@ Extraia APENAS informacoes que sejam uteis para o futuro:
 - Credenciais descobertas ou configuradas (usuario, senha, token, chave API)
 - URLs de servicos, endpoints, dashboards
 - Configuracoes de sistema (portas, IPs, paths de arquivos)
-- Solucoes tecnicas para problemas (como resolver X erro)
+- Solucoes tecnicas para problemas (como resolver X erro, workarounds)
 - Padroes ou estruturas do projeto descobertas
+- Caminhos de navegacao em sistemas web (passo-a-passo para chegar a uma tela. Ex: "Menu X > Submenu Y > Botao Z")
+- Estruturas de dados descobertas (tabelas, campos, APIs, schemas)
+- Receitas procedurais (como fazer X no sistema Y, sequencia de passos)
 
 NAO extraia:
-- Progresso da tarefa (passos executados)
+- Progresso da tarefa (passos executados sem valor futuro)
 - Mensagens de log ou debug
 - Informacoes que ja sao obvias pelo contexto
 - Codigo-fonte ou diffs
+- Observacoes genericas ("o sistema funciona bem")
 
 Retorne APENAS linhas no formato: CATEGORIA|CHAVE|VALOR
 Categorias validas: credenciais, senhas, conhecimento, notas
+Use a categoria "conhecimento" para navegacao, estruturas, receitas e solucoes tecnicas.
+A CHAVE deve ser descritiva e unica (ex: "sankhya-dicionario-dados-navegacao", "api-frete-endpoint").
 
 Se nao houver nada util para memorizar, retorne VAZIO.`;
 
