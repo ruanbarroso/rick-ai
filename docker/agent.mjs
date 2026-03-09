@@ -415,6 +415,9 @@ function runOpencodeTurn({ text, model, mode, images }) {
     let stderrBuffer = "";
     let gotMeaningfulOutput = false;
     let finished = false;
+    // Debounce timestamp: prevents double-counting the same rate-limit event
+    // from both stderr (--print-logs) and stdout (JSON error event).
+    let lastRateLimitBumpTime = 0;
 
     // Rolling idle timer: resets every time the process emits meaningful output.
     // If the process goes silent for LLM_IDLE_TIMEOUT_MS (e.g. Zen API hangs
@@ -492,7 +495,12 @@ function runOpencodeTurn({ text, model, mode, images }) {
             }
             // Detect rate limit / usage limit errors for provider cascade
             if (isRateLimitError(message)) {
-              rateLimitCount++;
+              const now = Date.now();
+              // Debounce: skip if stderr already counted this within 2 seconds
+              if (now - lastRateLimitBumpTime >= 2000) {
+                lastRateLimitBumpTime = now;
+                rateLimitCount++;
+              }
               if (rateLimitCount >= maxRateLimits) {
                 lastRunHadRateLimitError = true;
                 killTree();
@@ -515,13 +523,26 @@ function runOpencodeTurn({ text, model, mode, images }) {
       const text = chunk.toString();
       stderrBuffer += text;
       // Detect rate limit from OpenCode logs (enabled via --print-logs).
-      // For tolerant models (MiniMax), we let OpenCode handle retries internally
-      // and only count via structured stdout error events to avoid double-counting.
-      // For non-tolerant models, kill immediately from stderr (faster detection).
-      if (!isTolerant && isRateLimitError(text) && !lastRunHadRateLimitError) {
-        lastRunHadRateLimitError = true;
-        killTree();
-        finish(new Error("Rate limit detectado nos logs do OpenCode"));
+      // Only check the new chunk to avoid re-matching old buffer content.
+      if (isRateLimitError(text) && !lastRunHadRateLimitError) {
+        const now = Date.now();
+        // Debounce: skip if we already bumped the counter within 2 seconds
+        // (avoids double-counting the same error from stderr + stdout)
+        if (now - lastRateLimitBumpTime < 2000) return;
+        lastRateLimitBumpTime = now;
+        rateLimitCount++;
+        if (rateLimitCount >= maxRateLimits) {
+          lastRunHadRateLimitError = true;
+          killTree();
+          finish(new Error("Rate limit detectado nos logs do OpenCode"));
+        } else if (isTolerant) {
+          emitStatus(`Rate limit temporário (${rateLimitCount}/${maxRateLimits}), OpenCode retentando...`);
+        } else {
+          // Non-tolerant model: kill on first hit
+          lastRunHadRateLimitError = true;
+          killTree();
+          finish(new Error("Rate limit detectado nos logs do OpenCode"));
+        }
       }
     });
 
