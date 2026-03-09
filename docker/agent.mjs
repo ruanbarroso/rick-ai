@@ -327,26 +327,49 @@ function parseTextEvent(event, collector) {
   emitMessage(text);
 }
 
-/** Detect rate-limit / usage-limit patterns in error messages.
- *  For structured API errors (stdout JSON), this is reliable.
- *  For raw stderr logs, use isStderrRateLimitError() instead. */
-function isRateLimitError(message) {
-  const lower = String(message || "").toLowerCase();
-  if (lower.includes("usage limit") || lower.includes("rate limit") || lower.includes("rate_limit") || lower.includes("quota") || lower.includes("too many requests")) return true;
-  // Match 429 as a standalone status code, not as part of a larger number (e.g. port 4290, size 1429)
-  if (/\b429\b/.test(lower)) return true;
+// ==================== RATE LIMIT DETECTION ====================
+// OpenCode emits structured JSON errors on stdout (--format json) with:
+//   { type: "error", error: { name: "APIError", data: { message, statusCode, isRetryable } } }
+// OpenCode retries rate limits internally with exponential backoff before
+// giving up and emitting the error. By the time we see it, retries are exhausted.
+// Our job is to CASCADE to a different model, not retry the same one.
+
+/** Detect rate-limit from a structured OpenCode JSON error event.
+ *  This is the PRIMARY and most reliable detection path.
+ *  @param {object} errorObj — the `event.error` object from OpenCode's JSON output */
+function isStructuredRateLimitError(errorObj) {
+  if (!errorObj || typeof errorObj !== "object") return false;
+  const data = errorObj.data;
+  if (!data) return false;
+
+  // Direct HTTP status check — most reliable signal
+  if (data.statusCode === 429 || data.statusCode === 529) return true;
+
+  // OpenCode marks rate limits as retryable; if it gave up, we should cascade
+  // (but only for APIError, not for other retryable errors like network issues)
+  if (errorObj.name === "APIError" && data.isRetryable === true) {
+    const msg = String(data.message || "").toLowerCase();
+    // Filter: only cascade for rate-limit-like messages, not transient server errors
+    if (msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("too many requests")
+      || msg.includes("overloaded") || msg.includes("quota") || msg.includes("usage limit")
+      || msg.includes("exhausted") || msg.includes("exceeded")) return true;
+  }
+
   return false;
 }
 
-/** Stricter rate-limit detection for stderr (OpenCode --print-logs output).
- *  Stderr contains verbose debug logs where numbers like "429" can appear
- *  in harmless contexts (token counts, request IDs, content-lengths).
- *  Only match explicit rate-limit phrases, not bare status codes. */
+/** Strict rate-limit detection for stderr (OpenCode --print-logs output).
+ *  Stderr contains verbose debug logs where "429" or "rate" can appear
+ *  in harmless contexts (token counts, request IDs, log replay, etc.).
+ *  Only match very explicit rate-limit phrases.
+ *  This is a SAFETY NET for when OpenCode crashes without emitting a proper JSON error. */
 function isStderrRateLimitError(message) {
   const lower = String(message || "").toLowerCase();
-  if (lower.includes("usage limit") || lower.includes("rate limit") || lower.includes("rate_limit") || lower.includes("too many requests")) return true;
-  // Only match "429" when clearly an HTTP status context (e.g. "status 429", "code 429", "HTTP 429", "error 429")
-  if (/(?:status|code|http|error)\s*[:=]?\s*429\b/i.test(message)) return true;
+  // Only match unambiguous rate-limit phrases
+  if (lower.includes("rate limit") || lower.includes("rate_limit") || lower.includes("too many requests")
+    || lower.includes("usage limit")) return true;
+  // "429" only in explicit HTTP context (status:429, code=429, HTTP/1.1 429, error 429)
+  if (/(?:status|code|http|error)[\s:=]*429\b/i.test(message)) return true;
   return false;
 }
 
@@ -479,7 +502,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
         if (event.type === "error") {
           resetIdleTimer();
-          // session.error has { error: { name, data? } }
+          // OpenCode --format json emits: { type: "error", error: { name, data: { message, statusCode, isRetryable, ... } } }
           const err = event.error;
           let message;
           if (err && typeof err === "object") {
@@ -488,11 +511,13 @@ function runOpencodeTurn({ text, model, mode, images }) {
             if (String(err.name || "").includes("Auth") || String(message).includes("401") || String(message).includes("auth")) {
               lastRunHadAuthError = true;
             }
-            // Detect rate limit / usage limit errors for provider cascade
-            if (isRateLimitError(message)) {
+            // Detect rate limit using the structured error object (statusCode, isRetryable, message)
+            // This is the most reliable path — OpenCode already exhausted its internal retries.
+            if (isStructuredRateLimitError(err)) {
+              const statusCode = err.data?.statusCode || "";
               lastRunHadRateLimitError = true;
               killTree();
-              finish(new Error(`Rate limit: ${message}`));
+              finish(new Error(`Rate limit (${statusCode}): ${message}`));
               return;
             }
           } else {
@@ -559,8 +584,10 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
       if (code !== 0) {
         const detail = stderrBuffer.trim() || stdoutBuffer.trim() || `opencode run exited with code ${code}`;
-        // Check if the exit was due to rate limiting
-        if (isRateLimitError(detail)) {
+        // Check if the exit was due to rate limiting.
+        // Use the stricter stderr function since `detail` contains the full
+        // debug log buffer which may have "429" in harmless contexts.
+        if (isStderrRateLimitError(detail)) {
           lastRunHadRateLimitError = true;
         }
         finish(new Error(detail));
