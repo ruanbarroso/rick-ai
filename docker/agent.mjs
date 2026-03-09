@@ -436,6 +436,24 @@ function runOpencodeTurn({ text, model, mode, images }) {
     let gotMeaningfulOutput = false;
     let finished = false;
 
+    // Turn completion timer: after the OpenCode process stops emitting events,
+    // it may hang during cleanup (MCP servers, Chrome, etc.) instead of exiting.
+    // This timer force-kills the process and resolves with the collected text
+    // after TURN_COMPLETION_GRACE_MS of silence following meaningful output.
+    const TURN_COMPLETION_GRACE_MS = 10_000; // 10s grace after last event
+    let turnCompletionTimer = null;
+    function resetTurnCompletionTimer() {
+      if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
+      if (!gotMeaningfulOutput) return; // Don't start until we have real output
+      turnCompletionTimer = setTimeout(() => {
+        if (finished) return;
+        // Process stopped emitting events but hasn't exited — likely stuck in cleanup
+        const finalText = collectedText.join("\n\n").trim();
+        killTree();
+        finish(null, finalText);
+      }, TURN_COMPLETION_GRACE_MS);
+    }
+
     child.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk.toString();
       let newlineIndex = stdoutBuffer.indexOf("\n");
@@ -459,21 +477,27 @@ function runOpencodeTurn({ text, model, mode, images }) {
         if (event.type === "tool_use") {
           gotMeaningfulOutput = true;
           parseToolEvent(event);
+          resetTurnCompletionTimer();
           continue;
         }
 
         if (event.type === "text") {
           gotMeaningfulOutput = true;
           parseTextEvent(event, collectedText);
+          resetTurnCompletionTimer();
           continue;
         }
 
         if (event.type === "step_start") {
+          // New step starting — cancel any pending completion timer
+          if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
+          turnCompletionTimer = null;
           emitStatus("Pensando...");
           continue;
         }
 
         if (event.type === "step_finish") {
+          resetTurnCompletionTimer();
           continue;
         }
 
@@ -529,6 +553,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const finish = (err, resultText = "") => {
       if (finished) return;
       finished = true;
+      if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
       if (activeResolve) {
         activeResolve = null;
       }
