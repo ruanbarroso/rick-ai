@@ -507,7 +507,9 @@ function runOpencodeTurn({ text, model, mode, images }) {
                 finish(new Error(`Rate limit: ${message}`));
                 return;
               }
-              // Tolerant model — let OpenCode's internal retries handle it
+              // Tolerant model — let OpenCode's internal retries handle it.
+              // Reset idle timer so the backoff wait doesn't trigger a timeout.
+              resetIdleTimer();
               emitStatus(`Rate limit temporário (${rateLimitCount}/${maxRateLimits}), OpenCode retentando...`);
               return; // don't emit as provider error, just wait
             }
@@ -536,6 +538,9 @@ function runOpencodeTurn({ text, model, mode, images }) {
           killTree();
           finish(new Error("Rate limit detectado nos logs do OpenCode"));
         } else if (isTolerant) {
+          // Reset idle timer — OpenCode is alive and retrying via exponential backoff.
+          // Without this, the idle timer would fire during the backoff wait.
+          resetIdleTimer();
           emitStatus(`Rate limit temporário (${rateLimitCount}/${maxRateLimits}), OpenCode retentando...`);
         } else {
           // Non-tolerant model: kill on first hit
