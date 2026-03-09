@@ -76,7 +76,7 @@ export function validateConfig(): void {
   const warnings: string[] = [];
 
   if (!config.gemini.apiKey) {
-    warnings.push("GEMINI_API_KEY não configurado. Configure para usar o chat.");
+    errors.push("GEMINI_API_KEY é obrigatório. Sem ele o chat não funciona.");
   }
   if (!config.webAuthPassword) {
     warnings.push("WEB_AUTH_PASSWORD not set — Web UI will be disabled");
