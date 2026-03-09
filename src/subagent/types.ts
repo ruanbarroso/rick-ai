@@ -80,8 +80,9 @@ export interface SubAgentSession {
   numericUserId: number | null;
   /** Accumulated output from the sub-agent */
   output: string;
-  /** Last text emitted via "message" event — used to deduplicate "done" result */
-  lastMessageText?: string;
+  /** Whether any "message" text events were streamed during the current turn.
+   *  Used to suppress duplicate text in "waiting_user"/"done" results. */
+  turnHadStreamedText?: boolean;
   /** Pending question from sub-agent to user */
   pendingQuestion: string | null;
   /** Assigned variant name for this session (e.g. "Pickle Rick", "Zoe Alpha") */

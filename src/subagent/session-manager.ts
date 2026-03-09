@@ -644,6 +644,7 @@ export class SessionManager {
 
     session.state = "running";
     session.pendingQuestion = null;
+    session.turnHadStreamedText = false; // reset for new turn
     session.updatedAt = Date.now();
     if (this.onSessionMessage) {
       this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
@@ -1169,7 +1170,7 @@ export class SessionManager {
             }
             session.output += msg.text + "\n";
             session.updatedAt = Date.now();
-            session.lastMessageText = msg.text;
+            session.turnHadStreamedText = true;
             this.sendToUser(session, msg.text);
           }
           break;
@@ -1272,11 +1273,15 @@ export class SessionManager {
           session.updatedAt = Date.now();
           if (msg.result) {
             session.output += msg.result + "\n";
-            if (msg.result !== session.lastMessageText) {
+            // Only send the result text if it wasn't already streamed via "message" events.
+            // The agent emits each text chunk as "message" during streaming AND the full
+            // concatenated text as "waiting_user" result — sending both causes duplicates.
+            if (!session.turnHadStreamedText) {
               const messageType = isExecutionOperationalFailure(msg.result) ? "error" : "text";
               this.sendToUser(session, msg.result, messageType);
             }
           }
+          session.turnHadStreamedText = false; // reset for next turn
           // Notify session viewers of state change
           if (this.onSessionMessage) {
             this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
@@ -1290,12 +1295,12 @@ export class SessionManager {
           session.updatedAt = Date.now();
           if (msg.result) {
             session.output += msg.result + "\n";
-            // Only send the result if it wasn't already sent as the last "message" event
-            // (the LLM loop emits intermediate text AND done.result, causing duplicates)
-            if (msg.result !== session.lastMessageText) {
+            // Only send the result if it wasn't already streamed via "message" events
+            if (!session.turnHadStreamedText) {
               this.sendToUser(session, msg.result);
             }
           }
+          session.turnHadStreamedText = false;
           // Notify session viewers of state change (not rendered as a chat bubble)
           if (this.onSessionMessage) {
             this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
