@@ -679,7 +679,7 @@ async function handleTurn(payload) {
         // --print-logs will replay the previous model's error logs on stderr,
         // including rate-limit messages. To prevent false-positive detection,
         // set a grace period during which stderr rate-limit patterns are ignored.
-        ignoreStderrRateLimitUntil = Date.now() + 10_000; // 10s grace for log replay
+        ignoreStderrRateLimitUntil = Date.now() + 30_000; // 30s grace for log replay (OpenCode startup + MCP init + session replay)
         emitStatus(`Modelo '${modelsToTry[i - 1]}' falhou (rate limit), tentando '${tryModelId}'...`);
         emit({ type: "model_active", modelId: tryModelId, modelName: tryModelId });
       }
