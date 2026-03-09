@@ -20,7 +20,7 @@ Built on Oracle Cloud Always Free VMs, Rick orchestrates multiple LLM providers 
      ┌───────────┼──────────────────────┐
      │           │                      │
  Classifier   LLMService          MemoryService
- (Gemini)    (multi-LLM)        (PG/SQLite + pgvector)
+ (Gemini)    (Gemini)           (PG/SQLite + pgvector)
      │           │                      │
      ▼           ▼                      │
  SessionManager  OAuth            UserService
@@ -80,7 +80,6 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 
 | Model | Provider | Used For |
 |-------|----------|----------|
-| MiniMax M2.5 Free | MiniMax (OpenCode Zen) | Default chat (when Gemini not configured) |
 | Gemini 3.0 Flash | Google | Default chat, classifier, audio transcription, memory extraction |
 | Claude Opus 4.6 | Anthropic | Sub-agent primary (via OAuth) |
 | GPT-5.3 Codex | OpenAI | Sub-agent fallback (via OAuth) |
@@ -89,7 +88,7 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 
 No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect via your existing Pro/Max subscriptions. API key fallback models (`claude-opus-4-6`, `gpt-5.3-codex`) are used when OAuth is not configured.
 
-The main session uses MiniMax M2.5 Free by default (no API key required). If Gemini is configured, it's used as primary with MiniMax as fallback.
+The main session uses Gemini Flash exclusively (no fallback). `GEMINI_API_KEY` is required.
 
 OAuth refresh is coordinated with in-memory deduplication per provider/user, avoiding duplicate refresh calls within the running Rick instance.
 
@@ -251,12 +250,12 @@ rick-ai/
 │   │       ├── tool-blocks.js         # Terminal-style tool-use blocks
 │   │       └── tool-blocks.css        # Tool-use block styles
 │   ├── llm/
-│   │   ├── llm-service.ts             # Provider abstraction + model switching
+│   │   ├── llm-service.ts             # Gemini chat provider (no fallback)
 │   │   ├── types.ts                   # Model registry + shared types
 │   │   └── providers/
-│   │       ├── gemini.ts              # Gemini (multimodal)
-│   │       ├── anthropic.ts           # Anthropic (API key + OAuth)
-│   │       └── openai.ts             # OpenAI (API key + Codex OAuth)
+│   │       ├── gemini.ts              # Gemini (multimodal, main session)
+│   │       ├── anthropic.ts           # Anthropic (API key + OAuth, sub-agents)
+│   │       └── openai.ts             # OpenAI (API key + Codex OAuth, sub-agents)
 │   ├── auth/
 │   │   ├── permissions.ts             # RBAC role types, permission matrix, hierarchy checks
 │   │   ├── user-service.ts            # User resolution, CRUD, role management, welcome messages
@@ -336,11 +335,8 @@ Host Docker (cluster-24g)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GEMINI_API_KEY` | No | — | Google AI Studio API key. If not set, MiniMax is used as primary provider. |
+| `GEMINI_API_KEY` | Yes | — | Google AI Studio API key (required for main session chat) |
 | `GEMINI_MODEL` | No | `gemini-3-flash-preview` | Override Gemini model name |
-| `MINIMAX_API_KEY` | No | — | MiniMax API key. If not set, uses OpenCode Zen free tier. |
-| `MINIMAX_BASE_URL` | No | `https://opencode.ai/zen` | MiniMax API base URL |
-| `MINIMAX_MODEL` | No | `minimax-m2.5-free` | MiniMax model to use |
 | `ANTHROPIC_API_KEY` | No | — | Anthropic API key (alternative to OAuth) |
 | `ANTHROPIC_MODEL` | No | `claude-opus-4-6` | Override Anthropic model name |
 | `OPENAI_API_KEY` | No | — | OpenAI API key (alternative to OAuth) |

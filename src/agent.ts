@@ -264,12 +264,32 @@ export class Agent {
     // which can cause hallucinations (e.g., claiming to delete emails it never touched).
     let routingMedia = media; // keep original for simple chat (image support)
     if (media?.mimeType.startsWith("audio/")) {
+      // Check if Gemini is available for transcription BEFORE attempting
+      const geminiCheck = new GeminiProvider();
+      if (!geminiCheck.isAvailable()) {
+        logger.warn({ userPhone }, "Audio received but Gemini unavailable for transcription — notifying user");
+        const unavailableMsg = "O suporte a áudio está temporariamente indisponível. Por favor, digite sua mensagem.";
+        // Save assistant response and notify viewers
+        await this.memory.saveMessageByUserId(user.id, "assistant", unavailableMsg, "system", undefined, undefined, undefined, undefined, undefined, connectorName);
+        this.notifyMainViewers(user.id, "agent", unavailableMsg, "text", connectorName);
+        return unavailableMsg;
+      }
+
       const transcription = await this.transcribeAudioWithGemini(media);
 
       // Check if aborted during transcription
       if (signal.aborted) {
         logger.info({ userPhone }, "Request aborted during audio transcription — skipping response");
         return "";
+      }
+
+      // If transcription failed, inform the user clearly
+      if (transcription.startsWith("[erro")) {
+        logger.warn({ userPhone, transcription }, "Audio transcription failed — notifying user");
+        const errorMsg = "Não consegui transcrever o áudio. Por favor, digite sua mensagem.";
+        await this.memory.saveMessageByUserId(user.id, "assistant", errorMsg, "system", undefined, undefined, undefined, undefined, undefined, connectorName);
+        this.notifyMainViewers(user.id, "agent", errorMsg, "text", connectorName);
+        return errorMsg;
       }
 
       const trimmedText = fullText.trim();

@@ -9,19 +9,13 @@ import { homedir } from "node:os";
 const MODEL_MAP = {
   "claude-opus-4-6": "anthropic/claude-opus-4-6",
   "gpt-5.3-codex": "openai/gpt-5.3-codex",
-  "minimax-m2.5-free": "opencode/minimax-m2.5-free",
+  "gemini-3.1-pro": "google/gemini-3.1-pro-preview",
 };
 
 const DEFAULT_MODEL_ID = "claude-opus-4-6";
 const HISTORY_MAX_MESSAGES = 120;
 
-/** Models with short-lived rate limits that clear after a few seconds.
- *  For these, we count consecutive rate-limit errors and only kill
- *  after RATE_LIMIT_MAX_RETRIES hits. If a normal event arrives in
- *  between (text, tool_use, step_start), the counter resets — OpenCode
- *  recovered on its own via its internal exponential backoff. */
-const RATE_LIMIT_TOLERANT_MODELS = new Set(["minimax-m2.5-free"]);
-const RATE_LIMIT_MAX_RETRIES = 3;
+
 
 /** Idle timeout: kill the process if it produces no new output for this long.
  *  Resets on every meaningful event (text, tool_use, step_start).
@@ -231,16 +225,7 @@ async function syncOpenCodeAuth(forceRefresh = false) {
     available.add("google");
   }
 
-  // OpenCode Zen: MiniMax M2.5 Free is available through the Zen gateway.
-  // The Zen server recognises the literal key "public" as anonymous access
-  // for models flagged allowAnonymous (free-tier models like minimax-m2.5-free).
-  // If the user has a real Zen API key in OPENCODE_ZEN_API_KEY, use that instead.
-  const zenKey = process.env.OPENCODE_ZEN_API_KEY || "public";
-  auth.opencode = {
-    type: "api",
-    key: zenKey,
-  };
-  available.add("opencode");
+
 
   const dataDir = join(homedir(), ".local", "share", "opencode");
   await mkdir(dataDir, { recursive: true });
@@ -255,7 +240,6 @@ function providerForModel(opencodeModel) {
   if (opencodeModel.startsWith("anthropic/")) return "anthropic";
   if (opencodeModel.startsWith("openai/")) return "openai";
   if (opencodeModel.startsWith("google/")) return "google";
-  if (opencodeModel.startsWith("opencode/")) return "opencode";
   return null;
 }
 
@@ -267,7 +251,7 @@ function providerForModel(opencodeModel) {
 const GLOBAL_FALLBACK_ORDER = [
   "claude-opus-4-6",
   "gpt-5.3-codex",
-  "minimax-m2.5-free",
+  "gemini-3.1-pro",
 ];
 
 /**
@@ -355,9 +339,6 @@ function runOpencodeTurn({ text, model, mode, images }) {
   return new Promise((resolve, reject) => {
     const configContent = JSON.stringify(buildOpencodeConfig());
     const selectedModel = pickModel(model);
-    const isTolerant = RATE_LIMIT_TOLERANT_MODELS.has(model);
-    const maxRateLimits = isTolerant ? RATE_LIMIT_MAX_RETRIES : 1;
-    let rateLimitCount = 0;
     lastRunHadRateLimitError = false;
 
     const args = [
@@ -415,9 +396,6 @@ function runOpencodeTurn({ text, model, mode, images }) {
     let stderrBuffer = "";
     let gotMeaningfulOutput = false;
     let finished = false;
-    // Debounce timestamp: prevents double-counting the same rate-limit event
-    // from both stderr (--print-logs) and stdout (JSON error event).
-    let lastRateLimitBumpTime = 0;
 
     // Rolling idle timer: resets every time the process emits meaningful output.
     // If the process goes silent for LLM_IDLE_TIMEOUT_MS (e.g. Zen API hangs
@@ -456,7 +434,6 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
         if (event.type === "tool_use") {
           gotMeaningfulOutput = true;
-          rateLimitCount = 0; // recovered — reset consecutive rate limit counter
           resetIdleTimer();
           parseToolEvent(event);
           continue;
@@ -464,14 +441,12 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
         if (event.type === "text") {
           gotMeaningfulOutput = true;
-          rateLimitCount = 0; // recovered — reset consecutive rate limit counter
           resetIdleTimer();
           parseTextEvent(event, collectedText);
           continue;
         }
 
         if (event.type === "step_start") {
-          rateLimitCount = 0; // recovered — reset consecutive rate limit counter
           resetIdleTimer();
           emitStatus("Pensando...");
           continue;
@@ -495,23 +470,10 @@ function runOpencodeTurn({ text, model, mode, images }) {
             }
             // Detect rate limit / usage limit errors for provider cascade
             if (isRateLimitError(message)) {
-              const now = Date.now();
-              // Debounce: skip if stderr already counted this within 2 seconds
-              if (now - lastRateLimitBumpTime >= 2000) {
-                lastRateLimitBumpTime = now;
-                rateLimitCount++;
-              }
-              if (rateLimitCount >= maxRateLimits) {
-                lastRunHadRateLimitError = true;
-                killTree();
-                finish(new Error(`Rate limit: ${message}`));
-                return;
-              }
-              // Tolerant model — let OpenCode's internal retries handle it.
-              // Reset idle timer so the backoff wait doesn't trigger a timeout.
-              resetIdleTimer();
-              emitStatus(`Rate limit temporário (${rateLimitCount}/${maxRateLimits}), OpenCode retentando...`);
-              return; // don't emit as provider error, just wait
+              lastRunHadRateLimitError = true;
+              killTree();
+              finish(new Error(`Rate limit: ${message}`));
+              return;
             }
           } else {
             message = "erro do opencode";
@@ -522,32 +484,13 @@ function runOpencodeTurn({ text, model, mode, images }) {
     });
 
     child.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderrBuffer += text;
+      stderrBuffer += chunk.toString();
       // Detect rate limit from OpenCode logs (enabled via --print-logs).
       // Only check the new chunk to avoid re-matching old buffer content.
-      if (isRateLimitError(text) && !lastRunHadRateLimitError) {
-        const now = Date.now();
-        // Debounce: skip if we already bumped the counter within 2 seconds
-        // (avoids double-counting the same error from stderr + stdout)
-        if (now - lastRateLimitBumpTime < 2000) return;
-        lastRateLimitBumpTime = now;
-        rateLimitCount++;
-        if (rateLimitCount >= maxRateLimits) {
-          lastRunHadRateLimitError = true;
-          killTree();
-          finish(new Error("Rate limit detectado nos logs do OpenCode"));
-        } else if (isTolerant) {
-          // Reset idle timer — OpenCode is alive and retrying via exponential backoff.
-          // Without this, the idle timer would fire during the backoff wait.
-          resetIdleTimer();
-          emitStatus(`Rate limit temporário (${rateLimitCount}/${maxRateLimits}), OpenCode retentando...`);
-        } else {
-          // Non-tolerant model: kill on first hit
-          lastRunHadRateLimitError = true;
-          killTree();
-          finish(new Error("Rate limit detectado nos logs do OpenCode"));
-        }
+      if (isRateLimitError(chunk.toString()) && !lastRunHadRateLimitError) {
+        lastRunHadRateLimitError = true;
+        killTree();
+        finish(new Error("Rate limit detectado nos logs do OpenCode"));
       }
     });
 
@@ -772,7 +715,7 @@ function handleHistory(payload) {
 
 emit({
   type: "ready",
-  providers: ["claude-opus-4-6", "gpt-5.3-codex", "minimax-m2.5-free"],
+  providers: ["claude-opus-4-6", "gpt-5.3-codex", "gemini-3.1-pro"],
   tools: ["opencode"],
 });
 

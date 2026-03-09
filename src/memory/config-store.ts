@@ -90,7 +90,6 @@ export async function configSetMany(entries: Record<string, string>): Promise<vo
  * These are the keys used by the Web UI settings panel.
  */
 export const SETTINGS_KEY_MAP: Record<string, string> = {
-  minimaxApiKey: "MINIMAX_API_KEY",
   geminiApiKey: "GEMINI_API_KEY",
   anthropicApiKey: "ANTHROPIC_API_KEY",
   openaiApiKey: "OPENAI_API_KEY",
