@@ -327,10 +327,27 @@ function parseTextEvent(event, collector) {
   emitMessage(text);
 }
 
-/** Detect rate-limit / usage-limit patterns in error messages. */
+/** Detect rate-limit / usage-limit patterns in error messages.
+ *  For structured API errors (stdout JSON), this is reliable.
+ *  For raw stderr logs, use isStderrRateLimitError() instead. */
 function isRateLimitError(message) {
   const lower = String(message || "").toLowerCase();
-  return lower.includes("usage limit") || lower.includes("rate limit") || lower.includes("429") || lower.includes("quota") || lower.includes("too many requests");
+  if (lower.includes("usage limit") || lower.includes("rate limit") || lower.includes("rate_limit") || lower.includes("quota") || lower.includes("too many requests")) return true;
+  // Match 429 as a standalone status code, not as part of a larger number (e.g. port 4290, size 1429)
+  if (/\b429\b/.test(lower)) return true;
+  return false;
+}
+
+/** Stricter rate-limit detection for stderr (OpenCode --print-logs output).
+ *  Stderr contains verbose debug logs where numbers like "429" can appear
+ *  in harmless contexts (token counts, request IDs, content-lengths).
+ *  Only match explicit rate-limit phrases, not bare status codes. */
+function isStderrRateLimitError(message) {
+  const lower = String(message || "").toLowerCase();
+  if (lower.includes("usage limit") || lower.includes("rate limit") || lower.includes("rate_limit") || lower.includes("too many requests")) return true;
+  // Only match "429" when clearly an HTTP status context (e.g. "status 429", "code 429", "HTTP 429", "error 429")
+  if (/(?:status|code|http|error)\s*[:=]?\s*429\b/i.test(message)) return true;
+  return false;
 }
 
 let lastRunHadRateLimitError = false;
@@ -492,7 +509,9 @@ function runOpencodeTurn({ text, model, mode, images }) {
       // Only check the new chunk to avoid re-matching old buffer content.
       // During cascade, ignore stderr rate-limit patterns for a grace period
       // to avoid false positives from log replay of the previous model's errors.
-      if (isRateLimitError(chunk.toString()) && !lastRunHadRateLimitError) {
+      // Use the stricter stderr function to avoid false positives from
+      // bare "429" appearing in debug output (token counts, IDs, etc.).
+      if (isStderrRateLimitError(chunk.toString()) && !lastRunHadRateLimitError) {
         if (Date.now() < ignoreStderrRateLimitUntil) {
           // Grace period: this is likely log replay from the previous model, ignore it
           return;
