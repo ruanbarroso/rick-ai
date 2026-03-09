@@ -194,6 +194,14 @@ export type SessionMessageCallback = (
   mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }
 ) => void;
 
+/** Callback fired when a sub-agent session completes — used for post-session learning. */
+export type SessionDoneCallback = (
+  sessionId: string,
+  taskDescription: string,
+  sessionOutput: string,
+  numericUserId: number | null
+) => void;
+
 /**
  * Manages unified sub-agent sessions — container lifecycle, NDJSON stdin/stdout relay.
  * Each session gets its own Docker container with Chromium + Playwright + all LLM providers.
@@ -203,6 +211,7 @@ export class SessionManager {
   private connectorManager: ConnectorManager;
   private memoryService: MemoryService | null;
   private onSessionMessage: SessionMessageCallback | null = null;
+  private onSessionDone: SessionDoneCallback | null = null;
 
   private readonly metricsStartedAt = Date.now();
   private metricsCounters: SubAgentMetricsSnapshot["counters"] = {
@@ -287,6 +296,10 @@ export class SessionManager {
 
   setSessionMessageCallback(cb: SessionMessageCallback): void {
     this.onSessionMessage = cb;
+  }
+
+  setSessionDoneCallback(cb: SessionDoneCallback): void {
+    this.onSessionDone = cb;
   }
 
   getMetricsSnapshot(): SubAgentMetricsSnapshot {
@@ -1307,6 +1320,14 @@ export class SessionManager {
           }
           // Persist done state to DB
           this.updateSessionStatus(session.id, "done").catch(() => {});
+          // Fire post-session learning callback (fire-and-forget)
+          if (this.onSessionDone && session.output.trim()) {
+            try {
+              this.onSessionDone(session.id, session.taskDescription, session.output, session.numericUserId);
+            } catch (err) {
+              logger.warn({ err, sessionId: session.id }, "Post-session learning callback failed");
+            }
+          }
           logger.info({ sessionId: session.id }, "Sub-agent task done");
           break;
 

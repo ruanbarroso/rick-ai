@@ -41,7 +41,7 @@ Built on Oracle Cloud Always Free VMs, Rick orchestrates multiple LLM providers 
    - Active sub-agent session → relay (continuation, close, or nag)
    - Classification skipped for **business** users (cannot invoke sub-agents)
    - Otherwise → **Classifier** decides: `SELF` (direct chat) or `DELEGATE` (sub-agent)
-4. For `SELF`: Gemini Flash responds with user-isolated conversation history + global memory context (secrets filtered for non-admin). Learning (memory extraction + embedding) only occurs if `canLearn(role)`.
+4. For `SELF`: Gemini Flash responds with user-isolated conversation history + **relevance-filtered** memory context (only top-K relevant memories + sensitive categories for admin). Learning (intent-based memory extraction + embedding + profile population) only occurs if `canLearn(role)`.
 5. For `DELEGATE`: a unified Docker container is spawned with all LLM providers, credentials injected, output streamed back via the originating connector. Session persisted to `sub_agent_sessions` for audit.
 
 ## Features
@@ -96,13 +96,17 @@ OAuth refresh is coordinated with in-memory deduplication per provider/user, avo
 
 Rick has two memory systems working together:
 
-- **Structured memory** (PostgreSQL or SQLite) — key-value pairs organized by category (credentials, knowledge, notes, preferences). Global across all users with `created_by` audit tracking. Supports exact match, Portuguese full-text search, and ILIKE fallback.
+- **Structured memory** (PostgreSQL or SQLite) — key-value pairs organized by category (credentials, knowledge, notes, preferences). Global across all users with `created_by` audit tracking and **importance scoring** (1-10). Supports exact match, Portuguese full-text search, and ILIKE fallback.
 - **Semantic memory** (pgvector) — conversation embeddings via Gemini's embedding model (768 dimensions, HNSW index). Global with `created_by` tracking and creator role info. Enables "search by meaning" for past conversations.
+- **Memory version history** — every memory update saves the previous value to `memory_history` for audit and rollback.
 
-Memories are extracted automatically:
-- Regex patterns catch credential cases ("minha senha do github e...")
-- LLM extraction (Gemini Flash) handles complex cases when the assistant confirms saving something
-- Personal data (name, email, city) goes to `users.profile` JSONB, NOT memories
+**Relevance-filtered context injection**: Instead of dumping all memories into every LLM prompt, the system embeds the user's query and scores each memory by cosine similarity. Only the top-K most relevant memories (plus all sensitive categories for admin) are injected into the system prompt.
+
+Memories are extracted automatically via multiple pipelines:
+- **Fast-path regex**: catches credential cases immediately ("minha senha do github e...")
+- **Intent-based classification**: Gemini Flash classifies each user message to detect extractable information (facts, preferences, credentials) — no longer depends on assistant response phrasing
+- **Post-session learning**: when a sub-agent session completes, the full output is analyzed for credentials, URLs, configurations, and technical knowledge
+- **User profile extraction**: personal data (name, email, city, profession) goes to `users.profile` JSONB — separate from the memories table
 - Every non-trivial conversation is embedded into vector memory (global, with `created_by`)
 - RBAC hierarchy: admin memories cannot be overwritten by dev users
 
@@ -379,12 +383,17 @@ users (id, phone, role, status, display_name, profile JSONB,
 connector_identities (id, user_id, connector, external_id, display_name, created_at)
   -- Maps connector-specific IDs to users (e.g., WhatsApp phone → user)
   -- UNIQUE (connector, external_id)
-memories (id, category, key, value, metadata, user_id, created_by,
+memories (id, category, key, value, metadata, importance, user_id, created_by,
           created_at, updated_at)
   -- Global memories with RBAC hierarchy enforcement via created_by
+  -- importance: 1-10 score assigned at extraction (default 5)
   -- UNIQUE (category, key) -- global unique constraint
   -- GIN index on to_tsvector('portuguese', key || ' ' || value)
-conversations (id, user_id, role, content, model_used, tokens_used, created_at)
+memory_history (id, memory_id, category, key, old_value, new_value,
+               changed_by, changed_at)
+  -- Version history for memory auditing and rollback
+conversations (id, user_id, role, content, model_used, tokens_used, connector_name,
+              audio_url, image_url, message_type, file_infos, created_at)
   -- user_id for RBAC-aware history isolation
 message_log (id, wa_message_id, author, content, created_at)
 oauth_tokens (id, user_id, provider, access_token, refresh_token, expires_at, ...)

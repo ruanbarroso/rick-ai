@@ -293,6 +293,36 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS connector_name VARCHAR(50)`,
     ],
   },
+
+  {
+    name: "016_memory_importance",
+    statements: [
+      // Importance score (1-10) assigned by LLM at extraction time.
+      // Used as tiebreaker in relevance-filtered context injection.
+      // Default 5 (neutral) for existing and manually saved memories.
+      `ALTER TABLE memories ADD COLUMN IF NOT EXISTS importance INTEGER DEFAULT 5`,
+    ],
+  },
+
+  {
+    name: "017_memory_history",
+    statements: [
+      // Version history for memories — saves previous values before UPDATE.
+      // Enables rollback and audit of memory changes.
+      `CREATE TABLE IF NOT EXISTS memory_history (
+        id SERIAL PRIMARY KEY,
+        memory_id INTEGER NOT NULL,
+        category VARCHAR(100) NOT NULL,
+        key VARCHAR(255) NOT NULL,
+        old_value TEXT NOT NULL,
+        new_value TEXT NOT NULL,
+        changed_by INTEGER,
+        changed_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_memory_history_mid ON memory_history(memory_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_memory_history_key ON memory_history(category, key)`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {

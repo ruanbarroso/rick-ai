@@ -459,8 +459,8 @@ export class Agent {
     signal?: AbortSignal,
     generation?: number
   ): Promise<string> {
-    // RBAC: Use global memory context with role-based filtering
-    const memoryContext = await this.memory.buildGlobalMemoryContext(userRole);
+    // RBAC: Use relevance-filtered memory context (embeds user query, scores memories)
+    const memoryContext = await this.memory.buildRelevantMemoryContext(userRole, text);
     const semanticContext = await this.buildSemanticContext(userId!, text, userRole);
 
     const history = await this.memory.getConversationHistoryByUserId(userId!);
@@ -513,6 +513,11 @@ export class Agent {
 
       this.autoEmbedConversation(userId!, text, response.content).catch(
         (err) => logger.warn({ err }, "Failed to auto-embed conversation")
+      );
+
+      // User profile extraction (fire-and-forget)
+      this.extractUserProfile(userId!, text).catch(
+        (err) => logger.warn({ err }, "Failed to extract user profile")
       );
     }
 
@@ -1150,19 +1155,7 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
     try {
       // RBAC: Use global search (no user filter) with creator info
       const results = await this.vectorMemory.searchGlobal(queryText, 5, 0.35);
-      if (results.length === 0) {
-        // Fallback to legacy per-user search if no global results
-        const legacyResults = await this.vectorMemory.searchGlobal(queryText, 5, 0.35);
-        if (legacyResults.length === 0) return "";
-
-        let context = "\n--- MEMORIAS SEMANTICAS (relevantes ao contexto) ---\n";
-        for (const mem of legacyResults) {
-          const sim = mem.similarity ? ` (${(mem.similarity * 100).toFixed(0)}% relevante)` : "";
-          context += `- [${mem.category}] ${mem.content}${sim}\n`;
-        }
-        context += "--- FIM DAS MEMORIAS SEMANTICAS ---\n";
-        return context;
-      }
+      if (results.length === 0) return "";
 
       let context = "\n--- MEMORIAS SEMANTICAS (relevantes ao contexto) ---\n";
       for (const mem of results) {
@@ -1171,9 +1164,7 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
         context += `- [${mem.category}${creator}] ${mem.content}${sim}\n`;
       }
       context += "--- FIM DAS MEMORIAS SEMANTICAS ---\n";
-      if (results.length > 0) {
-        context += "Nota: quando houver conflito entre memorias semanticas, priorize as criadas pelo administrador.\n";
-      }
+      context += "Nota: quando houver conflito entre memorias semanticas, priorize as criadas pelo administrador.\n";
 
       return context;
     } catch (err) {
@@ -1220,9 +1211,7 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
     assistantResponse: string,
     userRole: UserRole = "admin"
   ): Promise<void> {
-    // Quick regex patterns for CREDENTIAL cases only.
-    // Personal data (name, email, city, etc.) is handled by the LLM extraction
-    // and stored in users.profile — NOT in the memories table.
+    // Quick regex patterns for CREDENTIAL cases only — instant save without LLM.
     const credentialPatterns = [
       { regex: /(?:minha )?senha (?:do|da|de)\s+(\S+)\s+(?:e|é)\s+(.+)/i, category: "senhas", key: null as string | null },
     ];
@@ -1240,30 +1229,134 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
       }
     }
 
-    // NOTE: Auto-forget via regex was removed (was too greedy — matched casual
-    // messages like "remove esse erro" and deleted memories). Memory deletion
-    // now requires explicit user confirmation or Web UI management.
+    // Skip trivial messages — greetings, confirmations, very short inputs
+    const trivialPatterns = [
+      /^(oi|ola|hey|hi|hello|e ai|fala|salve|bom dia|boa tarde|boa noite)\b/i,
+      /^(ok|sim|nao|valeu|obrigado|brigado|thanks|blz|beleza|show|top)\b/i,
+      /^\//,
+    ];
+    if (userMessage.length < 15 || trivialPatterns.some((p) => p.test(userMessage.trim()))) {
+      return;
+    }
 
-    // LLM-based extraction: if the assistant confirmed saving something,
-    // use Gemini to extract structured data and persist to memories table
+    // Intent-based extraction: classify user message to decide if LLM extraction is needed.
+    // This replaces the old fragile approach of matching verbs in the assistant response.
+    //
+    // Fast-path triggers (no LLM classification needed):
+    // 1. Assistant confirmed saving (legacy regex — still useful as a cheap trigger)
+    // 2. User explicitly asked to save credentials
     const saveConfirmRegex = /salv[eoai]|guardei|guardad[oa]|lembr[eoai]|armazen[eoai]|armazenad[oa]|registr[eoai]|registrad[oa]|anotei|anotad[oa]|memori[sz]/i;
-    const matched = assistantResponse.match(saveConfirmRegex);
-    logger.info(
-      { matched: !!matched, matchStr: matched?.[0], responseSnippet: assistantResponse.substring(0, 100) },
-      "extractAndSaveMemories: LLM extraction trigger check"
-    );
-    // Also trigger if user message looks like it contains credentials to save
     const userCredRegex = /(?:salva|guarda|lembra|armazena|registra|anota)\s.*(?:senha|credencia|login|usuario|token|e-?mail|chave)/i;
-    const userHasCred = userMessage.match(userCredRegex);
 
-    if (matched || userHasCred) {
-      logger.info(
-        { trigger: matched ? "assistant_confirmed" : "user_credential_intent", userHasCred: !!userHasCred },
-        "extractAndSaveMemories: triggering LLM extraction"
-      );
+    const fastMatch = saveConfirmRegex.test(assistantResponse) || userCredRegex.test(userMessage);
+
+    if (fastMatch) {
+      logger.info("extractAndSaveMemories: fast-path trigger (regex match)");
       this.llmExtractMemories(userId, userMessage, assistantResponse, userRole).catch((err) => {
         logger.warn({ err: err?.message || err }, "LLM memory extraction failed (outer catch)");
       });
+      return;
+    }
+
+    // Slow-path: Use Gemini Flash to classify whether the user message contains
+    // extractable information (facts, preferences, credentials, knowledge).
+    // Fire-and-forget to avoid blocking the response.
+    this.classifyAndExtract(userId, userMessage, assistantResponse, userRole).catch((err) => {
+      logger.warn({ err: err?.message || err }, "Intent classification for extraction failed");
+    });
+  }
+
+  /**
+   * Classify user message intent and trigger LLM extraction if it contains
+   * information worth remembering. Uses a cheap Gemini Flash call.
+   */
+  private async classifyAndExtract(
+    userId: number,
+    userMessage: string,
+    assistantResponse: string,
+    userRole: UserRole
+  ): Promise<void> {
+    const classifyPrompt = `Classifique se a mensagem do usuario contem informacao que vale a pena memorizar.
+
+MENSAGEM DO USUARIO:
+${userMessage.substring(0, 500)}
+
+Responda APENAS com uma dessas opcoes:
+- EXTRAIR — se a mensagem contem: credenciais, senhas, preferencias do usuario, fatos que ele ensina, configuracoes, links importantes, ou qualquer informacao que ele gostaria que fosse lembrada no futuro.
+- IGNORAR — se a mensagem e uma pergunta, pedido de acao, conversa casual, ou nao contem informacao nova para memorizar.
+
+Responda APENAS a palavra EXTRAIR ou IGNORAR, nada mais.`;
+
+    try {
+      const result = await this.llm.chat(
+        [{ role: "user", content: classifyPrompt }],
+        undefined
+      );
+      const decision = result.content.trim().toUpperCase();
+
+      if (decision.includes("EXTRAIR")) {
+        logger.info({ userId, msgSnippet: userMessage.substring(0, 60) }, "Intent classifier: EXTRAIR — triggering LLM extraction");
+        await this.llmExtractMemories(userId, userMessage, assistantResponse, userRole);
+      } else {
+        logger.debug({ userId, decision }, "Intent classifier: IGNORAR");
+      }
+    } catch (err) {
+      logger.warn({ err }, "Intent classification failed");
+    }
+  }
+
+  /**
+   * Extract personal data from user messages and populate users.profile.
+   * Runs separately from memory extraction — profile data (name, email, city, etc.)
+   * is intentionally excluded from the memories table.
+   */
+  private async extractUserProfile(userId: number, userMessage: string): Promise<void> {
+    // Skip short or trivial messages
+    if (userMessage.length < 20) return;
+
+    // Quick regex pre-check: does the message look like it might contain personal info?
+    const personalInfoHints = /\b(meu nome|me chamo|moro em|trabalho com|sou de|meu e-?mail|meu telefone|minha profissao|minha area)\b/i;
+    if (!personalInfoHints.test(userMessage)) return;
+
+    const prompt = `Extraia informacoes pessoais do usuario desta mensagem, se houver.
+
+MENSAGEM: ${userMessage.substring(0, 500)}
+
+Responda APENAS com campos encontrados no formato CAMPO=VALOR, um por linha:
+- nome=<nome do usuario>
+- email=<email pessoal>
+- telefone=<telefone>
+- cidade=<cidade onde mora>
+- estado=<estado/UF>
+- profissao=<profissao ou area de atuacao>
+
+Se nao houver nenhuma informacao pessoal, responda VAZIO.
+Responda APENAS os campos encontrados, nada mais.`;
+
+    try {
+      const result = await this.llm.chat(
+        [{ role: "user", content: prompt }],
+        undefined
+      );
+      const text = result.content.trim();
+
+      if (text === "VAZIO" || !text) return;
+
+      const profileData: Record<string, string | null> = {};
+      for (const line of text.split("\n")) {
+        const match = line.match(/^(\w+)\s*=\s*(.+)/);
+        if (match) {
+          const [, field, value] = match;
+          profileData[field.toLowerCase()] = value.trim();
+        }
+      }
+
+      if (Object.keys(profileData).length > 0) {
+        await this.memory.updateUserProfile(userId, profileData);
+        logger.info({ userId, fields: Object.keys(profileData) }, "User profile populated from conversation");
+      }
+    } catch (err) {
+      logger.warn({ err }, "User profile extraction failed");
     }
   }
 
@@ -1368,8 +1461,14 @@ ${userMessage.substring(0, 1000)}
 RESPOSTA DO ASSISTENTE:
 ${assistantResponse.substring(0, 500)}
 
-Retorne APENAS linhas no formato: CATEGORIA|CHAVE|VALOR
+Retorne APENAS linhas no formato: CATEGORIA|CHAVE|VALOR|IMPORTANCIA
 Categorias validas: credenciais, senhas, preferencias, notas, conhecimento
+IMPORTANCIA: numero de 1 a 10 indicando quao importante e lembrar disso:
+  10 = credenciais, senhas, tokens (critico)
+  8 = preferencias fortes, configuracoes do sistema
+  6 = fatos uteis, conhecimento tecnico
+  4 = notas gerais, curiosidades
+  2 = informacao trivial
 
 IMPORTANTE: Informacoes pessoais do usuario (nome, email pessoal, telefone, cidade, trabalho) NAO devem ser extraidas como memorias. Elas sao gerenciadas separadamente no perfil do usuario.
 
@@ -1381,10 +1480,10 @@ Regras:
 - Use a categoria "conhecimento" para fatos gerais que o usuario ensinou
 
 Exemplos de entrada/saida:
-- "salva credencial do github: user:joao senha:123" → credenciais|github|usuario: joao, senha: 123
-- "meu email outlook é joao@outlook.com e senha abc123" → credenciais|outlook|email: joao@outlook.com, senha: abc123
-- "lembra que prefiro dark mode" → preferencias|dark mode|prefere dark mode
-- "a capital da Australia é Canberra" → conhecimento|capital da australia|Canberra
+- "salva credencial do github: user:joao senha:123" → credenciais|github|usuario: joao, senha: 123|10
+- "meu email outlook é joao@outlook.com e senha abc123" → credenciais|outlook|email: joao@outlook.com, senha: abc123|10
+- "lembra que prefiro dark mode" → preferencias|dark mode|prefere dark mode|8
+- "a capital da Australia é Canberra" → conhecimento|capital da australia|Canberra|4
 
 Se nao houver nada para extrair, retorne VAZIO (apenas essa palavra).
 Retorne APENAS as linhas de extracao, nada mais.`;
@@ -1412,7 +1511,15 @@ Retorne APENAS as linhas de extracao, nada mais.`;
           logger.warn({ line }, "llmExtractMemories: skipping malformed line");
           continue;
         }
-        const [category, key, ...valueParts] = parts;
+        const [category, key, ...rest] = parts;
+        // Last part may be importance (a number 1-10)
+        let importance = 5;
+        let valueParts = rest;
+        const lastPart = rest[rest.length - 1];
+        if (lastPart && /^\d+$/.test(lastPart) && parseInt(lastPart) >= 1 && parseInt(lastPart) <= 10) {
+          importance = parseInt(lastPart);
+          valueParts = rest.slice(0, -1);
+        }
         const value = valueParts.join("|"); // in case value contains |
         if (!key || !value) continue;
 
@@ -1438,8 +1545,8 @@ Retorne APENAS as linhas de extracao, nada mais.`;
           }
         }
 
-        // RBAC: Use rememberV2 with hierarchy enforcement
-        const memResult = await this.memory.rememberV2(normalizedKey, finalValue, normalizedCategory, userId, userRole);
+        // RBAC: Use rememberV2 with hierarchy enforcement + importance scoring
+        const memResult = await this.memory.rememberV2(normalizedKey, finalValue, normalizedCategory, userId, userRole, {}, importance);
         if (memResult.blocked) {
           logger.info(
             { userId, category: normalizedCategory, key: normalizedKey, existingValue: memResult.existingValue?.substring(0, 50) },
@@ -1448,12 +1555,118 @@ Retorne APENAS as linhas de extracao, nada mais.`;
           continue;
         }
         logger.info(
-          { userId, category: normalizedCategory, key: normalizedKey, valueLen: finalValue.length },
+          { userId, category: normalizedCategory, key: normalizedKey, importance, valueLen: finalValue.length },
           "LLM extracted and saved memory"
         );
       }
     } catch (err: any) {
       logger.warn({ err: err?.message || err, stack: err?.stack?.substring(0, 300) }, "LLM memory extraction failed (inner catch)");
+    }
+  }
+
+  // ==================== POST-SESSION LEARNING ====================
+
+  /**
+   * Extract learnings from a completed sub-agent session.
+   * Called when a session reaches "done" state. Runs Gemini Flash over
+   * the session output to discover: credentials, URLs, configurations,
+   * technical knowledge, and solutions found.
+   */
+  private async extractSessionLearnings(
+    sessionId: string,
+    taskDescription: string,
+    sessionOutput: string,
+    numericUserId: number | null
+  ): Promise<void> {
+    // Skip very short outputs — nothing to learn
+    if (sessionOutput.length < 100) return;
+
+    const userId = numericUserId ?? 1; // fallback to admin
+
+    const extractPrompt = `Analise o resultado de uma sessao do sub-agente e extraia informacoes uteis para memorizar.
+
+TAREFA ORIGINAL:
+${taskDescription.substring(0, 300)}
+
+RESULTADO DA SESSAO (resumo):
+${sessionOutput.substring(0, 3000)}
+
+Extraia APENAS informacoes que sejam uteis para o futuro:
+- Credenciais descobertas ou configuradas (usuario, senha, token, chave API)
+- URLs de servicos, endpoints, dashboards
+- Configuracoes de sistema (portas, IPs, paths de arquivos)
+- Solucoes tecnicas para problemas (como resolver X erro)
+- Padroes ou estruturas do projeto descobertas
+
+NAO extraia:
+- Progresso da tarefa (passos executados)
+- Mensagens de log ou debug
+- Informacoes que ja sao obvias pelo contexto
+- Codigo-fonte ou diffs
+
+Retorne APENAS linhas no formato: CATEGORIA|CHAVE|VALOR
+Categorias validas: credenciais, senhas, conhecimento, notas
+
+Se nao houver nada util para memorizar, retorne VAZIO.`;
+
+    try {
+      const result = await this.llm.chat(
+        [{ role: "user", content: extractPrompt }],
+        undefined
+      );
+      const text = result.content.trim();
+
+      if (text === "VAZIO" || !text) {
+        logger.debug({ sessionId }, "Post-session extraction: nothing to learn");
+        return;
+      }
+
+      const lines = text.split("\n").filter((l) => l.includes("|"));
+      let savedCount = 0;
+
+      for (const line of lines) {
+        const parts = line.split("|").map((p) => p.trim());
+        if (parts.length < 3) continue;
+        const [category, key, ...valueParts] = parts;
+        const value = valueParts.join("|");
+        if (!key || !value) continue;
+
+        const normalizedCategory = category.toLowerCase();
+        const normalizedKey = key.toLowerCase();
+
+        // Use admin role for session learnings (sub-agent acts on behalf of system)
+        try {
+          const memResult = await this.memory.rememberV2(
+            normalizedKey, value, normalizedCategory, userId, "admin"
+          );
+          if (memResult.saved) savedCount++;
+        } catch (err) {
+          logger.warn({ err, key: normalizedKey }, "Failed to save post-session memory");
+        }
+      }
+
+      if (savedCount > 0) {
+        logger.info(
+          { sessionId, savedCount, totalLines: lines.length },
+          "Post-session learning: memories extracted and saved"
+        );
+      }
+
+      // Also embed the session summary in vector memory for future semantic retrieval
+      if (this.vectorMemory && sessionOutput.length > 200) {
+        const summary = `Tarefa: ${taskDescription.substring(0, 200)}\nResultado: ${sessionOutput.substring(0, 800)}`;
+        try {
+          await this.vectorMemory.storeGlobal(
+            summary, "session_learning", "post-session",
+            { sessionId, task: taskDescription.substring(0, 200) },
+            userId
+          );
+        } catch (err) {
+          logger.warn({ err, sessionId }, "Failed to embed session learning");
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId }, "Post-session learning extraction failed");
     }
   }
 
@@ -1467,6 +1680,13 @@ Retorne APENAS as linhas de extracao, nada mais.`;
     // Wire session message callback so sub-agent messages go to public session pages
     this.sessionManager.setSessionMessageCallback((sessionId, role, text, messageType, mediaInfo) => {
       webConnector.broadcastToSessionSubscribers(sessionId, role, text, messageType, mediaInfo);
+    });
+
+    // Wire post-session learning callback
+    this.sessionManager.setSessionDoneCallback((sessionId, taskDescription, sessionOutput, numericUserId) => {
+      this.extractSessionLearnings(sessionId, taskDescription, sessionOutput, numericUserId).catch((err) => {
+        logger.warn({ err, sessionId }, "Post-session learning failed");
+      });
     });
 
     const bridge: WebAgentBridge = {
