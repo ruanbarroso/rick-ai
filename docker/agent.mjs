@@ -436,13 +436,18 @@ function runOpencodeTurn({ text, model, mode, images }) {
     let gotMeaningfulOutput = false;
     let finished = false;
 
-    // Turn completion timer: after the OpenCode process stops emitting events,
-    // it may hang during cleanup (MCP servers, Chrome, etc.) instead of exiting.
-    // This timer force-kills the process and resolves with the collected text
-    // after TURN_COMPLETION_GRACE_MS of silence following meaningful output.
-    const TURN_COMPLETION_GRACE_MS = 10_000; // 10s grace after last event
+    // Turn completion timer: after the OpenCode process finishes its last step
+    // and stops emitting events, it may hang during cleanup (MCP servers,
+    // Chrome, etc.) instead of exiting. This timer force-kills the process and
+    // resolves with the collected text after a grace period of silence.
+    //
+    // IMPORTANT: Only starts after step_finish events (not after tool_use or text).
+    // After a tool_use, the LLM needs time to process the result and generate
+    // the next response — that can take 30+ seconds with rate-limit retries.
+    // After step_finish with no subsequent step_start, the turn is truly done.
+    const TURN_COMPLETION_GRACE_MS = 15_000; // 15s after last step_finish
     let turnCompletionTimer = null;
-    function resetTurnCompletionTimer() {
+    function startTurnCompletionTimer() {
       if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
       if (!gotMeaningfulOutput) return; // Don't start until we have real output
       turnCompletionTimer = setTimeout(() => {
@@ -452,6 +457,10 @@ function runOpencodeTurn({ text, model, mode, images }) {
         killTree();
         finish(null, finalText);
       }, TURN_COMPLETION_GRACE_MS);
+    }
+    function cancelTurnCompletionTimer() {
+      if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
+      turnCompletionTimer = null;
     }
 
     child.stdout.on("data", (chunk) => {
@@ -476,28 +485,28 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
         if (event.type === "tool_use") {
           gotMeaningfulOutput = true;
+          cancelTurnCompletionTimer(); // LLM is active — don't time out
           parseToolEvent(event);
-          resetTurnCompletionTimer();
           continue;
         }
 
         if (event.type === "text") {
           gotMeaningfulOutput = true;
+          cancelTurnCompletionTimer(); // LLM is active — don't time out
           parseTextEvent(event, collectedText);
-          resetTurnCompletionTimer();
           continue;
         }
 
         if (event.type === "step_start") {
-          // New step starting — cancel any pending completion timer
-          if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
-          turnCompletionTimer = null;
+          cancelTurnCompletionTimer(); // New step starting
           emitStatus("Pensando...");
           continue;
         }
 
         if (event.type === "step_finish") {
-          resetTurnCompletionTimer();
+          // Step done. If no new step_start comes within the grace period,
+          // the turn is complete — force-kill and resolve.
+          startTurnCompletionTimer();
           continue;
         }
 
