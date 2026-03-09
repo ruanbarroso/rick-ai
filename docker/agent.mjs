@@ -334,6 +334,9 @@ function isRateLimitError(message) {
 }
 
 let lastRunHadRateLimitError = false;
+/** Timestamp until which stderr rate-limit detection should be suppressed.
+ *  Set during cascade to ignore log replay from previous model's session. */
+let ignoreStderrRateLimitUntil = 0;
 
 function runOpencodeTurn({ text, model, mode, images }) {
   return new Promise((resolve, reject) => {
@@ -487,7 +490,13 @@ function runOpencodeTurn({ text, model, mode, images }) {
       stderrBuffer += chunk.toString();
       // Detect rate limit from OpenCode logs (enabled via --print-logs).
       // Only check the new chunk to avoid re-matching old buffer content.
+      // During cascade, ignore stderr rate-limit patterns for a grace period
+      // to avoid false positives from log replay of the previous model's errors.
       if (isRateLimitError(chunk.toString()) && !lastRunHadRateLimitError) {
+        if (Date.now() < ignoreStderrRateLimitUntil) {
+          // Grace period: this is likely log replay from the previous model, ignore it
+          return;
+        }
         lastRunHadRateLimitError = true;
         killTree();
         finish(new Error("Rate limit detectado nos logs do OpenCode"));
@@ -551,7 +560,9 @@ async function handleTurn(payload) {
   interrupted = false;
   toolStarted.clear();
 
-  const requestedModel = typeof payload.model === "string" ? payload.model : DEFAULT_MODEL_ID;
+  // Use pending model (from live switch) if set, otherwise use payload model
+  const requestedModel = pendingModelId || (typeof payload.model === "string" ? payload.model : DEFAULT_MODEL_ID);
+  pendingModelId = ""; // consume it
   const mode = payload.mode === "plan" ? "plan" : "build";
   const userText = String(payload.text || "").trim();
 
@@ -610,11 +621,14 @@ async function handleTurn(payload) {
       toolStarted.clear();
 
       if (i > 0) {
-        // Reset session so the new model starts fresh.
-        // Without this, --print-logs replays the previous model's error logs
-        // (including rate-limit messages), causing a false-positive detection
-        // that kills the new model before it even starts.
-        openCodeSessionId = "";
+        // Preserve openCodeSessionId so the cascade model continues the same
+        // conversation context instead of starting fresh. The session retains
+        // all prior tool results, file edits, and LLM context.
+        //
+        // --print-logs will replay the previous model's error logs on stderr,
+        // including rate-limit messages. To prevent false-positive detection,
+        // set a grace period during which stderr rate-limit patterns are ignored.
+        ignoreStderrRateLimitUntil = Date.now() + 10_000; // 10s grace for log replay
         emitStatus(`Modelo '${modelsToTry[i - 1]}' falhou (rate limit), tentando '${tryModelId}'...`);
         emit({ type: "model_active", modelId: tryModelId, modelName: tryModelId });
       }
@@ -701,6 +715,16 @@ function handleUpdateToken(payload) {
   emit({ type: "token_updated" });
 }
 
+/** Updated preferred model for the next turn. Does NOT interrupt a running turn.
+ *  If a turn is currently running, the new model takes effect on the next message. */
+let pendingModelId = "";
+function handleUpdateModel(payload) {
+  if (typeof payload.modelId === "string" && payload.modelId) {
+    pendingModelId = payload.modelId;
+    emit({ type: "model_updated", modelId: payload.modelId });
+  }
+}
+
 function handleHistory(payload) {
   const incoming = Array.isArray(payload.messages) ? payload.messages : [];
   historyMessages = incoming
@@ -738,6 +762,11 @@ rl.on("line", (line) => {
 
   if (msg.type === "update_token") {
     handleUpdateToken(msg);
+    return;
+  }
+
+  if (msg.type === "update_model") {
+    handleUpdateModel(msg);
     return;
   }
 

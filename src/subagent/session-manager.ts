@@ -804,6 +804,13 @@ export class SessionManager {
     }
     session.preferredModel = modelId;
     session.updatedAt = Date.now();
+
+    // Notify the agent process of the model change so it takes effect on the next turn.
+    // This avoids a mismatch where the session object has a new model but the agent
+    // process still uses the old one until the next sendToSession call.
+    this.sendToAgentProcess(sessionId, { type: "update_model", modelId });
+    logger.info({ sessionId, modelId }, "Sent model update to agent process");
+
     return session.preferredModel;
   }
 
