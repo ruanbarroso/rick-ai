@@ -389,19 +389,17 @@ export class Agent {
         "Task classification result"
       );
 
-      // If a sub-agent is already running FOR THIS USER, only block new DELEGATE tasks.
-      // SELF tasks (save memory, answer questions, etc.) are handled normally
-      // by the main session, independently of any running sub-agent.
-      const userRunningSessions = this.sessionManager.getRunningSessionsForUser(userPhone);
-      if (userRunningSessions.length > 0) {
-        if (classification) {
-          logger.info({ userPhone, runningSessions: userRunningSessions.length }, "Blocking DELEGATE — sub-agent already running for user");
-          return "O sub-agente ainda esta trabalhando... Aguarde um momento.";
+      // If the classifier says DELEGATE, create a new sub-agent — even if others
+      // are already running.  Multiple concurrent sub-agents are allowed so the
+      // user can launch several tasks in parallel.
+      // SELF tasks always fall through to handleSimpleChat below.
+      if (classification) {
+        const userRunningSessions = this.sessionManager.getRunningSessionsForUser(userPhone);
+        if (userRunningSessions.length > 0) {
+          logger.info({ userPhone, runningSessions: userRunningSessions.length }, "Creating additional sub-agent — others already running for user");
+        } else {
+          logger.info({ userPhone, credentialHints: classification.credentialHints }, "Delegating to sub-agent");
         }
-        // SELF task — fall through to handleSimpleChat below
-        logger.info({ userPhone }, "SELF task while sub-agent running — handling via simple chat");
-      } else if (classification) {
-        logger.info({ userPhone, credentialHints: classification.credentialHints }, "Delegating to sub-agent");
         return this.delegateToSubAgent(
           userPhone,
           connectorName,
@@ -968,11 +966,11 @@ Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a inform
       // Use classifier as tiebreaker
       const classification = await classifyTask(text, signal);
       if (classification) {
-        // CASE 3: New DELEGATE task — nag to close pending sessions first
-        const sessionList = doneSessions
-          .map((s) => `- "${s.taskDescription.substring(0, 60)}..."`)
-          .join("\n");
-        return `Antes de abrir outra sessao, preciso que voce resolva as pendentes:\n\n${sessionList}\n\nMarca *Sim* na enquete pra encerrar, ou me pede um ajuste nessa mesma sessao.`;
+        // CASE 3: New DELEGATE task — allow it even with pending done sessions.
+        // Multiple concurrent sub-agents are supported; the user should be able
+        // to launch new tasks without having to close previous ones first.
+        logger.info({ text: text.substring(0, 60), userPhone, doneSessions: doneSessions.length }, "New DELEGATE task while done sessions exist — allowing new sub-agent");
+        return null;
       }
       // CASE 4: SELF task that doesn't share topic — NOT a continuation.
       // Return null to signal the caller should handle this as normal chat.
