@@ -40,10 +40,32 @@ function renderText(text) {
   // 3. Inline code
   escaped = escaped.replace(/`([^`\n]+)`/g, '<code>$1</code>');
 
-  // 4. Clickable URLs
-  escaped = escaped.replace(/(https?:\/\/[^\s<>"']+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  // 4. Inline formatting (must run BEFORE URL linkification so that
+  //    **https://...** is converted to <strong>https://...</strong> first,
+  //    preventing the URL regex from swallowing trailing asterisks)
+  function inlineFmtEarly(t) {
+    // Bold (**...**)
+    t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Italic (*...*) — single asterisk
+    t = t.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+    // Italic (_..._)
+    t = t.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em>$1</em>');
+    // Strikethrough (~~...~~)
+    t = t.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+    return t;
+  }
+  escaped = inlineFmtEarly(escaped);
 
-  // 5. Line-by-line processing (headers, lists, hr)
+  // 5. Clickable URLs (runs after inline formatting so bold/italic markers are already consumed)
+  //    Uses a greedy match then strips trailing punctuation that is likely not part of the URL.
+  escaped = escaped.replace(/(https?:\/\/(?:[^\s<>]|&amp;)+)/g, function(match) {
+    // Strip trailing punctuation/markdown artifacts that got captured
+    var url = match.replace(/(?:[.,;:!?)>\]]+|&lt;|&gt;)+$/, '');
+    var trailing = match.slice(url.length);
+    return '<a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>' + trailing;
+  });
+
+  // 6. Line-by-line processing (headers, lists, hr)
   function inlineFmt(t) {
     // Bold (**...**)
     t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
