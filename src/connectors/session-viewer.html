@@ -1184,6 +1184,63 @@ function isExecutionFailureText(text) {
   return String(text || '').toLowerCase().indexOf('falha operacional: esta rodada exigia execucao') === 0;
 }
 
+/**
+ * Handle real-time audio transcription — replaces the "Processando áudio…"
+ * placeholder with the actual transcription text.
+ */
+function handleTranscription(audioUrl, transcription) {
+  if (!audioUrl || !transcription) return;
+
+  // Clean transcription text (strip Gemini prefix + wrapping quotes)
+  var cleanText = transcription.replace(/^aqui\s+est[aá]\s+a\s+transcri[cç][aã]o.*?:\s*/i, '');
+  cleanText = cleanText.replace(/^[""\u201C](.+)[""\u201D]$/, '$1').trim();
+  if (!cleanText) return;
+
+  var container = document.getElementById('messages');
+  var audioDivs = container.querySelectorAll('.message.user .audio-message');
+  var matched = false;
+
+  // Try to match by audio src URL
+  for (var j = audioDivs.length - 1; j >= 0; j--) {
+    var audioMsg = audioDivs[j];
+    var audioEl = audioMsg.querySelector('audio');
+    if (audioEl) {
+      var src = audioEl.getAttribute('src') || '';
+      if (src !== audioUrl && src.indexOf(audioUrl) === -1) continue;
+    }
+    var existingBq = audioMsg.querySelector('.audio-transcription');
+    if (existingBq && existingBq.classList.contains('processing')) {
+      existingBq.classList.remove('processing');
+      existingBq.innerHTML = renderText(cleanText);
+      scrollToBottom();
+      matched = true;
+      break;
+    } else if (!existingBq) {
+      var bq = document.createElement('blockquote');
+      bq.className = 'audio-transcription';
+      bq.innerHTML = renderText(cleanText);
+      audioMsg.appendChild(bq);
+      scrollToBottom();
+      matched = true;
+      break;
+    }
+  }
+
+  // Fallback: update the last "processing" audio (handles local blob URLs that don't match server URL)
+  if (!matched) {
+    for (var jj = audioDivs.length - 1; jj >= 0; jj--) {
+      var audioMsg2 = audioDivs[jj];
+      var existingBq2 = audioMsg2.querySelector('.audio-transcription.processing');
+      if (existingBq2) {
+        existingBq2.classList.remove('processing');
+        existingBq2.innerHTML = renderText(cleanText);
+        scrollToBottom();
+        break;
+      }
+    }
+  }
+}
+
 function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) {
   // System state messages (e.g. {"state":"done"}) — don't render as bubbles
   if (role === 'system' || messageType === 'system') {
@@ -1466,6 +1523,10 @@ function connect() {
         }
         // Typing/state indicator is managed by 'session_state' events from backend.
         appendMessage(msg.text, msg.role, msg.messageType, msg.audioUrl || null, msg.imageUrls || null, msg.fileInfos || null);
+        break;
+
+      case 'transcription':
+        handleTranscription(msg.audioUrl, msg.text);
         break;
 
       case 'session_history':

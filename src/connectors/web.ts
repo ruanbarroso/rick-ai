@@ -714,8 +714,9 @@ export class WebConnector implements Connector {
                   ]);
                   const transcription = result.content.trim();
                   text = text ? `${text}\n\n[Áudio transcrito]: ${transcription}` : transcription;
-                  // Broadcast transcription back to session viewer
-                  this.broadcastToSessionSubscribers(sessionId, "system", `_Transcrição: ${transcription}_`);
+                  // Broadcast transcription back to session viewer so it can
+                  // replace the "Processando áudio…" placeholder in the DOM.
+                  this.broadcastTranscriptionToSession(sessionId, audioUrl || "", transcription);
                 } else {
                   const unavailableMsg = "O suporte a áudio está temporariamente indisponível. Por favor, digite sua mensagem.";
                   this.broadcastToSessionSubscribers(sessionId, "system", unavailableMsg);
@@ -1780,6 +1781,22 @@ export class WebConnector implements Connector {
     if (mediaInfo?.imageUrls && mediaInfo.imageUrls.length > 0) msg.imageUrls = mediaInfo.imageUrls;
     if (mediaInfo?.fileInfos && mediaInfo.fileInfos.length > 0) msg.fileInfos = mediaInfo.fileInfos;
     const payload = JSON.stringify(msg);
+    for (const ws of subs) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(payload);
+      }
+    }
+  }
+
+  /**
+   * Send a dedicated "transcription" event to session-viewer subscribers
+   * so they can replace the "Processando áudio…" placeholder in real-time.
+   */
+  private broadcastTranscriptionToSession(sessionId: string, audioUrl: string, transcription: string): void {
+    const subs = this.sessionSubscribers.get(sessionId);
+    if (!subs || subs.size === 0) return;
+
+    const payload = JSON.stringify({ type: "transcription", audioUrl, text: transcription });
     for (const ws of subs) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(payload);
