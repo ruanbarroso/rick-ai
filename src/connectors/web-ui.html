@@ -3042,6 +3042,18 @@ function handleServerMessage(msg) {
               break;
             }
           }
+          // Also update audio src in DOM so transcription URL matching works
+          if (pendingAudioEcho && msg.audioUrl) {
+            var container = document.getElementById('messages-main');
+            var userAudios = container.querySelectorAll('.message.user .audio-message audio');
+            for (var ua = userAudios.length - 1; ua >= 0; ua--) {
+              var aEl = userAudios[ua];
+              if ((aEl.getAttribute('src') || '').indexOf('blob:') === 0) {
+                aEl.setAttribute('src', msg.audioUrl);
+                break;
+              }
+            }
+          }
           pendingAudioEcho = false;
           pendingImageEcho = false;
           pendingFileEcho = false;
