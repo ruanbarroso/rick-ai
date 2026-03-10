@@ -29,7 +29,7 @@ export interface PendingDelegation {
 
 export const SUBAGENT_MODELS = [
   { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
-  { id: "gpt-5.3-codex", label: "GPT 5.3 Codex" },
+  { id: "gpt-5.4", label: "GPT-5.4" },
   { id: "gemini-3.1-pro", label: "Gemini 3.1 Pro" },
 ] as const;
 

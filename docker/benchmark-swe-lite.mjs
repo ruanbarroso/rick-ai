@@ -91,7 +91,7 @@ async function runTask(task) {
     });
 
     // Start task after process boot
-    child.stdin.write(JSON.stringify({ type: "message", text: task.prompt, model: task.model || "gpt-5.3-codex" }) + "\n");
+    child.stdin.write(JSON.stringify({ type: "message", text: task.prompt, model: task.model || "gpt-5.4" }) + "\n");
 
     const timeoutMs = task.timeoutMs || 180_000;
     setTimeout(() => {

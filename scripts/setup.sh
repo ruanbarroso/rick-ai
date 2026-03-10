@@ -109,7 +109,7 @@ GEMINI_MODEL=gemini-3-flash-preview
 ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-opus-4-6
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.3-codex
+OPENAI_MODEL=gpt-5.4
 
 # === Database ===
 $(if [[ -n "$DB_URL" ]]; then echo "DATABASE_URL=${DB_URL}"; else echo "# DATABASE_URL="; fi)

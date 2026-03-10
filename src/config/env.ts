@@ -29,7 +29,7 @@ function buildConfig() {
     },
     openai: {
       apiKey: process.env.OPENAI_API_KEY || "",
-      model: process.env.OPENAI_MODEL || "gpt-5.3-codex",
+      model: process.env.OPENAI_MODEL || "gpt-5.4",
     },
     // Database
     /** PostgreSQL connection string. If empty, Rick uses SQLite. */

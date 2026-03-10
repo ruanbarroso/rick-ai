@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 
 const MODEL_MAP = {
   "claude-opus-4-6": "anthropic/claude-opus-4-6",
-  "gpt-5.3-codex": "openai/gpt-5.3-codex",
+  "gpt-5.4": "openai/gpt-5.4",
   "gemini-3.1-pro": "google/gemini-3.1-pro-preview",
 };
 
@@ -246,7 +246,7 @@ function providerForModel(opencodeModel) {
  */
 const GLOBAL_FALLBACK_ORDER = [
   "claude-opus-4-6",
-  "gpt-5.3-codex",
+  "gpt-5.4",
   "gemini-3.1-pro",
 ];
 
@@ -808,7 +808,7 @@ function handleHistory(payload) {
 
 emit({
   type: "ready",
-  providers: ["claude-opus-4-6", "gpt-5.3-codex", "gemini-3.1-pro"],
+  providers: ["claude-opus-4-6", "gpt-5.4", "gemini-3.1-pro"],
   tools: ["opencode"],
 });
 

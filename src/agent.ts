@@ -1161,7 +1161,7 @@ O sub-agente agora pode usar o Claude Opus. O token e renovado automaticamente.`
 
 Conta: ${result.email || "conectada"}
 
-O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado automaticamente.`;
+O sub-agente agora pode usar o GPT-5.4 como fallback. O token e renovado automaticamente.`;
   }
 
 

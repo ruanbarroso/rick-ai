@@ -82,11 +82,11 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 |-------|----------|----------|
 | Gemini 3.0 Flash | Google | Default chat, classifier, audio transcription, memory extraction |
 | Claude Opus 4.6 | Anthropic | Sub-agent primary (via OAuth) |
-| GPT-5.3 Codex | OpenAI | Sub-agent fallback (via OAuth) |
+| GPT-5.4 | OpenAI | Sub-agent fallback (via OAuth) |
 | Gemini 3.1 Pro | Google | Sub-agent fallback |
 | Gemini 3.0 Flash | Google | Sub-agent fallback |
 
-No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect via your existing Pro/Max subscriptions. API key fallback models (`claude-opus-4-6`, `gpt-5.3-codex`) are used when OAuth is not configured.
+No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect via your existing Pro/Max subscriptions. API key fallback models (`claude-opus-4-6`, `gpt-5.4`) are used when OAuth is not configured.
 
 The main session uses Gemini Flash exclusively (no fallback). `GEMINI_API_KEY` is required.
 
@@ -259,7 +259,7 @@ rick-ai/
 │   │   └── providers/
 │   │       ├── gemini.ts              # Gemini (multimodal, main session)
 │   │       ├── anthropic.ts           # Anthropic (API key + OAuth, sub-agents)
-│   │       └── openai.ts             # OpenAI (API key + Codex OAuth, sub-agents)
+│   │       └── openai.ts             # OpenAI (API key + OAuth, sub-agents)
 │   ├── auth/
 │   │   ├── permissions.ts             # RBAC role types, permission matrix, hierarchy checks
 │   │   ├── user-service.ts            # User resolution, CRUD, role management, welcome messages
@@ -344,7 +344,7 @@ Host Docker (cluster-24g)
 | `ANTHROPIC_API_KEY` | No | — | Anthropic API key (alternative to OAuth) |
 | `ANTHROPIC_MODEL` | No | `claude-opus-4-6` | Override Anthropic model name |
 | `OPENAI_API_KEY` | No | — | OpenAI API key (alternative to OAuth) |
-| `OPENAI_MODEL` | No | `gpt-5.3-codex` | Override OpenAI model name |
+| `OPENAI_MODEL` | No | `gpt-5.4` | Override OpenAI model name |
 | `DATABASE_URL` | No | — | PostgreSQL connection string. If unset, Rick uses SQLite. |
 | `VECTOR_DATABASE_URL` | No | — | pgvector connection string (semantic memory) |
 | `MEMORY_ENCRYPTION_KEY` | No | — | Passphrase for AES-256-GCM encryption of credential memories. If unset, credentials stored as plaintext. |
