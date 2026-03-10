@@ -142,15 +142,48 @@ class SubagentImageBuilder {
     logger.info({ hash: local.hash, version: local.version }, "subagent image re-labeled successfully");
   }
 
+  /**
+   * Find an untagged (dangling) subagent image by checking for the
+   * `agent.bundle.hash` label. Returns the image ID or null.
+   * This rescues orphaned subagent images whose tags were lost during
+   * deploys, prune operations, or other Docker lifecycle events.
+   */
+  private async findOrphanSubagentImage(): Promise<string | null> {
+    try {
+      // List all images (including untagged) that carry our label
+      const { stdout } = await execFileAsync("docker", [
+        "images", "--filter", "label=agent.bundle.hash", "--format", "{{.ID}}",
+      ], { timeout: 10_000 });
+      const ids = stdout.trim().split(/\s+/).filter(Boolean);
+      return ids.length > 0 ? ids[0] : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async ensureCurrentTagExists(): Promise<void> {
     if (await this.imageExists(CURRENT_IMAGE)) return;
-    if (!(await this.imageExists(LEGACY_IMAGE))) return;
 
-    try {
-      await execFileAsync("docker", ["tag", LEGACY_IMAGE, CURRENT_IMAGE], { timeout: 10_000 });
-      logger.info("Tagged legacy subagent image as subagent:current");
-    } catch (err) {
-      logger.warn({ err }, "Failed to tag legacy subagent image as current");
+    // Try legacy tag first
+    if (await this.imageExists(LEGACY_IMAGE)) {
+      try {
+        await execFileAsync("docker", ["tag", LEGACY_IMAGE, CURRENT_IMAGE], { timeout: 10_000 });
+        logger.info("Tagged legacy subagent image as subagent:current");
+        return;
+      } catch (err) {
+        logger.warn({ err }, "Failed to tag legacy subagent image as current");
+      }
+    }
+
+    // Last resort: rescue an orphaned (untagged) subagent image
+    const orphanId = await this.findOrphanSubagentImage();
+    if (orphanId) {
+      try {
+        await execFileAsync("docker", ["tag", orphanId, CURRENT_IMAGE], { timeout: 10_000 });
+        logger.info({ imageId: orphanId }, "Rescued orphan subagent image as subagent:current");
+      } catch (err) {
+        logger.warn({ err, imageId: orphanId }, "Failed to rescue orphan subagent image");
+      }
     }
   }
 
@@ -171,8 +204,20 @@ class SubagentImageBuilder {
       try {
         await execFileAsync("docker", ["tag", LEGACY_IMAGE, BASE_IMAGE], { timeout: 10_000 });
         logger.info({ source: LEGACY_IMAGE, target: BASE_IMAGE }, "Seeded local subagent base image from legacy tag");
+        return;
       } catch (err) {
         logger.warn({ err }, "Failed to seed local base image from legacy tag");
+      }
+    }
+
+    // Last resort: rescue an orphan
+    const orphanId = await this.findOrphanSubagentImage();
+    if (orphanId) {
+      try {
+        await execFileAsync("docker", ["tag", orphanId, BASE_IMAGE], { timeout: 10_000 });
+        logger.info({ imageId: orphanId }, "Rescued orphan subagent image as subagent-base:chrome");
+      } catch (err) {
+        logger.warn({ err, imageId: orphanId }, "Failed to rescue orphan as base image");
       }
     }
   }
