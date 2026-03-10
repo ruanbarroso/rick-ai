@@ -1172,11 +1172,19 @@ export class SessionManager {
 
         case "history_loaded":
           logger.info({ sessionId: session.id, count: msg.count }, "Agent conversation history restored");
-          // After history injection, session is ready for user input
-          session.state = "waiting_user";
-          session.updatedAt = Date.now();
-          if (this.onSessionMessage) {
-            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+          // After history injection, check if the last message was from the user
+          // (i.e. the agent was mid-turn when the server restarted). If so, re-send
+          // that message automatically so the user doesn't have to repeat themselves.
+          if (session.recovered) {
+            this.resumeInterruptedTurn(session).catch((err: any) => {
+              logger.warn({ err, sessionId: session.id }, "Failed to resume interrupted turn after recovery");
+            });
+          } else {
+            session.state = "waiting_user";
+            session.updatedAt = Date.now();
+            if (this.onSessionMessage) {
+              this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+            }
           }
           break;
 
@@ -1384,6 +1392,58 @@ export class SessionManager {
     const apiUrl = this.getCurrentApiUrl();
     logger.info({ sessionId: session.id, apiUrl }, "Injecting fresh JWT token into recovered session");
     this.sendToAgentProcess(session.id, { type: "update_token", token, apiUrl });
+  }
+
+  /**
+   * After recovery, check if the last message in history was from the user
+   * (meaning the agent was mid-turn when the server restarted). If so,
+   * automatically re-send that message so the agent resumes work without
+   * the user having to repeat themselves.
+   */
+  private async resumeInterruptedTurn(session: SubAgentSession): Promise<void> {
+    const history = await this.getSessionHistory(session.id);
+    // Find the last user text message (skip tool_use, system, errors)
+    const textMessages = history.filter(
+      (m) => (m.role === "user" || m.role === "agent") && m.content && m.message_type !== "tool_use" && m.message_type !== "system"
+    );
+    const lastMsg = textMessages.length > 0 ? textMessages[textMessages.length - 1] : null;
+
+    if (lastMsg && lastMsg.role === "user") {
+      // The agent never finished responding — re-send the user's message
+      logger.info(
+        { sessionId: session.id, messagePreview: lastMsg.content.substring(0, 80) },
+        "Session recovery: re-sending interrupted user message"
+      );
+      // Notify the viewer that the session is resuming
+      this.sendToUser(session, "(Sessao recuperada apos atualizacao — retomando tarefa...)", "system");
+
+      // Set state to running and re-send the message directly to the agent process.
+      // We do NOT use sendToSession() because it would re-persist the user message
+      // to the DB and re-broadcast it to the viewer (causing duplicates).
+      const generation = (this.sessionGenerations.get(session.id) ?? 0) + 1;
+      this.sessionGenerations.set(session.id, generation);
+      session.state = "running";
+      session.pendingQuestion = null;
+      session.turnHadStreamedText = false;
+      session.updatedAt = Date.now();
+      if (this.onSessionMessage) {
+        this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
+      }
+      this.sendToAgentProcess(session.id, {
+        type: "message",
+        text: lastMsg.content,
+        generation,
+        model: session.preferredModel,
+        mode: session.executionMode,
+      });
+    } else {
+      // The agent had already responded — just wait for new user input
+      session.state = "waiting_user";
+      session.updatedAt = Date.now();
+      if (this.onSessionMessage) {
+        this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+      }
+    }
   }
 
   /**
