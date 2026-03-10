@@ -3,8 +3,9 @@
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createReadStream, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 const MODEL_MAP = {
   "claude-opus-4-6": "anthropic/claude-opus-4-6",
@@ -404,7 +405,13 @@ function runOpencodeTurn({ text, model, mode, images }) {
     // Use --print-logs so OpenCode writes detailed logs to stderr (including rate limit errors)
     args.push("--print-logs");
 
-    args.push(text);
+    // The user message is piped via stdin instead of passed as a CLI argument.
+    // This avoids: (1) CLI argument length limits, (2) yargs misinterpreting
+    // messages starting with dashes (e.g. "---" YAML front matter) as flags,
+    // (3) any shell escaping issues. OpenCode appends stdin to the message
+    // when it detects a non-TTY stdin (see run.ts: `if (!process.stdin.isTTY)`).
+    const msgFile = join(tmpdir(), `opencode-msg-${Date.now()}.txt`);
+    writeFileSync(msgFile, text, "utf-8");
 
     // Build env: OpenCode/ai-sdk expects GOOGLE_GENERATIVE_AI_API_KEY for Gemini,
     // but our container receives GEMINI_API_KEY from the main process.
@@ -419,8 +426,15 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const child = spawn("npx", args, {
       cwd: "/workspace",
       env: childEnv,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       detached: true, // Create a new process group so we can kill the entire tree
+    });
+
+    // Pipe the message file into stdin then close it so OpenCode knows input is done
+    const msgStream = createReadStream(msgFile, "utf-8");
+    msgStream.pipe(child.stdin);
+    msgStream.on("end", () => {
+      try { unlinkSync(msgFile); } catch { /* ignore */ }
     });
 
     // Kill the entire process group (npx → opencode → MCP servers → Chrome).
@@ -524,7 +538,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
             // This is the most reliable path — OpenCode already exhausted its internal retries.
             if (isStructuredRateLimitError(err)) {
               const statusCode = err.data?.statusCode || "";
-              emitStatus(`[diag] Rate limit via JSON error: name=${err.name}, statusCode=${statusCode}, isRetryable=${err.data?.isRetryable}, message=${String(message).substring(0, 200)}`);
+              process.stderr.write(`[rate-limit] JSON error: name=${err.name}, statusCode=${statusCode}, isRetryable=${err.data?.isRetryable}, message=${String(message).substring(0, 200)}\n`);
               lastRunHadRateLimitError = true;
               killTree();
               finish(new Error(`Rate limit (${statusCode}): ${message}`));
@@ -549,10 +563,10 @@ function runOpencodeTurn({ text, model, mode, images }) {
       if (isStderrRateLimitError(chunk.toString()) && !lastRunHadRateLimitError) {
         if (Date.now() < ignoreStderrRateLimitUntil) {
           // Grace period: this is likely log replay from the previous model, ignore it
-          emitStatus(`[diag] Stderr rate limit IGNORED (grace period): ${chunk.toString().substring(0, 200)}`);
+          process.stderr.write(`[rate-limit] Stderr IGNORED (grace period): ${chunk.toString().substring(0, 200)}\n`);
           return;
         }
-        emitStatus(`[diag] Rate limit via stderr: ${chunk.toString().substring(0, 300)}`);
+        process.stderr.write(`[rate-limit] Stderr detected: ${chunk.toString().substring(0, 300)}\n`);
         lastRunHadRateLimitError = true;
         killTree();
         finish(new Error("Rate limit detectado nos logs do OpenCode"));
@@ -595,12 +609,15 @@ function runOpencodeTurn({ text, model, mode, images }) {
       }
 
       if (code !== 0) {
-        const detail = stderrBuffer.trim() || stdoutBuffer.trim() || `opencode run exited with code ${code}`;
+        const rawDetail = stderrBuffer.trim() || stdoutBuffer.trim() || `opencode run exited with code ${code}`;
+        // Truncate error detail to prevent enormous messages from large stderr dumps
+        // (e.g. when context window overflows from a massive user message).
+        const detail = rawDetail.length > 2000 ? rawDetail.substring(0, 2000) + "... (truncado)" : rawDetail;
         // Check if the exit was due to rate limiting.
         // Use the stricter stderr function since `detail` contains the full
         // debug log buffer which may have "429" in harmless contexts.
         if (isStderrRateLimitError(detail)) {
-          emitStatus(`[diag] Rate limit via process exit (code=${code}): ${detail.substring(0, 300)}`);
+          process.stderr.write(`[rate-limit] Process exit (code=${code}): ${detail.substring(0, 300)}\n`);
           lastRunHadRateLimitError = true;
         }
         finish(new Error(detail));
@@ -746,7 +763,9 @@ async function handleTurn(payload) {
       emitWaitingUser("Interrompido.");
       return;
     }
-    const errorMsg = err?.message || "Falha ao processar com OpenCode";
+    const rawErrorMsg = err?.message || "Falha ao processar com OpenCode";
+    // Truncate to avoid sending megabytes of stderr as an error message
+    const errorMsg = rawErrorMsg.length > 1000 ? rawErrorMsg.substring(0, 1000) + "... (truncado)" : rawErrorMsg;
     emitError(errorMsg);
     emitWaitingUser("");
   } finally {
