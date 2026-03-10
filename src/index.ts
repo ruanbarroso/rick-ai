@@ -16,7 +16,7 @@ import { UserService } from "./auth/user-service.js";
 import { closeVectorPool } from "./memory/vector-db.js";
 
 
-import { startHealthServer, setHealthy, registerAgentApiServices, registerSessionKiller, registerSubagentMetrics, registerSessionStateGetter } from "./health.js";
+import { startHealthServer, setHealthy, registerAgentApiServices, registerSessionKiller, registerSubagentMetrics, registerSessionStateGetter, registerBroadcast, startAutoUpdateTimer } from "./health.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -161,6 +161,10 @@ async function main() {
   // WhatsApp may still be reconnecting in the background — that's fine, it's optional.
   setHealthy("ready", true);
   logger.info("App fully initialized and ready");
+
+  // Register broadcast and start background auto-update timer
+  registerBroadcast((data) => web.broadcast(data));
+  startAutoUpdateTimer();
 
   // 10b. Recover sub-agent sessions from containers that survived a restart
   agent.recoverOrphanedSessions().catch((err) => {

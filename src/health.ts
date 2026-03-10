@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { logger } from "./config/logger.js";
 import { query } from "./memory/database.js";
 import { config } from "./config/env.js";
-import { configGet } from "./memory/config-store.js";
+import { configGet, configSet } from "./memory/config-store.js";
 import { verifyAgentToken, type AgentTokenPayload } from "./subagent/agent-token.js";
 import { resolveSessionsToken, getSessionVariantName, getMainSessionName } from "./subagent/session-manager.js";
 import type { SubAgentMetricsSnapshot } from "./subagent/types.js";
@@ -133,6 +133,7 @@ let registeredVectorMemory: VectorMemoryService | null = null;
 let registeredKillSession: ((sessionId: string) => Promise<void>) | null = null;
 let registeredSubagentMetrics: (() => SubAgentMetricsSnapshot) | null = null;
 let registeredSessionStateGetter: ((sessionId: string) => string | null) | null = null;
+let registeredBroadcast: ((data: object) => void) | null = null;
 
 /**
  * Register services for the sub-agent Agent API (read + write).
@@ -160,6 +161,14 @@ export function registerSessionKiller(killFn: (sessionId: string) => Promise<voi
 
 export function registerSubagentMetrics(getter: () => SubAgentMetricsSnapshot): void {
   registeredSubagentMetrics = getter;
+}
+
+/**
+ * Register a broadcast function to send messages to all authenticated WebSocket clients.
+ * Used by the auto-updater to notify clients of update status.
+ */
+export function registerBroadcast(fn: (data: object) => void): void {
+  registeredBroadcast = fn;
 }
 
 /**
@@ -355,6 +364,18 @@ export function startHealthServer(port: number): void {
     if (req.url?.startsWith("/api/update") && req.method === "POST") {
       if (!authenticateRequest(req, res)) return;
       await handleUpdate(req, res);
+      return;
+    }
+
+    // ==================== AUTO-UPDATE CONFIG ====================
+    if (req.url?.startsWith("/api/auto-update") && req.method === "GET") {
+      if (!authenticateRequest(req, res)) return;
+      await handleAutoUpdateGet(res);
+      return;
+    }
+    if (req.url?.startsWith("/api/auto-update") && req.method === "POST") {
+      if (!authenticateRequest(req, res)) return;
+      await handleAutoUpdateSet(req, res);
       return;
     }
 
@@ -1190,121 +1211,259 @@ async function handleVersionCheck(res: ServerResponse): Promise<void> {
 
 // ==================== UPDATE (download GitHub zip + deploy) ====================
 
-async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+/**
+ * Core update logic: download latest from GitHub, extract, and launch deploy.sh.
+ * Used by both the HTTP /api/update endpoint and the background auto-updater.
+ * Returns { success, deploying, version, versionSource, message } on success,
+ * or throws on failure.
+ */
+async function executeUpdate(): Promise<{
+  success: boolean;
+  deploying: boolean;
+  version: string;
+  versionSource: string;
+  message: string;
+}> {
   const projectDir = await getProjectDir();
 
+  logger.info("Update: downloading latest code from GitHub...");
+
+  // Resolve target version (GitHub live first, then local cache fallback)
+  let target = await fetchLatestFromGitHub();
+  let versionSource: "github" | "cache" | "unknown" = "unknown";
+  if (target) {
+    versionSource = "github";
+    await writeLatestVersionCache(target);
+  } else {
+    target = await readLatestVersionCache();
+    if (target) versionSource = "cache";
+  }
+
+  const commitSha = target?.sha || "unknown";
+  const commitDate = target?.date || "unknown";
+  const zipUrl = target?.fullSha
+    ? `https://github.com/${GITHUB_REPO}/archive/${target.fullSha}.zip`
+    : `https://github.com/${GITHUB_REPO}/archive/refs/heads/main.zip`;
+
+  // Download zip from GitHub
+  const zipResp = await fetch(zipUrl, {
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!zipResp.ok) {
+    throw new Error(`GitHub retornou ${zipResp.status}`);
+  }
+
+  const zipBuffer = Buffer.from(await zipResp.arrayBuffer());
+  logger.info({ sizeMB: (zipBuffer.length / 1024 / 1024).toFixed(1) }, "Update: zip downloaded");
+
+  // Write zip to host
+  const hostStaging = `/tmp/rick-update-${Date.now()}`;
+  const hostZipPath = `${hostStaging}/update.zip`;
+  const hostExtractDir = `${hostStaging}/extracted`;
+
+  await execAsyncOutput("docker", [
+    "run", "--rm", "-v", "/tmp:/tmp", "alpine:latest",
+    "mkdir", "-p", hostStaging,
+  ]);
+  await pipeToDockerFile(zipBuffer, hostZipPath);
+
+  // Extract on host (GitHub zip is a proper zip)
+  await execAsyncOutput("docker", [
+    "run", "--rm", "-v", "/tmp:/tmp", "alpine:latest",
+    "sh", "-c", `mkdir -p ${hostExtractDir} && cd ${hostExtractDir} && unzip -o ${hostZipPath}`,
+  ]);
+
+  // Find source root (GitHub zips have a single root dir like rick-ai-main/)
+  const findRoot = await execAsyncOutput("docker", [
+    "run", "--rm", "-v", "/tmp:/tmp", "alpine:latest",
+    "sh", "-c", `cd ${hostExtractDir} && ls -1d */`,
+  ]);
+  const rootDir = findRoot.trim().replace(/\/$/, "");
+  const hostSourceRoot = `${hostExtractDir}/${rootDir}`;
+
+  // Write version stamp to staging so deploy.sh picks it up in Step 3
+  await pipeToDockerFile(
+    Buffer.from(`${commitSha}\n${commitDate}\n`),
+    `${hostSourceRoot}/.rick-version`,
+  );
+
+  const message = `Versao ${commitSha} baixada (${(zipBuffer.length / 1024 / 1024).toFixed(1)} MB). Deploy iniciando — Rick vai reiniciar em breve.`;
+
+  // Launch deploy.sh in a DETACHED docker:cli container.
+  // This container survives Rick's restart and runs the full safe pipeline:
+  //   backup → copy → build → smoke test → swap → watchdog → rollback on failure.
+  setImmediate(() => {
+    const deployScript = [
+      `sh /deploy.sh "${hostSourceRoot}"`,
+      `STATUS=$?`,
+      `rm -rf "${hostStaging}"`,
+      `exit $STATUS`,
+    ].join("\n");
+
+    const proc = spawn("docker", [
+      "run", "-d", "--rm",
+      "--name", "rick-ota-deployer",
+      "-v", "/var/run/docker.sock:/var/run/docker.sock",
+      "-v", `${projectDir}:${projectDir}`,
+      "-v", "/tmp:/tmp",
+      "-v", `${projectDir}/scripts/deploy.sh:/deploy.sh:ro`,
+      "-e", `PROJECT_DIR=${projectDir}`,
+      "--network", "host",
+      "docker:cli",
+      "sh", "-c", deployScript,
+    ], { stdio: "ignore", detached: true });
+
+    proc.unref();
+    logger.info({ commitSha, hostSourceRoot }, "Update: OTA deployer launched (uses deploy.sh)");
+  });
+
+  return { success: true, deploying: true, version: commitSha, versionSource, message };
+}
+
+async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    logger.info("Update: downloading latest code from GitHub...");
-
-    // Resolve target version (GitHub live first, then local cache fallback)
-    let target = await fetchLatestFromGitHub();
-    let versionSource: "github" | "cache" | "unknown" = "unknown";
-    if (target) {
-      versionSource = "github";
-      await writeLatestVersionCache(target);
-    } else {
-      target = await readLatestVersionCache();
-      if (target) versionSource = "cache";
-    }
-
-    const commitSha = target?.sha || "unknown";
-    const commitDate = target?.date || "unknown";
-    const zipUrl = target?.fullSha
-      ? `https://github.com/${GITHUB_REPO}/archive/${target.fullSha}.zip`
-      : `https://github.com/${GITHUB_REPO}/archive/refs/heads/main.zip`;
-
-    // Download zip from GitHub
-    const zipResp = await fetch(zipUrl, {
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (!zipResp.ok) {
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: `GitHub retornou ${zipResp.status}` }));
-      return;
-    }
-
-    const zipBuffer = Buffer.from(await zipResp.arrayBuffer());
-    logger.info({ sizeMB: (zipBuffer.length / 1024 / 1024).toFixed(1) }, "Update: zip downloaded");
-
-    // Write zip to host
-    const hostStaging = `/tmp/rick-update-${Date.now()}`;
-    const hostZipPath = `${hostStaging}/update.zip`;
-    const hostExtractDir = `${hostStaging}/extracted`;
-
-    await execAsyncOutput("docker", [
-      "run", "--rm", "-v", "/tmp:/tmp", "alpine:latest",
-      "mkdir", "-p", hostStaging,
-    ]);
-    await pipeToDockerFile(zipBuffer, hostZipPath);
-
-    // Extract on host (GitHub zip is a proper zip)
-    await execAsyncOutput("docker", [
-      "run", "--rm", "-v", "/tmp:/tmp", "alpine:latest",
-      "sh", "-c", `mkdir -p ${hostExtractDir} && cd ${hostExtractDir} && unzip -o ${hostZipPath}`,
-    ]);
-
-    // Find source root (GitHub zips have a single root dir like rick-ai-main/)
-    const findRoot = await execAsyncOutput("docker", [
-      "run", "--rm", "-v", "/tmp:/tmp", "alpine:latest",
-      "sh", "-c", `cd ${hostExtractDir} && ls -1d */`,
-    ]);
-    const rootDir = findRoot.trim().replace(/\/$/, "");
-    const hostSourceRoot = `${hostExtractDir}/${rootDir}`;
-
-    // Write version stamp to staging so deploy.sh picks it up in Step 3
-    // (git on host still shows the OLD commit; .rick-version in staging is the
-    //  authoritative source for the new version).
-    await pipeToDockerFile(
-      Buffer.from(`${commitSha}\n${commitDate}\n`),
-      `${hostSourceRoot}/.rick-version`,
-    );
-
-    // Respond immediately BEFORE launching the deployer.
-    // deploy.sh restarts Rick (docker compose up -d), so no response can be sent after.
-    // The client polls /health to confirm Rick is back up.
+    const result = await executeUpdate();
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      success: true,
-      deploying: true,
-      version: commitSha,
-      versionSource,
-      message: `Versao ${commitSha} baixada (${(zipBuffer.length / 1024 / 1024).toFixed(1)} MB). Deploy iniciando — Rick vai reiniciar em breve.`,
-    }));
-
-    // Launch deploy.sh in a DETACHED docker:cli container.
-    // This container survives Rick's restart and runs the full safe pipeline:
-    //   backup → copy → build → smoke test → swap → watchdog → rollback on failure.
-    setImmediate(() => {
-      const deployScript = [
-        `sh /deploy.sh "${hostSourceRoot}"`,
-        `STATUS=$?`,
-        `rm -rf "${hostStaging}"`,
-        `exit $STATUS`,
-      ].join("\n");
-
-      const proc = spawn("docker", [
-        "run", "-d", "--rm",
-        "--name", "rick-ota-deployer",
-        "-v", "/var/run/docker.sock:/var/run/docker.sock",
-        "-v", `${projectDir}:${projectDir}`,
-        "-v", "/tmp:/tmp",
-        "-v", `${projectDir}/scripts/deploy.sh:/deploy.sh:ro`,
-        "-e", `PROJECT_DIR=${projectDir}`,
-        "--network", "host",
-        "docker:cli",
-        "sh", "-c", deployScript,
-      ], { stdio: "ignore", detached: true });
-
-      proc.unref();
-      logger.info({ commitSha, hostSourceRoot }, "Update: OTA deployer launched (uses deploy.sh)");
-    });
+    res.end(JSON.stringify(result));
   } catch (err) {
     logger.error({ err }, "Update failed");
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Erro: " + (err as Error).message }));
     }
+  }
+}
+
+// ==================== AUTO-UPDATE (background) ====================
+
+const AUTO_UPDATE_CONFIG_KEY = "AUTO_INSTALL_UPDATES";
+const AUTO_UPDATE_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+
+let autoUpdateTimer: ReturnType<typeof setInterval> | null = null;
+let autoUpdateRunning = false;
+
+/**
+ * Read the auto-install flag from the config store.
+ * Defaults to true (enabled) when no value is stored.
+ */
+async function isAutoInstallEnabled(): Promise<boolean> {
+  try {
+    const val = await configGet(AUTO_UPDATE_CONFIG_KEY);
+    if (val === null) return true; // default: enabled
+    return val === "1" || val === "true";
+  } catch {
+    return true; // default on error
+  }
+}
+
+/**
+ * Set the auto-install flag in the config store.
+ */
+async function setAutoInstallEnabled(enabled: boolean): Promise<void> {
+  await configSet(AUTO_UPDATE_CONFIG_KEY, enabled ? "1" : "0");
+  logger.info({ enabled }, "Auto-install updates flag changed");
+}
+
+/**
+ * Background auto-update check. Runs silently every 2 minutes.
+ * If an update is found and auto-install is enabled, downloads and installs automatically.
+ */
+async function autoUpdateCheck(): Promise<void> {
+  if (autoUpdateRunning) return;
+  autoUpdateRunning = true;
+
+  try {
+    const enabled = await isAutoInstallEnabled();
+    if (!enabled) {
+      return;
+    }
+
+    const current = await resolveCurrentVersion();
+    const latest = await fetchLatestFromGitHub();
+
+    if (!latest) {
+      return; // GitHub unreachable — skip silently
+    }
+
+    await writeLatestVersionCache(latest);
+
+    const hasUpdate = current.sha === "unknown" || latest.sha !== current.sha;
+    if (!hasUpdate) {
+      return; // already up to date
+    }
+
+    logger.info(
+      { currentSha: current.sha, latestSha: latest.sha, message: latest.message },
+      "Auto-update: new version detected, starting install..."
+    );
+
+    // Notify connected web clients that an auto-update is starting
+    if (registeredBroadcast) {
+      registeredBroadcast({
+        type: "auto_update",
+        status: "installing",
+        current: current,
+        latest: latest,
+      });
+    }
+
+    const result = await executeUpdate();
+    logger.info({ version: result.version }, "Auto-update: deploy launched successfully");
+  } catch (err) {
+    logger.warn({ err }, "Auto-update: check/install failed (will retry next cycle)");
+  } finally {
+    autoUpdateRunning = false;
+  }
+}
+
+/**
+ * Start the background auto-update timer.
+ * Called once at server startup.
+ */
+export function startAutoUpdateTimer(): void {
+  if (autoUpdateTimer) return;
+
+  // First check after 30 seconds (let the server finish startup)
+  setTimeout(() => {
+    autoUpdateCheck().catch(() => {});
+  }, 30_000);
+
+  autoUpdateTimer = setInterval(() => {
+    autoUpdateCheck().catch(() => {});
+  }, AUTO_UPDATE_INTERVAL_MS);
+
+  logger.info({ intervalMs: AUTO_UPDATE_INTERVAL_MS }, "Auto-update timer started");
+}
+
+/**
+ * Handle GET /api/auto-update — returns current auto-install flag.
+ */
+async function handleAutoUpdateGet(res: ServerResponse): Promise<void> {
+  try {
+    const enabled = await isAutoInstallEnabled();
+    jsonResponse(res, 200, { autoInstall: enabled });
+  } catch (err) {
+    logger.error({ err }, "Failed to read auto-install flag");
+    jsonResponse(res, 500, { error: "Falha ao ler configuracao" });
+  }
+}
+
+/**
+ * Handle POST /api/auto-update — sets auto-install flag.
+ * Body: { "autoInstall": true|false }
+ */
+async function handleAutoUpdateSet(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const body = await readRequestBody(req);
+    const parsed = JSON.parse(body.toString("utf-8"));
+    const enabled = !!parsed.autoInstall;
+
+    await setAutoInstallEnabled(enabled);
+    jsonResponse(res, 200, { autoInstall: enabled });
+  } catch (err) {
+    logger.error({ err }, "Failed to set auto-install flag");
+    jsonResponse(res, 500, { error: "Falha ao salvar configuracao" });
   }
 }
 

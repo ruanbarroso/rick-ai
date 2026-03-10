@@ -2121,4 +2121,9 @@ export class WebConnector implements Connector {
       }
     }
   }
+
+  /** Public broadcast to all authenticated clients. Used by health/auto-update. */
+  broadcast(data: object): void {
+    this.broadcastToAuthenticated(data);
+  }
 }
