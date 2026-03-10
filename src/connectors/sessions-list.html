@@ -135,12 +135,12 @@ body.embed .container { padding-top: 8px; }
   letter-spacing: 0.3px;
 }
 
-.card-status.active, .card-status.running, .card-status.starting {
+.card-status.active, .card-status.waiting_user {
   background: rgba(74, 222, 128, 0.15);
   color: #4ade80;
 }
 
-.card-status.waiting_user {
+.card-status.running, .card-status.starting {
   background: rgba(29, 161, 242, 0.15);
   color: #1da1f2;
 }
@@ -396,7 +396,8 @@ function statusLabel(status) {
 }
 
 function statusClass(status) {
-  if (status === 'active' || status === 'running' || status === 'starting') return 'active';
+  if (status === 'active' || status === 'waiting_user') return 'active';
+  if (status === 'running' || status === 'starting') return 'running';
   return status;
 }
 

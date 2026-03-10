@@ -73,7 +73,10 @@ body {
   display: inline-block;
 }
 .status-dot.running { background: #4ade80; animation: pulse 2s infinite; }
+.status-dot.typing { background: #1da1f2; animation: pulse 2s infinite; }
 .status-dot.offline { background: #6b7280; }
+#status-text.online { color: #4ade80; }
+#status-text.typing { color: #1da1f2; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -796,6 +799,7 @@ function setConnected(connected) {
   var text = document.getElementById('status-text');
   dot.className = 'status-dot ' + (connected ? 'running' : 'offline');
   text.textContent = connected ? 'Online' : 'Conectando...';
+  text.className = connected ? 'online' : '';
   if (!connected) {
     document.getElementById('typing-indicator').classList.remove('visible');
   }
@@ -867,14 +871,19 @@ function connect() {
         var typingEl = document.getElementById('typing-indicator');
         var statusText = document.getElementById('status-text');
         isProcessing = msg.composing;
+        var statusDot = document.getElementById('status-dot');
         if (msg.composing) {
           typingEl.classList.add('visible');
           statusText.textContent = 'Digitando...';
+          statusText.className = 'typing';
+          statusDot.className = 'status-dot typing';
           // Auto-scroll to show typing indicator
           scrollToBottom();
         } else {
           typingEl.classList.remove('visible');
           statusText.textContent = 'Online';
+          statusText.className = 'online';
+          statusDot.className = 'status-dot running';
         }
         updateSendButton();
         break;
@@ -963,7 +972,10 @@ function sendInterrupt() {
   // Optimistically update UI
   isProcessing = false;
   document.getElementById('typing-indicator').classList.remove('visible');
-  document.getElementById('status-text').textContent = 'Online';
+  var stEl = document.getElementById('status-text');
+  stEl.textContent = 'Online';
+  stEl.className = 'online';
+  document.getElementById('status-dot').className = 'status-dot running';
   updateSendButton();
 }
 
