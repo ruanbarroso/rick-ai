@@ -896,15 +896,36 @@ export class SessionManager {
       ? ["--network", this.resolvedNetwork]
       : ["--add-host=host.docker.internal:host-gateway"];
 
-    // Start the container
-    const { stdout } = await execFileAsync("docker", [
+    // Resource limits to protect the host from runaway containers.
+    // --memory 2g : cap at 2GB (Node ~70MB idle, Chrome ~300-600MB, peak ~1.2GB)
+    // --pids-limit 512 : prevent fork bombs / zombie accumulation
+    // These are safe on any host size:
+    //   - If the host has less than 2GB, the container simply gets OOM-killed at
+    //     whatever the host can provide (which is better than crashing the host).
+    //   - If pids cgroup controller is unavailable, Docker rejects the flag, so
+    //     we retry without resource limits as a fallback.
+    const resourceArgs = ["--memory", "2g", "--pids-limit", "512"];
+
+    const buildDockerRunArgs = (withResourceLimits: boolean) => [
       "run", "-d", "--init", "--ipc=host",
+      ...(withResourceLimits ? resourceArgs : []),
       ...networkArgs,
       "--name", session.containerName,
       ...envArgs,
       SUBAGENT_RUNTIME_IMAGE,
       "sleep", "86400", // 24h max lifetime
-    ]);
+    ];
+
+    // Start the container — retry without resource limits if the host doesn't support them
+    let stdout: string;
+    try {
+      ({ stdout } = await execFileAsync("docker", buildDockerRunArgs(true)));
+    } catch (firstErr: any) {
+      // The container may have been partially created with the failing name — clean up
+      try { await execFileAsync("docker", ["rm", "-f", session.containerName]); } catch { /* ignore */ }
+      logger.warn({ err: firstErr?.message, sessionId: session.id }, "docker run with resource limits failed — retrying without limits");
+      ({ stdout } = await execFileAsync("docker", buildDockerRunArgs(false)));
+    }
 
     session.containerId = stdout.trim();
     logger.info({ sessionId: session.id, container: session.containerName, containerId: session.containerId }, "Sub-agent container started");

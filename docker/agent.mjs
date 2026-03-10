@@ -14,6 +14,8 @@ const MODEL_MAP = {
 
 const DEFAULT_MODEL_ID = "claude-opus-4-6";
 const HISTORY_MAX_MESSAGES = 120;
+const HISTORY_MAX_CHARS = 12_000;       // Total character budget for the prelude text
+const HISTORY_MSG_MAX_CHARS = 2_000;    // Max chars per individual message (truncate code diffs)
 
 
 
@@ -138,19 +140,45 @@ function buildOpencodeConfig() {
 
 function buildHistoryPrelude() {
   if (!Array.isArray(historyMessages) || historyMessages.length === 0) return "";
-  const lines = [
-    "[HISTORICO_DE_CONTEXTO]",
-    "As mensagens abaixo sao historico da sessao. Continue a partir delas sem repetir tudo.",
-  ];
+
   const sliced = historyMessages.slice(-HISTORY_MAX_MESSAGES);
-  for (const message of sliced) {
-    const role = message.role === "agent" ? "assistant" : "user";
-    const content = String(message.content || "").trim();
+
+  // Build from newest messages first so the most recent context is always kept.
+  // Each message is individually truncated to avoid a single code-diff eating
+  // the entire budget. We stop adding messages once we hit the total char limit.
+  const selected = [];
+  let totalChars = 0;
+
+  for (let i = sliced.length - 1; i >= 0; i--) {
+    const msg = sliced[i];
+    const role = msg.role === "agent" ? "assistant" : "user";
+    let content = String(msg.content || "").trim();
     if (!content) continue;
-    lines.push(`${role}: ${content}`);
+
+    // Truncate individual messages that are very long (code diffs, full files)
+    if (content.length > HISTORY_MSG_MAX_CHARS) {
+      content = content.substring(0, HISTORY_MSG_MAX_CHARS) + "... (truncado)";
+    }
+
+    const line = `${role}: ${content}`;
+    if (totalChars + line.length > HISTORY_MAX_CHARS && selected.length > 0) {
+      break; // Budget exhausted — stop adding older messages
+    }
+
+    totalChars += line.length;
+    selected.push(line);
   }
-  lines.push("[/HISTORICO_DE_CONTEXTO]");
-  return `${lines.join("\n")}\n\n`;
+
+  // Reverse back to chronological order
+  selected.reverse();
+
+  const skipped = sliced.length - selected.length;
+  const header = [
+    "[HISTORICO_DE_CONTEXTO]",
+    `As mensagens abaixo sao historico da sessao (${selected.length} de ${sliced.length} msgs${skipped > 0 ? `, ${skipped} mais antigas omitidas` : ""}). Continue a partir delas sem repetir tudo.`,
+  ];
+
+  return `${[...header, ...selected, "[/HISTORICO_DE_CONTEXTO]"].join("\n")}\n\n`;
 }
 
 async function fetchAgentJson(path) {
@@ -441,6 +469,30 @@ function runOpencodeTurn({ text, model, mode, images }) {
     let gotMeaningfulOutput = false;
     let finished = false;
 
+    // ── Inactivity watchdog ────────────────────────────────────────────
+    // If the OpenCode process emits zero stdout/stderr for WATCHDOG_MS,
+    // it is likely stuck (hung API call, dead TCP connection, etc.).
+    // Kill and let the caller handle the error / cascade.
+    // The timer resets on ANY data (stdout or stderr), so a process that
+    // is actively retrying or logging will never be killed by this.
+    const WATCHDOG_MS = 10 * 60_000; // 10 minutes of total silence
+    let watchdogTimer = setTimeout(() => {
+      if (finished) return;
+      process.stderr.write(`[watchdog] No output for ${WATCHDOG_MS / 1000}s — killing stuck process\n`);
+      killTree();
+      finish(new Error(`OpenCode travou — nenhum output por ${WATCHDOG_MS / 60_000} minutos`));
+    }, WATCHDOG_MS);
+    function resetWatchdog() {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
+      if (finished) return;
+      watchdogTimer = setTimeout(() => {
+        if (finished) return;
+        process.stderr.write(`[watchdog] No output for ${WATCHDOG_MS / 1000}s — killing stuck process\n`);
+        killTree();
+        finish(new Error(`OpenCode travou — nenhum output por ${WATCHDOG_MS / 60_000} minutos`));
+      }, WATCHDOG_MS);
+    }
+
     // Turn completion timer: after the OpenCode process finishes its last step
     // and stops emitting events, it may hang during cleanup (MCP servers,
     // Chrome, etc.) instead of exiting. This timer force-kills the process and
@@ -469,6 +521,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     }
 
     child.stdout.on("data", (chunk) => {
+      resetWatchdog();
       stdoutBuffer += chunk.toString();
       let newlineIndex = stdoutBuffer.indexOf("\n");
       while (newlineIndex >= 0) {
@@ -544,6 +597,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     });
 
     child.stderr.on("data", (chunk) => {
+      resetWatchdog();
       stderrBuffer += chunk.toString();
       // Detect rate limit from OpenCode logs (enabled via --print-logs).
       // Only check the new chunk to avoid re-matching old buffer content.
@@ -567,6 +621,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const finish = (err, resultText = "") => {
       if (finished) return;
       finished = true;
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
       if (activeResolve) {
         activeResolve = null;
