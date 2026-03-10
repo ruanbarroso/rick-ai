@@ -172,6 +172,27 @@ body {
   margin-top: 4px;
 }
 
+.message .copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(255,255,255,0.08);
+  border: none;
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+.message:hover .copy-btn { opacity: 0.7; }
+.message .copy-btn:hover { opacity: 1; background: rgba(255,255,255,0.18); }
+.message .copy-btn svg { width: 16px; height: 16px; fill: none; stroke: rgba(255,255,255,0.85); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.message .copy-btn.copied svg { stroke: #4ade80; }
+
 /* Message rendering styles loaded from /static/message-styles.css */
 
 /* Compose bar */
@@ -1241,6 +1262,30 @@ function handleTranscription(audioUrl, transcription) {
   }
 }
 
+function addCopyButton(div) {
+  var btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.title = 'Copiar mensagem';
+  btn.innerHTML = '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  btn.onclick = function(e) {
+    e.stopPropagation();
+    // Get text content, excluding the time and copy button elements
+    var clone = div.cloneNode(true);
+    var timeEl = clone.querySelector('.time');
+    if (timeEl) timeEl.remove();
+    var copyEl = clone.querySelector('.copy-btn');
+    if (copyEl) copyEl.remove();
+    var connTag = clone.querySelector('.connector-tag');
+    if (connTag) connTag.remove();
+    var textContent = clone.innerText || clone.textContent || '';
+    navigator.clipboard.writeText(textContent.trim()).then(function() {
+      btn.classList.add('copied');
+      setTimeout(function() { btn.classList.remove('copied'); }, 1500);
+    });
+  };
+  div.appendChild(btn);
+}
+
 function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) {
   // System state messages (e.g. {"state":"done"}) — don't render as bubbles
   if (role === 'system' || messageType === 'system') {
@@ -1278,6 +1323,8 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) 
   time.className = 'time';
   time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   div.appendChild(time);
+
+  if (cssClass === 'agent') addCopyButton(div);
 
   container.insertBefore(div, typing);
   scrollToBottom();
@@ -1339,6 +1386,8 @@ function appendHistoryMessage(msg) {
   time.className = 'time';
   time.textContent = timeStr;
   div.appendChild(time);
+
+  if (cssClass === 'agent') addCopyButton(div);
 
   container.insertBefore(div, typing);
 }
