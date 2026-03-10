@@ -803,7 +803,7 @@
     border-radius: 6px;
     padding: 4px;
     cursor: pointer;
-    opacity: 0;
+    opacity: 0.45;
     transition: opacity 0.15s, background 0.15s;
     display: flex;
     align-items: center;
@@ -811,7 +811,7 @@
     z-index: 2;
   }
   .message:hover .copy-btn { opacity: 0.7; }
-  .message .copy-btn:hover { opacity: 1; background: rgba(255,255,255,0.18); }
+  .message .copy-btn:hover, .message .copy-btn:active { opacity: 1; background: rgba(255,255,255,0.18); }
   .message .copy-btn svg { width: 16px; height: 16px; fill: none; stroke: rgba(255,255,255,0.85); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .message .copy-btn.copied svg { stroke: #4ade80; }
 
