@@ -3,9 +3,8 @@
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
-import { createReadStream, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 
 const MODEL_MAP = {
   "claude-opus-4-6": "anthropic/claude-opus-4-6",
@@ -405,13 +404,12 @@ function runOpencodeTurn({ text, model, mode, images }) {
     // Use --print-logs so OpenCode writes detailed logs to stderr (including rate limit errors)
     args.push("--print-logs");
 
-    // The user message is piped via stdin instead of passed as a CLI argument.
-    // This avoids: (1) CLI argument length limits, (2) yargs misinterpreting
-    // messages starting with dashes (e.g. "---" YAML front matter) as flags,
-    // (3) any shell escaping issues. OpenCode appends stdin to the message
-    // when it detects a non-TTY stdin (see run.ts: `if (!process.stdin.isTTY)`).
-    const msgFile = join(tmpdir(), `opencode-msg-${Date.now()}.txt`);
-    writeFileSync(msgFile, text, "utf-8");
+    // "--" stops yargs flag parsing — everything after it is treated as the message.
+    // Without this, messages starting with dashes (e.g. "---" YAML front matter)
+    // would be misinterpreted as unknown CLI flags, causing exit code 1.
+    // NOTE: stdin pipe was attempted but doesn't work reliably because npx spawns
+    // an intermediate shell (sh -c) that doesn't propagate stdin to the Bun process.
+    args.push("--", text);
 
     // Build env: OpenCode/ai-sdk expects GOOGLE_GENERATIVE_AI_API_KEY for Gemini,
     // but our container receives GEMINI_API_KEY from the main process.
@@ -426,15 +424,8 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const child = spawn("npx", args, {
       cwd: "/workspace",
       env: childEnv,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       detached: true, // Create a new process group so we can kill the entire tree
-    });
-
-    // Pipe the message file into stdin then close it so OpenCode knows input is done
-    const msgStream = createReadStream(msgFile, "utf-8");
-    msgStream.pipe(child.stdin);
-    msgStream.on("end", () => {
-      try { unlinkSync(msgFile); } catch { /* ignore */ }
     });
 
     // Kill the entire process group (npx → opencode → MCP servers → Chrome).
