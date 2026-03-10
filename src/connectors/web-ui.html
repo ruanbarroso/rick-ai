@@ -3463,7 +3463,7 @@ function renderSessionMessages(sessionId) {
       time.textContent = m.time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       div.appendChild(time);
 
-      if (cssClass === 'agent') addCopyButton(div);
+      if (cssClass === 'agent') addCopyButton(div, m.text);
 
       container.insertBefore(div, typing);
     }
@@ -3498,22 +3498,14 @@ function loadHistory(messages) {
 
 // formatToolLine() and makeToolUseBlock() are loaded from /static/tool-blocks.js
 
-function addCopyButton(div) {
+function addCopyButton(div, rawText) {
   var btn = document.createElement('button');
   btn.className = 'copy-btn';
   btn.title = 'Copiar mensagem';
   btn.innerHTML = '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
   btn.onclick = function(e) {
     e.stopPropagation();
-    var clone = div.cloneNode(true);
-    var timeEl = clone.querySelector('.time');
-    if (timeEl) timeEl.remove();
-    var copyEl = clone.querySelector('.copy-btn');
-    if (copyEl) copyEl.remove();
-    var connTag = clone.querySelector('.connector-tag');
-    if (connTag) connTag.remove();
-    var textContent = clone.innerText || clone.textContent || '';
-    navigator.clipboard.writeText(textContent.trim()).then(function() {
+    navigator.clipboard.writeText(rawText.trim()).then(function() {
       btn.classList.add('copied');
       setTimeout(function() { btn.classList.remove('copied'); }, 1500);
     });
@@ -3559,7 +3551,7 @@ function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType, fileIn
   time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   div.appendChild(time);
 
-  if (cssClass === 'agent') addCopyButton(div);
+  if (cssClass === 'agent') addCopyButton(div, text);
 
   container.insertBefore(div, typing);
   scrollToBottom();
