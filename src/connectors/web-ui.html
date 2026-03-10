@@ -3463,7 +3463,7 @@ function renderSessionMessages(sessionId) {
       time.textContent = m.time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       div.appendChild(time);
 
-      if (cssClass === 'agent') addCopyButton(div, m.text);
+      if (cssClass !== 'error') addCopyButton(div, m.text);
 
       container.insertBefore(div, typing);
     }
@@ -3551,7 +3551,7 @@ function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType, fileIn
   time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   div.appendChild(time);
 
-  if (cssClass === 'agent') addCopyButton(div, text);
+  if (cssClass !== 'error') addCopyButton(div, text);
 
   container.insertBefore(div, typing);
   scrollToBottom();

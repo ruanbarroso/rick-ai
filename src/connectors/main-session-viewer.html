@@ -674,7 +674,7 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) 
   time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   div.appendChild(time);
 
-  if (cssClass === 'agent') addCopyButton(div, text);
+  if (cssClass !== 'error') addCopyButton(div, text);
 
   container.insertBefore(div, typing);
   scrollToBottom();
@@ -733,7 +733,7 @@ function appendHistoryMessage(msg) {
     div.appendChild(tag);
   }
 
-  if (cssClass === 'agent') addCopyButton(div, text);
+  if (cssClass !== 'error') addCopyButton(div, text);
 
   container.insertBefore(div, typing);
 }
