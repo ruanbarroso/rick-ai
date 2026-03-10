@@ -146,6 +146,12 @@ export class Agent {
     return this.sessionManager.getMetricsSnapshot();
   }
 
+  /** Return the live in-memory state of a session (running, waiting_user, etc.), or null if not in memory. */
+  getSessionState(sessionId: string): string | null {
+    const session = this.sessionManager.getSession(sessionId);
+    return session ? session.state : null;
+  }
+
   /**
    * Public entry point — serializes per user to prevent race conditions.
    * Two messages from the same user are processed sequentially, never concurrently.

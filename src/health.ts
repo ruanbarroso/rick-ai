@@ -132,6 +132,7 @@ let registeredMemoryService: MemoryService | null = null;
 let registeredVectorMemory: VectorMemoryService | null = null;
 let registeredKillSession: ((sessionId: string) => Promise<void>) | null = null;
 let registeredSubagentMetrics: (() => SubAgentMetricsSnapshot) | null = null;
+let registeredSessionStateGetter: ((sessionId: string) => string | null) | null = null;
 
 /**
  * Register services for the sub-agent Agent API (read + write).
@@ -159,6 +160,15 @@ export function registerSessionKiller(killFn: (sessionId: string) => Promise<voi
 
 export function registerSubagentMetrics(getter: () => SubAgentMetricsSnapshot): void {
   registeredSubagentMetrics = getter;
+}
+
+/**
+ * Register a getter for live in-memory session state (running, waiting_user, etc.).
+ * The sessions API uses this to return fine-grained state for active sessions
+ * instead of the coarse DB status ('active').
+ */
+export function registerSessionStateGetter(getter: (sessionId: string) => string | null): void {
+  registeredSessionStateGetter = getter;
 }
 
 export function startHealthServer(port: number): void {
@@ -866,17 +876,27 @@ async function handlePublicSessionsApi(token: string, res: ServerResponse): Prom
       [userId],
     );
 
-    const sessions = await Promise.all(result.rows.map(async (r: any) => ({
-      id: r.id,
-      task: r.task,
-      status: r.status,
-      startedAt: r.started_at,
-      endedAt: r.ended_at,
-      connectorName: r.connector_name,
-      variantName: r.variant_name || await getSessionVariantName(r.id, userId),
-      lastUserMessage: r.last_user_message,
-      lastMessageAt: r.last_message_at,
-    })));
+    const sessions = await Promise.all(result.rows.map(async (r: any) => {
+      // For active sessions, use the live in-memory state (running, waiting_user, etc.)
+      // instead of the coarse DB value ('active'). This lets the dashboard show
+      // "Digitando..." vs "Aguardando" vs "Online" accurately.
+      let status = r.status;
+      if (status === "active" && registeredSessionStateGetter) {
+        const liveState = registeredSessionStateGetter(r.id);
+        if (liveState) status = liveState;
+      }
+      return {
+        id: r.id,
+        task: r.task,
+        status,
+        startedAt: r.started_at,
+        endedAt: r.ended_at,
+        connectorName: r.connector_name,
+        variantName: r.variant_name || await getSessionVariantName(r.id, userId),
+        lastUserMessage: r.last_user_message,
+        lastMessageAt: r.last_message_at,
+      };
+    }));
 
     const agentLogo = await configGet("AGENT_LOGO") || "";
 
