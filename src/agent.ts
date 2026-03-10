@@ -1972,6 +1972,7 @@ Se nao houver nada util para memorizar, retorne VAZIO.`;
             state: s.state,
             taskDescription: s.taskDescription,
             variantName: s.variantName,
+            pendingQuestion: s.pendingQuestion,
             sessionsToken: s.numericUserId != null ? getUserSessionsToken(s.numericUserId) : undefined,
             preferredModel: s.preferredModel,
             executionMode: s.executionMode,

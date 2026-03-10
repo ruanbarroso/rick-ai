@@ -60,6 +60,24 @@ export type SessionState =
   | "failed"       // Sub-agent crashed (non-zero exit code)
   | "killed";      // Container destroyed
 
+export interface PendingQuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface PendingQuestionItem {
+  question: string;
+  header: string;
+  options: PendingQuestionOption[];
+  multiple?: boolean;
+  custom?: boolean;
+}
+
+export interface PendingQuestionPrompt {
+  requestId: string;
+  questions: PendingQuestionItem[];
+}
+
 /**
  * Represents an active sub-agent session.
  */
@@ -84,7 +102,7 @@ export interface SubAgentSession {
    *  Used to suppress duplicate text in "waiting_user"/"done" results. */
   turnHadStreamedText?: boolean;
   /** Pending question from sub-agent to user */
-  pendingQuestion: string | null;
+  pendingQuestion: PendingQuestionPrompt | null;
   /** Assigned variant name for this session (e.g. "Pickle Rick", "Zoe Alpha") */
   variantName?: string;
   /** Preferred primary model for this session's cascade order. */

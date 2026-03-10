@@ -787,6 +787,189 @@
     border-bottom-left-radius: 4px;
   }
 
+  .message.question {
+    max-width: min(92%, 760px);
+    padding: 0;
+    background: transparent;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    overflow: hidden;
+  }
+
+  .question-card {
+    background: linear-gradient(180deg, rgba(28, 35, 51, 0.96), rgba(20, 25, 39, 0.98));
+  }
+
+  .question-header {
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .question-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.16);
+    color: #a5b4fc;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .question-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .question-body {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .question-progress {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .question-progress-bar {
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.08);
+    overflow: hidden;
+  }
+
+  .question-progress-fill {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, #22c55e, #60a5fa);
+    transition: width 0.18s ease;
+  }
+
+  .question-item {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .question-item.hidden { display: none; }
+
+  .question-item-title {
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .question-item-text {
+    font-size: 14px;
+  }
+
+  .question-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .question-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .question-option {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .question-option input { margin-top: 2px; }
+
+  .question-option-main {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .question-option-label {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .question-option-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .question-custom input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    color: var(--text);
+    outline: none;
+  }
+
+  .question-custom input:focus { border-color: var(--accent); }
+
+  .question-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .question-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .question-nav-btn {
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .question-nav-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .question-readonly {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .question-submit {
+    border: none;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
   .message .time {
     font-size: 0.7rem;
     color: var(--text-muted);
@@ -3506,6 +3689,9 @@ function renderSessionMessages(sessionId) {
       line.innerHTML = formatToolLine(m.text, lineTimeStr);
       body.appendChild(line);
       body.scrollTop = body.scrollHeight;
+    } else if (m.messageType === 'question') {
+      currentToolBlock = null;
+      appendQuestionToContainer(container, typing, m.text, m.time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }), sessionId !== 'main');
     } else {
       // Non-tool_use message breaks the current terminal group
       currentToolBlock = null;
@@ -3571,6 +3757,214 @@ function addCopyButton(div, rawText) {
   div.appendChild(btn);
 }
 
+function parseQuestionPayload(text) {
+  try {
+    var payload = JSON.parse(text);
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.questions) || payload.questions.length === 0) {
+      return null;
+    }
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
+
+function buildQuestionReplyText(payload, root) {
+  var replies = [];
+  for (var i = 0; i < payload.questions.length; i++) {
+    var question = payload.questions[i];
+    var answers = [];
+    var choiceNodes = root.querySelectorAll('[data-question-index="' + i + '"] input[type="radio"], [data-question-index="' + i + '"] input[type="checkbox"]');
+    for (var j = 0; j < choiceNodes.length; j++) {
+      if (choiceNodes[j].checked && choiceNodes[j].value) answers.push(choiceNodes[j].value);
+    }
+    var customInput = root.querySelector('[data-question-custom="' + i + '"]');
+    if (customInput && customInput.value.trim()) {
+      answers.push(customInput.value.trim());
+    }
+    replies.push({ question: question, answers: answers });
+  }
+
+  var nonEmpty = replies.filter(function(item) { return item.answers.length > 0; });
+  if (nonEmpty.length === 0) return '';
+  if (replies.length === 1 && nonEmpty.length === 1 && nonEmpty[0].answers.length === 1) {
+    return nonEmpty[0].answers[0];
+  }
+  return 'Respostas para as perguntas:\n' + replies.map(function(item, idx) {
+    var label = item.question.header || ('Pergunta ' + (idx + 1));
+    var value = item.answers.length > 0 ? item.answers.join(', ') : '(sem resposta)';
+    return '- ' + label + ': ' + value;
+  }).join('\n');
+}
+
+function questionStepHasAnswer(root, index) {
+  var checked = root.querySelector('[data-question-step="' + index + '"] input[type="radio"]:checked, [data-question-step="' + index + '"] input[type="checkbox"]:checked');
+  if (checked) return true;
+  var customInput = root.querySelector('[data-question-custom="' + index + '"]');
+  return !!(customInput && customInput.value.trim());
+}
+
+function renderQuestionWizardState(root) {
+  var total = Number(root.getAttribute('data-question-total') || '1');
+  var current = Number(root.getAttribute('data-question-current') || '0');
+  var interactive = root.getAttribute('data-question-interactive') === 'true';
+  if (current < 0) current = 0;
+  if (current >= total) current = total - 1;
+  root.setAttribute('data-question-current', String(current));
+
+  var steps = root.querySelectorAll('[data-question-step]');
+  for (var i = 0; i < steps.length; i++) {
+    steps[i].classList.toggle('hidden', Number(steps[i].getAttribute('data-question-step')) !== current);
+  }
+
+  var counter = root.querySelector('[data-question-counter]');
+  if (counter) counter.textContent = 'Pergunta ' + (current + 1) + ' de ' + total;
+  var fill = root.querySelector('[data-question-progress-fill]');
+  if (fill) fill.style.width = ((current + 1) / total * 100) + '%';
+
+  var backBtn = root.querySelector('[data-question-back]');
+  if (backBtn) backBtn.disabled = current === 0;
+  var nextBtn = root.querySelector('[data-question-next]');
+  if (nextBtn) nextBtn.textContent = current === total - 1 ? (interactive ? 'Responder' : 'Concluir') : 'Proxima';
+}
+
+function sendQuestionReplyFromWebUi(replyText) {
+  if (!replyText || !ws || ws.readyState !== WebSocket.OPEN) return;
+  var sid = currentSessionId || 'main';
+  pendingUserEcho = true;
+  storeMessage(sid, replyText, 'user', null, null, null, null);
+  if (sid === currentSessionId) {
+    appendMessageToDOM(replyText, 'user', null, null, null, null);
+  }
+  showTyping(true);
+  ws.send(JSON.stringify({ type: 'message', text: replyText, sessionId: sid }));
+}
+
+function createQuestionMessageElement(payload, timeStr, interactive) {
+  var div = document.createElement('div');
+  div.className = 'message agent question';
+  div.setAttribute('data-question-id', payload.requestId || '');
+
+  var html = '';
+  html += '<div class="question-card">';
+  html += '<div class="question-header">';
+  html += '<div class="question-badge">Pergunta pendente</div>';
+  html += '<div class="question-subtitle">' + payload.questions.length + (payload.questions.length === 1 ? ' pergunta' : ' perguntas') + '</div>';
+  html += '</div>';
+  html += '<div class="question-body">';
+  html += '<div class="question-progress">';
+  html += '<span data-question-counter>Pergunta 1 de ' + payload.questions.length + '</span>';
+  html += '<div class="question-progress-bar"><div class="question-progress-fill" data-question-progress-fill></div></div>';
+  html += '</div>';
+
+  for (var i = 0; i < payload.questions.length; i++) {
+    var question = payload.questions[i];
+    var inputType = question.multiple ? 'checkbox' : 'radio';
+    html += '<div class="question-item' + (i === 0 ? '' : ' hidden') + '" data-question-step="' + i + '">';
+    html += '<div class="question-item-title">' + escapeHtml(question.header || ('Pergunta ' + (i + 1))) + '</div>';
+    html += '<div class="question-item-text">' + escapeHtml(question.question || '') + '</div>';
+    html += '<div class="question-hint">' + (question.multiple ? 'Selecione todas as opcoes que se aplicam.' : 'Selecione uma opcao ou escreva sua resposta.') + '</div>';
+    html += '<div class="question-options" data-question-index="' + i + '">';
+    for (var j = 0; j < question.options.length; j++) {
+      var option = question.options[j];
+      var choiceId = 'question_' + escapeHtml(payload.requestId || 'q') + '_' + i + '_' + j;
+      html += '<label class="question-option" for="' + choiceId + '">';
+      html += '<input id="' + choiceId + '" type="' + inputType + '" name="question_' + i + '" value="' + escapeHtml(option.label || '') + '"' + (interactive ? '' : ' disabled') + '>';
+      html += '<span class="question-option-main">';
+      html += '<span class="question-option-label">' + escapeHtml(option.label || '') + '</span>';
+      html += '<span class="question-option-desc">' + escapeHtml(option.description || '') + '</span>';
+      html += '</span>';
+      html += '</label>';
+    }
+    if (question.custom !== false) {
+      html += '<div class="question-custom">';
+      html += '<input type="text" placeholder="Digite sua resposta..." data-question-custom="' + i + '"' + (interactive ? '' : ' disabled') + '>';
+      html += '</div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  html += '<div class="question-actions">';
+  html += '<div class="question-nav">';
+  html += '<button type="button" class="question-nav-btn" data-question-back disabled>Anterior</button>';
+  html += '<button type="button" class="question-submit" data-question-next>' + (payload.questions.length > 1 ? 'Proxima' : 'Responder') + '</button>';
+  html += '</div>';
+  html += '<div class="question-readonly">' + (interactive ? 'Revise cada etapa antes de enviar.' : 'Abra a sessao publica para responder interativamente.') + '</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  div.innerHTML = html;
+  div.setAttribute('data-question-total', String(payload.questions.length));
+  div.setAttribute('data-question-current', '0');
+  div.setAttribute('data-question-interactive', interactive ? 'true' : 'false');
+
+  var time = document.createElement('div');
+  time.className = 'time';
+  time.textContent = timeStr;
+  div.appendChild(time);
+
+  var backBtn = div.querySelector('[data-question-back]');
+  var nextBtn = div.querySelector('[data-question-next]');
+  if (backBtn) {
+    backBtn.addEventListener('click', function() {
+      var current = Number(div.getAttribute('data-question-current') || '0');
+      if (current <= 0) return;
+      div.setAttribute('data-question-current', String(current - 1));
+      renderQuestionWizardState(div);
+    });
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener('click', function() {
+      var current = Number(div.getAttribute('data-question-current') || '0');
+      var total = Number(div.getAttribute('data-question-total') || '1');
+      if (!interactive && current < total - 1) {
+        div.setAttribute('data-question-current', String(current + 1));
+        renderQuestionWizardState(div);
+        return;
+      }
+      if (!interactive && current === total - 1) {
+        showToast('Abra a sessao publica para responder interativamente.', 'error');
+        return;
+      }
+      if (!questionStepHasAnswer(div, current)) {
+        showToast('Responda a pergunta atual antes de continuar.', 'error');
+        return;
+      }
+      if (current < total - 1) {
+        div.setAttribute('data-question-current', String(current + 1));
+        renderQuestionWizardState(div);
+        return;
+      }
+      var replyText = buildQuestionReplyText(payload, div);
+      if (!replyText) {
+        showToast('Selecione pelo menos uma opcao ou digite uma resposta.', 'error');
+        return;
+      }
+      sendQuestionReplyFromWebUi(replyText);
+    });
+  }
+
+  renderQuestionWizardState(div);
+
+  return div;
+}
+
+function appendQuestionToContainer(container, typing, text, timeStr, interactive) {
+  var payload = parseQuestionPayload(text);
+  if (!payload) return false;
+  if (payload.requestId) {
+    var existingQuestions = container.querySelectorAll('[data-question-id]');
+    for (var q = 0; q < existingQuestions.length; q++) {
+      if (existingQuestions[q].getAttribute('data-question-id') === payload.requestId) return true;
+    }
+  }
+  var div = createQuestionMessageElement(payload, timeStr, interactive);
+  container.insertBefore(div, typing);
+  return true;
+}
+
 function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType, fileInfos) {
   var container = document.getElementById('messages-main');
   var typing = document.getElementById('typing-indicator');
@@ -3595,6 +3989,13 @@ function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType, fileIn
     body.scrollTop = body.scrollHeight;
     scrollToBottom();
     return;
+  }
+
+  if (messageType === 'question') {
+    if (appendQuestionToContainer(container, typing, text, new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }), currentSessionId !== 'main')) {
+      scrollToBottom();
+      return;
+    }
   }
 
   // Regular message — any non-tool_use message breaks the terminal grouping

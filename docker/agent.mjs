@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 
 const MODEL_MAP = {
   "claude-opus-4-6": "anthropic/claude-opus-4-6",
@@ -59,6 +60,15 @@ function emitWaitingUser(result) {
 function emitError(message) {
   if (isSuperseded()) return;
   emit({ type: "error", message: String(message || "") });
+}
+
+function emitQuestion(requestId, questions) {
+  if (isSuperseded()) return;
+  emit({
+    type: "question",
+    requestId: String(requestId || ""),
+    questions: Array.isArray(questions) ? questions : [],
+  });
 }
 
 function emitProviderError(message) {
@@ -307,6 +317,68 @@ function summarizeOutput(value) {
   return text.length > 260 ? `${text.slice(0, 257)}...` : text;
 }
 
+function loadPendingQuestion(sessionId, minTimeCreated) {
+  const dbPath = join(homedir(), ".local", "share", "opencode", "opencode.db");
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readonly: true });
+    const rows = db.prepare(
+      "SELECT id, time_created, data FROM part WHERE session_id = ? AND time_created >= ? ORDER BY time_created DESC LIMIT 20",
+    ).all(sessionId, minTimeCreated);
+
+    for (const row of rows) {
+      let data;
+      try {
+        data = JSON.parse(String(row.data || "{}"));
+      } catch {
+        continue;
+      }
+
+      if (data?.type !== "tool" || data?.tool !== "question") continue;
+      if (data?.state?.status !== "running") continue;
+
+      const rawQuestions = data?.state?.input?.questions;
+      if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) continue;
+
+      const questions = rawQuestions
+        .map((question) => {
+          if (!question || typeof question !== "object") return null;
+          const text = String(question.question || "").trim();
+          const header = String(question.header || "").trim();
+          const options = Array.isArray(question.options)
+            ? question.options
+              .map((option) => ({
+                label: String(option?.label || "").trim(),
+                description: String(option?.description || "").trim(),
+              }))
+              .filter((option) => option.label)
+            : [];
+          if (!text || !header || options.length === 0) return null;
+          return {
+            question: text,
+            header,
+            options,
+            multiple: question.multiple === true,
+            custom: question.custom !== false,
+          };
+        })
+        .filter(Boolean);
+
+      if (questions.length === 0) continue;
+
+      return {
+        requestId: String(row.id || data.id || `question_${row.time_created || Date.now()}`),
+        questions,
+      };
+    }
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
+  }
+  return null;
+}
+
 function parseToolEvent(event) {
   const part = event?.part;
   if (!part || typeof part !== "object" || part.type !== "tool") return;
@@ -404,6 +476,7 @@ let ignoreStderrRateLimitUntil = 0;
 
 function runOpencodeTurn({ text, model, mode, images }) {
   return new Promise((resolve, reject) => {
+    const runStartedAt = Date.now();
     const configContent = JSON.stringify(buildOpencodeConfig());
     const selectedModel = pickModel(model);
     lastRunHadRateLimitError = false;
@@ -468,6 +541,18 @@ function runOpencodeTurn({ text, model, mode, images }) {
     let stderrBuffer = "";
     let gotMeaningfulOutput = false;
     let finished = false;
+    let pendingQuestionId = "";
+    const questionPollTimer = setInterval(() => {
+      if (finished || !openCodeSessionId || pendingQuestionId) return;
+      const pending = loadPendingQuestion(openCodeSessionId, runStartedAt);
+      if (!pending) return;
+      pendingQuestionId = pending.requestId;
+      gotMeaningfulOutput = true;
+      cancelTurnCompletionTimer();
+      emitQuestion(pending.requestId, pending.questions);
+      killTree();
+      finish(null, "");
+    }, 1000);
 
     // ── Inactivity watchdog ────────────────────────────────────────────
     // If the OpenCode process emits zero stdout/stderr for WATCHDOG_MS,
@@ -621,6 +706,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const finish = (err, resultText = "") => {
       if (finished) return;
       finished = true;
+      clearInterval(questionPollTimer);
       if (watchdogTimer) clearTimeout(watchdogTimer);
       if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
       if (activeResolve) {

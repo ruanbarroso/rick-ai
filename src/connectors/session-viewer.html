@@ -167,6 +167,209 @@ body {
   border-bottom-left-radius: 4px;
 }
 
+.message.question {
+  max-width: min(92%, 760px);
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(29, 161, 242, 0.28);
+  overflow: hidden;
+}
+
+.question-card {
+  background: linear-gradient(180deg, rgba(36, 52, 71, 0.92), rgba(26, 35, 50, 0.96));
+}
+
+.question-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.question-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(29, 161, 242, 0.18);
+  color: #8fd1ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.question-subtitle {
+  color: var(--text2);
+  font-size: 12px;
+}
+
+.question-body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.question-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.question-progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.question-progress-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #22c55e, #38bdf8);
+  transition: width 0.18s ease;
+}
+
+.question-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.question-item.hidden {
+  display: none;
+}
+
+.question-item-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.question-item-text {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.question-hint {
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-option {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.question-option input {
+  margin-top: 2px;
+}
+
+.question-option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.question-option-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.question-option-desc {
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.question-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.question-custom input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  outline: none;
+}
+
+.question-custom input:focus {
+  border-color: var(--accent);
+}
+
+.question-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.question-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.question-nav-btn {
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.question-nav-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.question-readonly {
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.question-submit {
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.question-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .message .time {
   font-size: 11px;
   color: rgba(255,255,255,0.45);
@@ -1279,6 +1482,217 @@ function addCopyButton(div, rawText) {
   div.appendChild(btn);
 }
 
+function parseQuestionPayload(text) {
+  try {
+    var payload = JSON.parse(text);
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.questions) || payload.questions.length === 0) {
+      return null;
+    }
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
+
+function buildQuestionReplyText(payload, root) {
+  var replies = [];
+  for (var i = 0; i < payload.questions.length; i++) {
+    var question = payload.questions[i];
+    var answers = [];
+    var choiceNodes = root.querySelectorAll('[data-question-index="' + i + '"] input[type="radio"], [data-question-index="' + i + '"] input[type="checkbox"]');
+    for (var j = 0; j < choiceNodes.length; j++) {
+      if (choiceNodes[j].checked && choiceNodes[j].value) answers.push(choiceNodes[j].value);
+    }
+    var customInput = root.querySelector('[data-question-custom="' + i + '"]');
+    if (customInput && customInput.value.trim()) {
+      answers.push(customInput.value.trim());
+    }
+    replies.push({ question: question, answers: answers });
+  }
+
+  var nonEmpty = replies.filter(function(item) { return item.answers.length > 0; });
+  if (nonEmpty.length === 0) return '';
+  if (replies.length === 1 && nonEmpty.length === 1 && nonEmpty[0].answers.length === 1) {
+    return nonEmpty[0].answers[0];
+  }
+  return 'Respostas para as perguntas:\n' + replies.map(function(item, idx) {
+    var label = item.question.header || ('Pergunta ' + (idx + 1));
+    var value = item.answers.length > 0 ? item.answers.join(', ') : '(sem resposta)';
+    return '- ' + label + ': ' + value;
+  }).join('\n');
+}
+
+function questionStepHasAnswer(root, index) {
+  var checked = root.querySelector('[data-question-step="' + index + '"] input[type="radio"]:checked, [data-question-step="' + index + '"] input[type="checkbox"]:checked');
+  if (checked) return true;
+  var customInput = root.querySelector('[data-question-custom="' + index + '"]');
+  return !!(customInput && customInput.value.trim());
+}
+
+function renderQuestionWizardState(root) {
+  var total = Number(root.getAttribute('data-question-total') || '1');
+  var current = Number(root.getAttribute('data-question-current') || '0');
+  var interactive = root.getAttribute('data-question-interactive') === 'true';
+  if (current < 0) current = 0;
+  if (current >= total) current = total - 1;
+  root.setAttribute('data-question-current', String(current));
+
+  var steps = root.querySelectorAll('[data-question-step]');
+  for (var i = 0; i < steps.length; i++) {
+    steps[i].classList.toggle('hidden', Number(steps[i].getAttribute('data-question-step')) !== current);
+  }
+
+  var counter = root.querySelector('[data-question-counter]');
+  if (counter) counter.textContent = 'Pergunta ' + (current + 1) + ' de ' + total;
+  var fill = root.querySelector('[data-question-progress-fill]');
+  if (fill) fill.style.width = ((current + 1) / total * 100) + '%';
+
+  var backBtn = root.querySelector('[data-question-back]');
+  if (backBtn) backBtn.disabled = current === 0;
+  var nextBtn = root.querySelector('[data-question-next]');
+  if (nextBtn) nextBtn.textContent = current === total - 1 ? (interactive ? 'Responder' : 'Concluir') : 'Proxima';
+}
+
+function sendQuestionReplyText(replyText) {
+  if (!replyText || !ws || ws.readyState !== WebSocket.OPEN) return;
+  pendingUserEcho = true;
+  appendMessage(replyText, 'user', 'text', null, null, null);
+  updateSessionState('running');
+  ws.send(JSON.stringify({ type: 'message', text: replyText }));
+}
+
+function createQuestionMessage(payload, timeStr) {
+  var div = document.createElement('div');
+  div.className = 'message agent question';
+  div.setAttribute('data-question-id', payload.requestId || '');
+
+  var html = '';
+  html += '<div class="question-card">';
+  html += '<div class="question-header">';
+  html += '<div class="question-badge">Pergunta pendente</div>';
+  html += '<div class="question-subtitle">' + payload.questions.length + (payload.questions.length === 1 ? ' pergunta' : ' perguntas') + '</div>';
+  html += '</div>';
+  html += '<div class="question-body">';
+  html += '<div class="question-progress">';
+  html += '<span data-question-counter>Pergunta 1 de ' + payload.questions.length + '</span>';
+  html += '<div class="question-progress-bar"><div class="question-progress-fill" data-question-progress-fill></div></div>';
+  html += '</div>';
+
+  for (var i = 0; i < payload.questions.length; i++) {
+    var question = payload.questions[i];
+    var inputType = question.multiple ? 'checkbox' : 'radio';
+    html += '<div class="question-item' + (i === 0 ? '' : ' hidden') + '" data-question-step="' + i + '">';
+    html += '<div class="question-item-title">' + escapeHtml(question.header || ('Pergunta ' + (i + 1))) + '</div>';
+    html += '<div class="question-item-text">' + escapeHtml(question.question || '') + '</div>';
+    html += '<div class="question-hint">' + (question.multiple ? 'Selecione todas as opcoes que se aplicam.' : 'Selecione uma opcao ou escreva sua resposta.') + '</div>';
+    html += '<div class="question-options" data-question-index="' + i + '">';
+    for (var j = 0; j < question.options.length; j++) {
+      var option = question.options[j];
+      var choiceId = 'question_' + escapeHtml(payload.requestId || 'q') + '_' + i + '_' + j;
+      html += '<label class="question-option" for="' + choiceId + '">';
+      html += '<input id="' + choiceId + '" type="' + inputType + '" name="question_' + i + '" value="' + escapeHtml(option.label || '') + '"' + (hasWriteAccess ? '' : ' disabled') + '>';
+      html += '<span class="question-option-main">';
+      html += '<span class="question-option-label">' + escapeHtml(option.label || '') + '</span>';
+      html += '<span class="question-option-desc">' + escapeHtml(option.description || '') + '</span>';
+      html += '</span>';
+      html += '</label>';
+    }
+    if (question.custom !== false) {
+      html += '<div class="question-custom">';
+      html += '<input type="text" placeholder="Digite sua resposta..." data-question-custom="' + i + '"' + (hasWriteAccess ? '' : ' disabled') + '>';
+      html += '</div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  html += '<div class="question-actions">';
+  html += '<div class="question-nav">';
+  html += '<button type="button" class="question-nav-btn" data-question-back disabled>Anterior</button>';
+  html += '<button type="button" class="question-submit" data-question-next>' + (payload.questions.length > 1 ? 'Proxima' : 'Responder') + '</button>';
+  html += '</div>';
+  html += '<div class="question-readonly">' + (hasWriteAccess ? 'Revise cada etapa antes de enviar.' : 'Sessao somente leitura.') + '</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  div.innerHTML = html;
+  div.setAttribute('data-question-total', String(payload.questions.length));
+  div.setAttribute('data-question-current', '0');
+  div.setAttribute('data-question-interactive', hasWriteAccess ? 'true' : 'false');
+
+  var time = document.createElement('div');
+  time.className = 'time';
+  time.textContent = timeStr;
+  div.appendChild(time);
+
+  var backBtn = div.querySelector('[data-question-back]');
+  var nextBtn = div.querySelector('[data-question-next]');
+  if (backBtn) {
+    backBtn.addEventListener('click', function() {
+      var current = Number(div.getAttribute('data-question-current') || '0');
+      if (current <= 0) return;
+      div.setAttribute('data-question-current', String(current - 1));
+      renderQuestionWizardState(div);
+    });
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener('click', function() {
+      var current = Number(div.getAttribute('data-question-current') || '0');
+      var total = Number(div.getAttribute('data-question-total') || '1');
+      if (!hasWriteAccess && current < total - 1) {
+        div.setAttribute('data-question-current', String(current + 1));
+        renderQuestionWizardState(div);
+        return;
+      }
+      if (!hasWriteAccess && current === total - 1) {
+        showErrorModal('Sessao somente leitura.');
+        return;
+      }
+      if (!questionStepHasAnswer(div, current)) {
+        showErrorModal('Responda a pergunta atual antes de continuar.');
+        return;
+      }
+      if (current < total - 1) {
+        div.setAttribute('data-question-current', String(current + 1));
+        renderQuestionWizardState(div);
+        return;
+      }
+      var replyText = buildQuestionReplyText(payload, div);
+      if (!replyText) {
+        showErrorModal('Selecione pelo menos uma opcao ou digite uma resposta.');
+        return;
+      }
+      sendQuestionReplyText(replyText);
+    });
+  }
+
+  renderQuestionWizardState(div);
+
+  return div;
+}
+
+function appendQuestionMessage(text, timeStr) {
+  var payload = parseQuestionPayload(text);
+  if (!payload) return false;
+
+  var container = document.getElementById('messages');
+  var typing = document.getElementById('typing-indicator');
+  if (payload.requestId) {
+    var existingQuestions = container.querySelectorAll('[data-question-id]');
+    for (var q = 0; q < existingQuestions.length; q++) {
+      if (existingQuestions[q].getAttribute('data-question-id') === payload.requestId) return true;
+    }
+  }
+
+  var empty = document.getElementById('empty-state');
+  if (empty) empty.classList.add('hidden');
+  var div = createQuestionMessage(payload, timeStr);
+  container.insertBefore(div, typing);
+  scrollToBottom();
+  return true;
+}
+
 function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) {
   // System state messages (e.g. {"state":"done"}) — don't render as bubbles
   if (role === 'system' || messageType === 'system') {
@@ -1299,6 +1713,12 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) 
     var ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     appendToolLine(text, ts);
     return;
+  }
+
+  if (messageType === 'question') {
+    if (appendQuestionMessage(text, new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))) {
+      return;
+    }
   }
 
   var empty = document.getElementById('empty-state');
@@ -1362,6 +1782,10 @@ function appendHistoryMessage(msg) {
   if (messageType === 'tool_use') {
     appendToolLine(text, timeStr);
     return;
+  }
+
+  if (messageType === 'question') {
+    if (appendQuestionMessage(text, timeStr)) return;
   }
 
   var empty = document.getElementById('empty-state');
@@ -1620,6 +2044,9 @@ function connect() {
           }
           if (msg.session.executionMode) {
             selectedExecutionMode = msg.session.executionMode === 'plan' ? 'plan' : 'build';
+          }
+          if (msg.session.pendingQuestion) {
+            appendQuestionMessage(JSON.stringify(msg.session.pendingQuestion), new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
           }
           canManageProviders = !!msg.session.canManageProviders;
           updateModelButton();

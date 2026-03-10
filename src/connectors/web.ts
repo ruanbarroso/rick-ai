@@ -17,7 +17,7 @@ import { OpenAIOAuthService } from "../auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "../auth/oauth-singleton.js";
 import { GeminiProvider } from "../llm/providers/gemini.js";
 import { resolveSessionsToken, getMainSessionName, getUserSessionsToken } from "../subagent/session-manager.js";
-import { DEFAULT_SUBAGENT_EXECUTION_MODE, DEFAULT_SUBAGENT_MODEL, SUBAGENT_MODELS, type SubAgentExecutionMode, type SubAgentModelId } from "../subagent/types.js";
+import { DEFAULT_SUBAGENT_EXECUTION_MODE, DEFAULT_SUBAGENT_MODEL, SUBAGENT_MODELS, type PendingQuestionPrompt, type SubAgentExecutionMode, type SubAgentModelId } from "../subagent/types.js";
 
 /**
  * Web UI connector using WebSocket on the shared HTTP server.
@@ -45,6 +45,7 @@ export interface WebAgentBridge {
     state: string;
     taskDescription: string;
     variantName?: string;
+    pendingQuestion?: PendingQuestionPrompt | null;
     sessionsToken?: string;
     preferredModel: SubAgentModelId;
     executionMode: SubAgentExecutionMode;
@@ -477,6 +478,7 @@ export class WebConnector implements Connector {
                 state: session.state,
                 taskDescription: session.taskDescription,
                 variantName: session.variantName,
+                pendingQuestion: session.pendingQuestion,
                 preferredModel: session.preferredModel || DEFAULT_SUBAGENT_MODEL,
                 executionMode: session.executionMode || DEFAULT_SUBAGENT_EXECUTION_MODE,
                 availableModels: SUBAGENT_MODELS,

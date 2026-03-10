@@ -4,7 +4,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SubAgentSession, SessionState, DEFAULT_SUBAGENT_MODEL, DEFAULT_SUBAGENT_EXECUTION_MODE, SubAgentModelId, isSubAgentExecutionMode, isSubAgentModelId, SubAgentMetricsSnapshot, SubAgentExecutionMode } from "./types.js";
+import { SubAgentSession, SessionState, DEFAULT_SUBAGENT_MODEL, DEFAULT_SUBAGENT_EXECUTION_MODE, SubAgentModelId, isSubAgentExecutionMode, isSubAgentModelId, SubAgentMetricsSnapshot, SubAgentExecutionMode, PendingQuestionItem, PendingQuestionPrompt } from "./types.js";
 import type { ConnectorManager } from "../connectors/connector-manager.js";
 import type { MediaAttachment } from "../llm/types.js";
 import { query } from "../memory/database.js";
@@ -1276,6 +1276,55 @@ export class SessionManager {
             session.updatedAt = Date.now();
           }
           break;
+
+        case "question": {
+          const questions = Array.isArray(msg.questions)
+            ? msg.questions
+              .map((item: any): PendingQuestionItem | null => {
+                if (!item || typeof item !== "object") return null;
+                const question = String(item.question || "").trim();
+                const header = String(item.header || "").trim();
+                const options = Array.isArray(item.options)
+                  ? item.options
+                    .map((option: any) => ({
+                      label: String(option?.label || "").trim(),
+                      description: String(option?.description || "").trim(),
+                    }))
+                    .filter((option: { label: string }) => option.label)
+                  : [];
+                if (!question || !header || options.length === 0) return null;
+                return {
+                  question,
+                  header,
+                  options,
+                  multiple: item.multiple === true,
+                  custom: item.custom !== false,
+                };
+              })
+              .filter(Boolean) as PendingQuestionItem[]
+            : [];
+
+          if (questions.length === 0) break;
+
+          const requestId = typeof msg.requestId === "string" && msg.requestId.trim()
+            ? msg.requestId.trim()
+            : `question_${Date.now()}`;
+
+          const pendingQuestion: PendingQuestionPrompt = { requestId, questions };
+          session.pendingQuestion = pendingQuestion;
+          session.state = "waiting_user";
+          session.updatedAt = Date.now();
+          session.turnHadStreamedText = false;
+
+          this.sendToUser(session, JSON.stringify(pendingQuestion), "question");
+
+          if (this.onSessionMessage) {
+            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+          }
+
+          logger.info({ sessionId: session.id, requestId, questionCount: questions.length }, "Sub-agent asked a question");
+          break;
+        }
 
         case "model_active":
           if (isSubAgentModelId(msg.modelId)) {

@@ -147,6 +147,7 @@ The Web UI (`https://rick.barroso.tec.br`) provides a full browser-based interfa
 - **Sub-agent sessions**: View active sessions, send follow-up messages, kill sessions, view session history
 - **Public main-session viewer**: Shareable link (`/m/:token`) for real-time main conversation with full media support (text, audio recording, file attachments, paste images)
 - **Public session viewer**: Shareable link (`/s/:sessionId`) for real-time sub-agent output; append `?t=<token>` to enable interaction (without token, online view is read-only)
+- **Interactive question prompts**: When a sub-agent needs a decision, the public session viewer renders the pending question with selectable options instead of staying stuck on "Digitando..."
 - **Public sessions dashboard**: Per-user sessions list (`/u/:token`) with all sessions ordered by last activity, linking to individual session viewers
 - **Settings panel**: View/edit API keys, database URLs, agent config — all persisted via config store
 - **Sub-agent runtime dashboard**: In Settings, live counters/gauges for fallback depth, retries, max-steps guard hits, tool-call outcomes, and active/waiting sessions
