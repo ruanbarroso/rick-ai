@@ -1584,6 +1584,48 @@
     display: block;
   }
 
+  /* Auto-update toggle switch */
+  .auto-update-toggle {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+  }
+  .auto-update-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .auto-update-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    transition: background 0.25s, border-color 0.25s;
+  }
+  .auto-update-slider::before {
+    content: '';
+    position: absolute;
+    height: 16px;
+    width: 16px;
+    left: 2px;
+    bottom: 2px;
+    background: var(--text-secondary);
+    border-radius: 50%;
+    transition: transform 0.25s, background 0.25s;
+  }
+  .auto-update-toggle input:checked + .auto-update-slider {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .auto-update-toggle input:checked + .auto-update-slider::before {
+    transform: translateX(18px);
+    background: white;
+  }
+
   .settings-status {
     display: inline-flex;
     align-items: center;
@@ -2306,6 +2348,18 @@
           <div id="update-details" style="font-size:0.78rem;color:var(--text-secondary);margin-top:2px;"></div>
         </div>
 
+        <!-- Auto-install toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div>
+            <span class="settings-label" style="margin-bottom:2px;">Instalar automaticamente</span>
+            <p class="settings-hint" style="margin:2px 0 0;">Busca a cada 2 min e instala novas versoes automaticamente.</p>
+          </div>
+          <label class="auto-update-toggle">
+            <input type="checkbox" id="auto-install-toggle" onchange="onAutoInstallToggle(this.checked)">
+            <span class="auto-update-slider"></span>
+          </label>
+        </div>
+
         <!-- Check for updates -->
         <div class="settings-btn-row">
           <button class="settings-action-btn primary" onclick="onVersionPrimaryClick()" id="btn-check-updates">
@@ -2946,6 +3000,8 @@ function handleServerMessage(msg) {
       authenticated = true;
       reconnectAttempts = 0;
       try { localStorage.setItem('rick_pwd', password); } catch(e) {}
+      // Start auto-check for updates timer
+      startAutoCheckTimer();
       // After a deploy the server restarts — check if we should reopen settings
       if (deployInProgress) {
         deployInProgress = false;
@@ -4644,6 +4700,10 @@ function populateSettings(settings) {
   // Load version info (async, won't block settings rendering)
   loadVersionInfo();
 
+  // Restore auto-install toggle state from localStorage
+  var autoToggle = document.getElementById('auto-install-toggle');
+  if (autoToggle) autoToggle.checked = autoInstallEnabled;
+
   // Agent identity
   applyAgentIdentity(settings.agentName, settings.agentLogo);
   var nameInput = document.getElementById('setting-agent-name');
@@ -5506,6 +5566,122 @@ function loadSubagentMetrics() {
 
 // ==================== VERSION & UPDATES ====================
 
+// Auto-install flag (persisted in localStorage, default: enabled)
+var autoInstallEnabled = true;
+try {
+  var stored = localStorage.getItem('rick_auto_install');
+  if (stored !== null) autoInstallEnabled = stored === '1';
+} catch(e) {}
+
+// Apply toggle state on page load
+(function() {
+  var cb = document.getElementById('auto-install-toggle');
+  if (cb) cb.checked = autoInstallEnabled;
+})();
+
+function onAutoInstallToggle(checked) {
+  autoInstallEnabled = checked;
+  try { localStorage.setItem('rick_auto_install', checked ? '1' : '0'); } catch(e) {}
+}
+
+// Auto-check timer (2 minutes). Starts after auth.
+var autoCheckTimer = null;
+var autoCheckRunning = false;
+
+function startAutoCheckTimer() {
+  if (autoCheckTimer) return;
+  // First check after 10 seconds (let the UI settle), then every 2 minutes
+  setTimeout(function() {
+    if (authenticated) autoCheckForUpdates();
+  }, 10000);
+  autoCheckTimer = setInterval(function() {
+    if (!authenticated) return;
+    autoCheckForUpdates();
+  }, 2 * 60 * 1000); // 2 minutes
+}
+
+function stopAutoCheckTimer() {
+  if (autoCheckTimer) {
+    clearInterval(autoCheckTimer);
+    autoCheckTimer = null;
+  }
+}
+
+/**
+ * Silent auto-check: calls /api/version, if update available and
+ * autoInstallEnabled is true, starts install automatically (no modal).
+ * If autoInstallEnabled is false, just updates the UI badge.
+ */
+function autoCheckForUpdates() {
+  if (autoCheckRunning) return;
+  autoCheckRunning = true;
+
+  var token = getAuthToken();
+  fetch('/api/version?token=' + encodeURIComponent(token), { signal: AbortSignal.timeout(15000) })
+    .then(function(resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    })
+    .then(function(data) {
+      // Update current version display
+      var currentEl = document.getElementById('version-current');
+      var badge = document.getElementById('version-badge');
+      var updateInline = document.getElementById('update-inline');
+      var updateDetails = document.getElementById('update-details');
+      var refreshBtn = document.getElementById('version-refresh-btn');
+
+      if (data.current && data.current.sha !== 'unknown') {
+        var d = new Date(data.current.date);
+        var dateStr = isNaN(d.getTime()) ? data.current.date : d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        if (currentEl) currentEl.textContent = data.current.sha + ' (' + dateStr + ')';
+      }
+
+      if (data.hasUpdate && data.latest) {
+        // Update UI to show available update
+        if (badge) {
+          badge.style.display = 'inline-block';
+          badge.style.background = 'rgba(250,176,5,0.15)';
+          badge.style.color = '#fab005';
+          badge.textContent = 'Atualizacao disponivel';
+        }
+        if (refreshBtn) refreshBtn.style.display = 'inline-flex';
+
+        var ld = new Date(data.latest.date);
+        var latestDateStr = isNaN(ld.getTime()) ? data.latest.date : ld.toLocaleDateString('pt-BR') + ' ' + ld.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        if (updateDetails) {
+          updateDetails.textContent =
+            data.latest.sha + ' (' + latestDateStr + ')' +
+            (data.latest.message ? ' — ' + data.latest.message : '');
+        }
+        if (updateInline) updateInline.style.display = 'block';
+        versionPrimaryAction = 'install';
+        applyVersionPrimaryButtonState();
+
+        // Auto-install if enabled
+        if (autoInstallEnabled) {
+          startInstallUpdate();
+        }
+      } else {
+        if (badge) {
+          badge.style.display = 'inline-block';
+          badge.style.background = 'rgba(74,222,128,0.15)';
+          badge.style.color = '#4ade80';
+          badge.textContent = 'Atualizado';
+        }
+        if (refreshBtn) refreshBtn.style.display = 'none';
+        if (updateInline) updateInline.style.display = 'none';
+        versionPrimaryAction = 'check';
+        applyVersionPrimaryButtonState();
+      }
+    })
+    .catch(function() {
+      // Silent fail for auto-check — don't disturb the user
+    })
+    .finally(function() {
+      autoCheckRunning = false;
+    });
+}
+
 function getAuthToken() {
   return password || '';
 }
@@ -5600,6 +5776,13 @@ function checkForUpdates() {
           (data.latest.message ? ' — ' + data.latest.message : '');
         updateInline.style.display = 'block';
         versionPrimaryAction = 'install';
+
+        // If auto-install is enabled, start install automatically (skip confirmation modal)
+        if (autoInstallEnabled) {
+          applyVersionPrimaryButtonState();
+          startInstallUpdate();
+          return;
+        }
       } else {
         // No update available (or GitHub API failed — assume up to date)
         badge.style.display = 'inline-block';
@@ -5750,6 +5933,8 @@ function confirmInstallUpdate() {
 }
 
 function startInstallUpdate() {
+  // Stop auto-check timer during installation
+  stopAutoCheckTimer();
 
   var btn = document.getElementById('btn-check-updates');
   var refreshBtn = document.getElementById('version-refresh-btn');
