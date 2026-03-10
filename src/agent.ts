@@ -51,6 +51,13 @@ export class Agent {
   private userAbortControllers = new Map<string, { controller: AbortController; generation: number }>();
 
   /**
+   * Track memory operation failures per user so the LLM can be transparent.
+   * Key: numericUserId, Value: description of what failed (e.g. "salvar 'senha gmail'")
+   * Consumed (and cleared) on the next message to inject a honesty note.
+   */
+  private pendingMemoryFailures = new Map<number, string[]>();
+
+  /**
    * Monotonically increasing generation counter per user.
    * Incremented each time a new message arrives for a user.
    */
@@ -465,7 +472,20 @@ export class Agent {
 
     const history = await this.memory.getConversationHistoryByUserId(userId!);
 
-    const systemPrompt = this.buildSystemPrompt(userName, memoryContext, semanticContext, userRole, true);
+    let systemPrompt = this.buildSystemPrompt(userName, memoryContext, semanticContext, userRole, true);
+
+    // Inject honesty notes about failed memory operations from the previous turn
+    if (userId) {
+      const failures = this.pendingMemoryFailures.get(userId);
+      if (failures && failures.length > 0) {
+        const failureList = failures.map((f) => `- ${f}`).join("\n");
+        systemPrompt += `\n\nAVISO DE TRANSPARENCIA (inclua na sua resposta se relevante):
+Na rodada anterior, voce confirmou que ia salvar/esquecer algo, mas a operacao falhou internamente:
+${failureList}
+Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a informacao. Nao finja que salvou/esqueceu com sucesso.`;
+        this.pendingMemoryFailures.delete(userId);
+      }
+    }
 
     const messages: LLMMessage[] = [
       // Filter out tool_use messages — they are notifications (e.g. "[tool] Pesquisando...")
@@ -504,12 +524,31 @@ export class Agent {
 
     response.content = response.content.trim();
 
+    // Reactive memory search: if the LLM admits it doesn't have the information,
+    // try a deeper semantic search. If we find relevant memories, re-run the LLM
+    // with the additional context injected. This avoids adding full tool-use overhead
+    // while giving the LLM a second chance to answer accurately.
+    if (this.vectorMemory && this.looksLikeMemoryGap(response.content)) {
+      const reactiveResult = await this.reactiveMemorySearch(
+        text, response.content, messages, systemPrompt, signal, generation, userPhone
+      );
+      if (reactiveResult !== null) {
+        response.content = reactiveResult.trim();
+        logger.info({ userPhone }, "Reactive memory search provided a better answer");
+      }
+    }
+
     await this.memory.saveMessageByUserId(userId!, "assistant", response.content, response.model, response.tokensUsed, undefined, undefined, undefined, undefined, connectorName);
     this.notifyMainViewers(userId!, "agent", response.content, "text", connectorName);
 
     // RBAC: Only extract memories and embed if user role allows learning
     if (canLearn(userRole)) {
       await this.extractAndSaveMemories(userId!, text, response.content, userRole);
+
+      // Detect and execute memory deletions when the LLM confirmed forgetting (fire-and-forget)
+      this.extractAndDeleteMemories(userId!, text, response.content).catch(
+        (err) => logger.warn({ err }, "Failed to extract memory deletions")
+      );
 
       this.autoEmbedConversation(userId!, text, response.content).catch(
         (err) => logger.warn({ err }, "Failed to auto-embed conversation")
@@ -1147,6 +1186,111 @@ O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado autom
     }
   }
 
+  // ==================== REACTIVE MEMORY SEARCH ====================
+
+  /**
+   * Detect whether the LLM response indicates it couldn't find information
+   * that might exist in memory. These are signals for a reactive re-query.
+   */
+  private looksLikeMemoryGap(response: string): boolean {
+    const gapPatterns = [
+      /n[aã]o\s+(tenho|encontr[eo]i|achei|localizei|vi)\s+.*(memori|informac|dado|registro)/i,
+      /n[aã]o\s+(?:tenho|possuo)\s+essa\s+informac/i,
+      /n[aã]o\s+(?:me\s+)?lembr[oa]/i,
+      /n[aã]o\s+(?:sei|conhe[cç]o)\s+(?:essa?|esse)\s/i,
+      /n[aã]o\s+(?:est[aá]|consta)\s+(?:na|em)\s+(?:minha\s+)?memori/i,
+      /n[aã]o\s+(?:foi|foram)\s+(?:salv[oa]|armazenad[oa]|registrad[oa])/i,
+    ];
+    return gapPatterns.some((p) => p.test(response));
+  }
+
+  /**
+   * Perform a deeper semantic search when the initial response suggests a memory gap.
+   * If relevant memories are found, re-runs the LLM with injected context.
+   *
+   * Returns the new response content if a better answer was generated, or null if
+   * the reactive search didn't find anything useful.
+   */
+  private async reactiveMemorySearch(
+    userQuery: string,
+    initialResponse: string,
+    originalMessages: LLMMessage[],
+    originalSystemPrompt: string,
+    signal?: AbortSignal,
+    generation?: number,
+    userPhone?: string
+  ): Promise<string | null> {
+    if (!this.vectorMemory) return null;
+
+    try {
+      // Broader search: lower threshold, more results
+      const results = await this.vectorMemory.searchGlobal(userQuery, 10, 0.25);
+      if (results.length === 0) return null;
+
+      // Also try keyword-based recall from structured memories
+      const keywordResults = await this.memory.recallGlobal(userQuery);
+
+      // Combine and deduplicate
+      const reactiveContext: string[] = [];
+      for (const mem of results) {
+        const entry = `[${mem.category}] ${mem.content} (${(mem.similarity! * 100).toFixed(0)}% relevante)`;
+        reactiveContext.push(entry);
+      }
+      for (const mem of keywordResults) {
+        const entry = `[${mem.category}] ${mem.key}: ${mem.value}`;
+        if (!reactiveContext.some((c) => c.includes(mem.key))) {
+          reactiveContext.push(entry);
+        }
+      }
+
+      if (reactiveContext.length === 0) return null;
+
+      logger.info(
+        { userPhone, resultCount: reactiveContext.length },
+        "Reactive memory search found additional context"
+      );
+
+      // Build augmented prompt with the reactive context
+      const reactiveNote = `\n\n--- CONTEXTO ADICIONAL ENCONTRADO (busca reativa) ---
+Voce disse que nao tinha a informacao, mas uma busca mais ampla encontrou o seguinte:
+${reactiveContext.map((c) => `- ${c}`).join("\n")}
+--- FIM DO CONTEXTO ADICIONAL ---
+Considere essas informacoes na sua resposta. Se alguma for relevante, use-a. Se nenhuma for relevante ao que o usuario perguntou, mantenha sua resposta original.`;
+
+      const augmentedPrompt = originalSystemPrompt + reactiveNote;
+
+      // Check abort/superseded before making a second LLM call
+      if (signal?.aborted) return null;
+      if (generation !== undefined && userPhone && this.isSuperseded(userPhone, generation)) return null;
+
+      const retryResponse = await this.llm.chat(originalMessages, augmentedPrompt, signal);
+      const retryContent = retryResponse.content.trim();
+
+      // Only use the retry if it's meaningfully different (the LLM actually used the new context)
+      if (this.looksLikeMemoryGap(retryContent)) {
+        // Still says it doesn't know — reactive search didn't help
+        return null;
+      }
+
+      return retryContent;
+    } catch (err) {
+      logger.warn({ err }, "Reactive memory search failed");
+      return null;
+    }
+  }
+
+  // ==================== MEMORY FAILURE TRACKING ====================
+
+  /**
+   * Record a memory operation failure for a user so the next response can be transparent about it.
+   */
+  private recordMemoryFailure(userId: number, description: string): void {
+    const existing = this.pendingMemoryFailures.get(userId) || [];
+    existing.push(description);
+    this.pendingMemoryFailures.set(userId, existing);
+    logger.info({ userId, description }, "Recorded memory operation failure for transparency");
+  }
+
   // ==================== AUTO-EXTRACTION ====================
 
   private async buildSemanticContext(userId: number, queryText: string, userRole: UserRole = "admin"): Promise<string> {
@@ -1499,12 +1643,15 @@ Retorne APENAS as linhas de extracao, nada mais.`;
 
       if (text === "VAZIO" || !text) {
         logger.info("llmExtractMemories: no data to extract (VAZIO)");
+        // The LLM may have confirmed saving but extraction found nothing — record failure
+        this.recordMemoryFailure(userId, `salvar informacao de "${userMessage.substring(0, 60)}"`);
         return;
       }
 
       const lines = text.split("\n").filter((l) => l.includes("|"));
       logger.info({ lineCount: lines.length }, "llmExtractMemories: parsed extraction lines");
 
+      let savedCount = 0;
       for (const line of lines) {
         const parts = line.split("|").map((p) => p.trim());
         if (parts.length < 3) {
@@ -1552,15 +1699,131 @@ Retorne APENAS as linhas de extracao, nada mais.`;
             { userId, category: normalizedCategory, key: normalizedKey, existingValue: memResult.existingValue?.substring(0, 50) },
             "LLM extraction blocked by hierarchy"
           );
+          this.recordMemoryFailure(userId, `salvar "${normalizedKey}" (bloqueado por hierarquia RBAC)`);
           continue;
         }
+        savedCount++;
         logger.info(
           { userId, category: normalizedCategory, key: normalizedKey, importance, valueLen: finalValue.length },
           "LLM extracted and saved memory"
         );
       }
+
+      // If extraction ran but nothing was actually saved, record a failure
+      if (savedCount === 0 && lines.length > 0) {
+        this.recordMemoryFailure(userId, `salvar informacao de "${userMessage.substring(0, 60)}" (todas as linhas falharam)`);
+      }
     } catch (err: any) {
       logger.warn({ err: err?.message || err, stack: err?.stack?.substring(0, 300) }, "LLM memory extraction failed (inner catch)");
+      this.recordMemoryFailure(userId, `salvar informacao de "${userMessage.substring(0, 60)}" (erro interno)`);
+    }
+  }
+
+  // ==================== AUTO-DELETION ====================
+
+  /**
+   * Detect when the assistant confirmed forgetting/deleting a memory and
+   * actually perform the deletion. Mirrors the save pipeline but for deletions.
+   *
+   * Pattern: user asks to forget X → LLM says "esqueci" → this method detects
+   * the confirmation and uses a cheap Gemini call to extract the key to delete.
+   */
+  private async extractAndDeleteMemories(
+    userId: number,
+    userMessage: string,
+    assistantResponse: string
+  ): Promise<void> {
+    // Quick check: did the user ask to forget/delete something?
+    const userForgetRegex = /\b(esquec[eêa]|apag[ae]|remov[ae]|delet[ae]|exclui|limpa|tira)\b.*\b(memori|lembran|dado|informac|credencia|senha|registro)\b/i;
+    const assistantForgetRegex = /\b(esqueci|apaguei|removi|deletei|exclu[ií]|limpei|tirei|removid[oa]|apagad[oa]|deletad[oa]|exclu[ií]d[oa])\b/i;
+
+    if (!userForgetRegex.test(userMessage) && !assistantForgetRegex.test(assistantResponse)) {
+      return;
+    }
+
+    // Both conditions: user asked AND assistant confirmed
+    if (!userForgetRegex.test(userMessage) || !assistantForgetRegex.test(assistantResponse)) {
+      return;
+    }
+
+    logger.info({ userId, msgSnippet: userMessage.substring(0, 80) }, "Detected forget intent — extracting keys to delete");
+
+    const extractPrompt = `O usuario pediu para esquecer/apagar uma memoria e o assistente confirmou.
+Identifique EXATAMENTE quais memorias devem ser deletadas.
+
+MENSAGEM DO USUARIO:
+${userMessage.substring(0, 500)}
+
+RESPOSTA DO ASSISTENTE:
+${assistantResponse.substring(0, 500)}
+
+Retorne APENAS linhas no formato: CHAVE
+Onde CHAVE e a chave da memoria a ser deletada (ex: "github", "dark mode", "senha outlook").
+Se o usuario pediu para apagar TUDO de uma categoria, retorne: CATEGORIA:nome_categoria
+Se nao for possivel identificar a chave, retorne VAZIO.
+
+Exemplos:
+- "esquece a senha do gmail" → gmail
+- "apaga tudo sobre credenciais" → CATEGORIA:credenciais
+- "remove a memoria sobre dark mode" → dark mode
+
+Retorne APENAS as chaves, uma por linha, nada mais.`;
+
+    try {
+      const result = await this.llm.chat(
+        [{ role: "user", content: extractPrompt }],
+        undefined
+      );
+      const text = result.content.trim();
+
+      if (text === "VAZIO" || !text) {
+        logger.info("extractAndDeleteMemories: could not identify keys to delete");
+        this.recordMemoryFailure(userId, `esquecer informacao de "${userMessage.substring(0, 60)}" (nao consegui identificar a chave)`);
+        return;
+      }
+
+      const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+      let deletedCount = 0;
+      const failedKeys: string[] = [];
+
+      for (const line of lines) {
+        if (line.startsWith("CATEGORIA:")) {
+          // Delete all memories in a category
+          const category = line.replace("CATEGORIA:", "").trim().toLowerCase();
+          if (category) {
+            const mems = await this.memory.listGlobalMemories(category);
+            for (const mem of mems) {
+              await this.memory.forgetGlobal(mem.key, category);
+              deletedCount++;
+            }
+            if (mems.length === 0) {
+              failedKeys.push(`categoria "${category}" (vazia)`);
+            }
+            logger.info({ category, count: mems.length }, "Deleted all memories in category");
+          }
+        } else {
+          // Delete specific key
+          const key = line.toLowerCase();
+          const deleted = await this.memory.forgetGlobal(key);
+          if (deleted > 0) {
+            deletedCount++;
+            logger.info({ key, deleted }, "Memory deleted by auto-extraction");
+          } else {
+            failedKeys.push(`"${key}"`);
+            logger.info({ key }, "Memory key not found for deletion");
+          }
+        }
+      }
+
+      if (deletedCount > 0) {
+        logger.info({ userId, deletedCount }, "Auto-deletion completed");
+      }
+      if (failedKeys.length > 0 && deletedCount === 0) {
+        this.recordMemoryFailure(userId, `esquecer ${failedKeys.join(", ")} (chave nao encontrada na memoria)`);
+      }
+    } catch (err: any) {
+      logger.warn({ err: err?.message || err }, "Auto-deletion extraction failed");
+      this.recordMemoryFailure(userId, `esquecer informacao de "${userMessage.substring(0, 60)}" (erro interno)`);
     }
   }
 
