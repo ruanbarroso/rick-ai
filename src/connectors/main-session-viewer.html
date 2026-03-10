@@ -782,7 +782,18 @@ function connect() {
         // Skip echo for user messages already shown locally by sendMessage()
         if (msg.role === 'user' && pendingUserEcho) {
           pendingUserEcho = false;
-          // Update local preview with server URLs if available
+          // Update audio src in DOM from local blob URL to server URL so transcription matching works
+          if (msg.audioUrl) {
+            var container = document.getElementById('messages');
+            var userAudios = container.querySelectorAll('.message.user .audio-message audio');
+            for (var ua = userAudios.length - 1; ua >= 0; ua--) {
+              var aEl = userAudios[ua];
+              if ((aEl.getAttribute('src') || '').indexOf('blob:') === 0) {
+                aEl.setAttribute('src', msg.audioUrl);
+                break;
+              }
+            }
+          }
           break;
         }
         // Typing indicator is hidden by the backend via a separate 'typing' event.

@@ -276,6 +276,10 @@ export class Agent {
       if (!geminiCheck.isAvailable()) {
         logger.warn({ userPhone }, "Audio received but Gemini unavailable for transcription — notifying user");
         const unavailableMsg = "O suporte a áudio está temporariamente indisponível. Por favor, digite sua mensagem.";
+        // Clear "Processando áudio..." placeholder in frontend
+        if (audioUrl && this.webBridge) {
+          this.webBridge.sendTranscription(audioUrl, unavailableMsg, user.id);
+        }
         // Save assistant response and notify viewers
         await this.memory.saveMessageByUserId(user.id, "assistant", unavailableMsg, "system", undefined, undefined, undefined, undefined, undefined, connectorName);
         this.notifyMainViewers(user.id, "agent", unavailableMsg, "text", connectorName);
@@ -287,6 +291,10 @@ export class Agent {
       // Check if aborted during transcription
       if (signal.aborted) {
         logger.info({ userPhone }, "Request aborted during audio transcription — skipping response");
+        // Clear "Processando áudio..." placeholder in frontend
+        if (audioUrl && this.webBridge) {
+          this.webBridge.sendTranscription(audioUrl, "[transcrição cancelada]", user.id);
+        }
         return "";
       }
 
@@ -294,6 +302,10 @@ export class Agent {
       if (transcription.startsWith("[erro")) {
         logger.warn({ userPhone, transcription }, "Audio transcription failed — notifying user");
         const errorMsg = "Não consegui transcrever o áudio. Por favor, digite sua mensagem.";
+        // Clear "Processando áudio..." placeholder in frontend
+        if (audioUrl && this.webBridge) {
+          this.webBridge.sendTranscription(audioUrl, errorMsg, user.id);
+        }
         await this.memory.saveMessageByUserId(user.id, "assistant", errorMsg, "system", undefined, undefined, undefined, undefined, undefined, connectorName);
         this.notifyMainViewers(user.id, "agent", errorMsg, "text", connectorName);
         return errorMsg;

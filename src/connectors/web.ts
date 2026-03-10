@@ -714,15 +714,25 @@ export class WebConnector implements Connector {
                   ]);
                   const transcription = result.content.trim();
                   text = text ? `${text}\n\n[Áudio transcrito]: ${transcription}` : transcription;
-                  // Broadcast transcription back to session viewer
-                  this.broadcastToSessionSubscribers(sessionId, "system", `_Transcrição: ${transcription}_`);
+                  // Send transcription event to session viewers so "Processando áudio..." is replaced
+                  if (audioUrl) {
+                    this.sendSessionTranscription(sessionId, audioUrl, transcription);
+                  }
                 } else {
                   const unavailableMsg = "O suporte a áudio está temporariamente indisponível. Por favor, digite sua mensagem.";
-                  this.broadcastToSessionSubscribers(sessionId, "system", unavailableMsg);
+                  // Send error as transcription so the "Processando áudio..." placeholder is cleared
+                  if (audioUrl) {
+                    this.sendSessionTranscription(sessionId, audioUrl, unavailableMsg);
+                  }
+                  this.broadcastToSessionSubscribers(sessionId, "agent", unavailableMsg);
                   return; // Don't forward the message — there's nothing to send
                 }
               } catch (err) {
                 logger.error({ err, sessionId }, "Session viewer audio transcription failed");
+                // Clear the "Processando áudio..." placeholder on failure
+                if (audioUrl) {
+                  this.sendSessionTranscription(sessionId, audioUrl, "[erro ao transcrever áudio]");
+                }
                 text = text || "[erro ao transcrever áudio]";
               }
             }
@@ -2074,6 +2084,18 @@ export class WebConnector implements Connector {
   private send(ws: WebSocket, data: object): void {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(data));
+    }
+  }
+
+  /** Send audio transcription update to all session viewer subscribers for a given session */
+  sendSessionTranscription(sessionId: string, audioUrl: string, transcription: string): void {
+    const subs = this.sessionSubscribers.get(sessionId);
+    if (!subs || subs.size === 0) return;
+    const payload = JSON.stringify({ type: "transcription", audioUrl, text: transcription });
+    for (const ws of subs) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(payload);
+      }
     }
   }
 
