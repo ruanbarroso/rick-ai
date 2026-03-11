@@ -744,6 +744,7 @@ export class WebConnector implements Connector {
                 imageMedias.push({ data: buffer, mimeType: f.mimeType });
                 imageAttachmentCount += 1;
                 attachmentCount += 1;
+                logger.info({ type: "image", size: buffer.length, mimeType: f.mimeType }, "Session viewer image received");
                 try {
                   const id = genId();
                   await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
@@ -760,7 +761,9 @@ export class WebConnector implements Connector {
                 const content = buffer.toString("utf-8");
                 const fileName = f.name || "arquivo";
                 fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+                imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName });
                 attachmentCount += 1;
+                logger.info({ type: "text-file", size: buffer.length, mimeType: f.mimeType, name: fileName }, "Session viewer text file received");
                 try {
                   const id = genId();
                   await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
@@ -769,9 +772,9 @@ export class WebConnector implements Connector {
                   logger.error({ err }, "Failed to save text file blob (session viewer)");
                 }
               } else if (f.mimeType === "application/pdf") {
-                // PDFs: passar como media attachment (OpenCode -f flag)
-                imageMedias.push({ data: buffer, mimeType: f.mimeType });
+                imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName: f.name || "documento.pdf" });
                 attachmentCount += 1;
+                logger.info({ type: "pdf", size: buffer.length, name: f.name }, "Session viewer PDF received");
                 try {
                   const id = genId();
                   await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
@@ -780,12 +783,10 @@ export class WebConnector implements Connector {
                   logger.error({ err }, "Failed to save PDF blob (session viewer)");
                 }
               } else {
-                // Outros: passar arquivo real como MediaAttachment + texto/metadata no prompt
                 const fileName = f.name || "arquivo";
                 attachmentCount += 1;
-
-                // Passar arquivo real para subagent (docker cp ao container)
                 imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName });
+                logger.info({ type: "generic", size: buffer.length, mimeType: f.mimeType, name: fileName }, "Session viewer generic file received");
 
                 const isLikelyText = buffer.length <= 512_000 && !buffer.some((b: number) => b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b));
                 if (isLikelyText) {
@@ -974,6 +975,7 @@ export class WebConnector implements Connector {
                     imageMedias.push({ data: buffer, mimeType: f.mimeType });
                     imageAttachmentCount += 1;
                     attachmentCount += 1;
+                    logger.info({ type: "image", size: buffer.length, mimeType: f.mimeType }, "Main viewer image received");
                     try {
                       const id = genId();
                       await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
@@ -990,7 +992,9 @@ export class WebConnector implements Connector {
                     const content = buffer.toString("utf-8");
                     const fileName = f.name || "arquivo";
                     fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+                    imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName });
                     attachmentCount += 1;
+                    logger.info({ type: "text-file", size: buffer.length, mimeType: f.mimeType, name: fileName }, "Main viewer text file received");
                     try {
                       const id = genId();
                       await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
@@ -999,8 +1003,9 @@ export class WebConnector implements Connector {
                       logger.error({ err }, "Failed to save text file blob (main viewer)");
                     }
                   } else if (f.mimeType === "application/pdf") {
-                    imageMedias.push({ data: buffer, mimeType: f.mimeType });
+                    imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName: f.name || "documento.pdf" });
                     attachmentCount += 1;
+                    logger.info({ type: "pdf", size: buffer.length, name: f.name }, "Main viewer PDF received");
                     try {
                       const id = genId();
                       await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
@@ -1011,11 +1016,9 @@ export class WebConnector implements Connector {
                   } else {
                     const fileName = f.name || "arquivo";
                     attachmentCount += 1;
-
-                    // Passar arquivo real como MediaAttachment para subagents
                     imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName });
+                    logger.info({ type: "generic", size: buffer.length, mimeType: f.mimeType, name: fileName }, "Main viewer generic file received");
 
-                    // Tentar decodificar como texto (mesma heurística do web UI)
                     const isLikelyText = buffer.length <= 512_000 && !buffer.some((b: number) => b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b));
                     if (isLikelyText) {
                       const content = buffer.toString("utf-8");
@@ -1229,12 +1232,13 @@ export class WebConnector implements Connector {
         f.mimeType === "application/xml" ||
         f.mimeType === "application/javascript"
       ) {
-        // Arquivos de texto: decodificar conteúdo e incluir no prompt para o LLM
+        // Arquivos de texto: decodificar conteúdo e incluir no prompt + passar como MediaAttachment
         const content = buffer.toString("utf-8");
         const fileName = f.name || "arquivo";
         fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+        imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName });
+        attachmentCount += 1;
         logger.info({ type: "text-file", size: buffer.length, mimeType: f.mimeType, name: fileName }, "Web text file received");
-        // Também salvar o blob para exibição no histórico com card de arquivo
         try {
           const id = genId();
           await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
@@ -1245,10 +1249,9 @@ export class WebConnector implements Connector {
         }
       } else if (f.mimeType === "application/pdf") {
         // PDFs: passar como anexo de media
-        const attachment: MediaAttachment = { data: buffer, mimeType: f.mimeType };
+        const attachment: MediaAttachment = { data: buffer, mimeType: f.mimeType, fileName: f.name || "documento.pdf" };
         imageMedias.push(attachment);
         attachmentCount += 1;
-        const fileName = f.name || "documento.pdf";
         logger.info({ type: "pdf", size: buffer.length, name: f.name }, "Web PDF received");
         try {
           const id = genId();

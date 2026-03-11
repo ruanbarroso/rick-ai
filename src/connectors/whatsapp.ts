@@ -562,7 +562,7 @@ export class WhatsAppConnector implements Connector {
               `INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`,
               [id, buffer, docInfo.mimeType]
             );
-            earlyFileInfo = { url: `/img/${id}`, name: docInfo.fileName, mimeType: docInfo.mimeType };
+            earlyFileInfo = { url: `/file/${id}`, name: docInfo.fileName, mimeType: docInfo.mimeType };
           } catch (blobErr) {
             logger.warn({ err: blobErr }, "Failed to save WhatsApp document blob");
           }
@@ -594,7 +594,16 @@ export class WhatsAppConnector implements Connector {
         promptText = text || "O usuario enviou uma imagem. Analise a imagem e descreva o que voce ve.";
       } else if (media && docInfo) {
         const fname = docInfo.fileName;
-        promptText = text || `O usuario enviou o arquivo "${fname}". Leia o conteudo e responda com base nele.`;
+        const docMime = docInfo.mimeType || "";
+        const isTextMime = docMime.startsWith("text/") || docMime === "application/json" || docMime === "application/xml" || docMime === "application/javascript";
+        const isLikelyText = !isTextMime && media.data.length <= 512_000 && !media.data.some((b: number) => b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b));
+        if (isTextMime || isLikelyText) {
+          const content = media.data.toString("utf-8");
+          promptText = (text || `O usuario enviou o arquivo "${fname}".`) + `\n\n[Conteúdo do arquivo "${fname}"]:\n${content}`;
+        } else {
+          const sizeKB = Math.round(media.data.length / 1024);
+          promptText = (text || `O usuario enviou o arquivo "${fname}" (${docMime}, ${sizeKB}KB).`) + `\n\n[Arquivo anexado: "${fname}" (${docMime}, ${sizeKB}KB) — arquivo copiado ao workspace do agente]`;
+        }
       } else {
         promptText = text || "";
       }
