@@ -1141,7 +1141,7 @@ body {
   <button class="compose-attach" onclick="document.getElementById('file-input').click()" title="Anexar arquivos">
     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
   </button>
-  <input type="file" id="file-input" multiple accept="image/*" onchange="handleFileSelect(event)" style="display:none">
+  <input type="file" id="file-input" multiple onchange="handleFileSelect(event)" style="display:none">
 
   <div class="recording-bar" id="recording-bar">
     <button class="recording-cancel" onclick="cancelRecording()" title="Cancelar">
@@ -2479,12 +2479,10 @@ function sendMessage() {
     appendMessage(text, 'user', 'text', pendingAudio ? pendingAudio.localUrl : null, localImageUrls.length > 0 ? localImageUrls : null, null);
   }
 
-  // Build files array
+  // Build files array (all file types — server handles routing)
   var filesPayload = [];
   for (var i = 0; i < pendingFiles.length; i++) {
-    if (pendingFiles[i].mimeType.startsWith('image/')) {
-      filesPayload.push({ base64: pendingFiles[i].base64, mimeType: pendingFiles[i].mimeType });
-    }
+    filesPayload.push({ base64: pendingFiles[i].base64, mimeType: pendingFiles[i].mimeType, name: pendingFiles[i].name });
   }
 
   if (hasAudio) {

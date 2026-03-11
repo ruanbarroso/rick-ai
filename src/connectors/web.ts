@@ -768,6 +768,36 @@ export class WebConnector implements Connector {
                 } catch (err) {
                   logger.error({ err }, "Failed to save text file blob (session viewer)");
                 }
+              } else if (f.mimeType === "application/pdf") {
+                // PDFs: passar como media attachment (OpenCode -f flag)
+                imageMedias.push({ data: buffer, mimeType: f.mimeType });
+                attachmentCount += 1;
+                try {
+                  const id = genId();
+                  await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+                  imageUrls.push(`/img/${id}`);
+                } catch (err) {
+                  logger.error({ err }, "Failed to save PDF blob (session viewer)");
+                }
+              } else {
+                // Outros: tentar decodificar como texto, senão informar metadata
+                const fileName = f.name || "arquivo";
+                attachmentCount += 1;
+                const isLikelyText = buffer.length <= 512_000 && !buffer.some((b: number) => b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b));
+                if (isLikelyText) {
+                  const content = buffer.toString("utf-8");
+                  fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+                } else {
+                  const sizeKB = Math.round(buffer.length / 1024);
+                  fileTexts.push(`\n\n[Arquivo anexado: "${fileName}" (${f.mimeType}, ${sizeKB}KB) — conteúdo binário, não é possível ler diretamente]`);
+                }
+                try {
+                  const id = genId();
+                  await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+                  fileInfos.push({ url: `/file/${id}`, name: fileName, mimeType: f.mimeType });
+                } catch (err) {
+                  logger.error({ err }, "Failed to save generic file blob (session viewer)");
+                }
               }
             }
 
