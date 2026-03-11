@@ -793,6 +793,7 @@
     background: transparent;
     border: 1px solid rgba(99, 102, 241, 0.3);
     overflow: hidden;
+    word-break: break-word;
   }
 
   .question-card {
@@ -827,10 +828,12 @@
   }
 
   .question-body {
-    padding: 14px;
+    padding: 12px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 10px;
+    max-height: 60vh;
+    overflow-y: auto;
   }
 
   .question-progress {
@@ -866,12 +869,13 @@
   .question-item.hidden { display: none; }
 
   .question-item-title {
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 700;
   }
 
   .question-item-text {
-    font-size: 14px;
+    font-size: 13px;
+    line-height: 1.4;
   }
 
   .question-hint {
@@ -887,10 +891,10 @@
 
   .question-option {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     align-items: flex-start;
-    padding: 10px 12px;
-    border-radius: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.08);
   }
@@ -904,19 +908,20 @@
   }
 
   .question-option-label {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
   }
 
   .question-option-desc {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-muted);
+    line-height: 1.35;
   }
 
   .question-custom input {
     width: 100%;
-    padding: 10px 12px;
-    border-radius: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
     border: 1px solid var(--border);
     background: var(--bg-input);
     color: var(--text);
@@ -943,8 +948,8 @@
     background: rgba(255,255,255,0.04);
     color: var(--text);
     border-radius: 999px;
-    padding: 9px 14px;
-    font-size: 13px;
+    padding: 7px 12px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
   }
@@ -964,8 +969,8 @@
     border-radius: 999px;
     background: var(--accent);
     color: #fff;
-    padding: 10px 16px;
-    font-size: 13px;
+    padding: 8px 14px;
+    font-size: 12px;
     font-weight: 700;
     cursor: pointer;
   }
@@ -2337,6 +2342,20 @@
 
     .attachment-chip {
       max-width: 100%;
+    }
+
+    .message.question {
+      max-width: 100%;
+    }
+
+    .question-body {
+      padding: 10px;
+      gap: 8px;
+      max-height: 50vh;
+    }
+
+    .question-header {
+      padding: 10px 12px;
     }
 
   }
