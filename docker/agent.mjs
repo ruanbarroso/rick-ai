@@ -665,7 +665,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     // After a tool_use, the LLM needs time to process the result and generate
     // the next response — that can take 30+ seconds with rate-limit retries.
     // After step_finish with no subsequent step_start, the turn is truly done.
-    const TURN_COMPLETION_GRACE_MS = 15_000; // 15s after last step_finish
+    const TURN_COMPLETION_GRACE_MS = 30_000; // 30s after last step_finish
     let turnCompletionTimer = null;
     function startTurnCompletionTimer() {
       if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
