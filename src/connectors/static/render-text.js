@@ -48,8 +48,8 @@ function renderText(text) {
     t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     // Italic (*...*) — single asterisk
     t = t.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
-    // Italic (_..._)
-    t = t.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em>$1</em>');
+    // Italic (_..._) — only when underscores are NOT inside a word (GFM behavior)
+    t = t.replace(/(?<![_\w])_([^_\n]+)_(?![_\w])/g, '<em>$1</em>');
     // Strikethrough (~~...~~)
     t = t.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
     return t;
@@ -71,8 +71,8 @@ function renderText(text) {
     t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     // Italic (*...*) — single asterisk = italic
     t = t.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
-    // Italic (_..._)
-    t = t.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em>$1</em>');
+    // Italic (_..._) — only when underscores are NOT inside a word (GFM behavior)
+    t = t.replace(/(?<![_\w])_([^_\n]+)_(?![_\w])/g, '<em>$1</em>');
     // Strikethrough (~~...~~)
     t = t.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
     return t;
