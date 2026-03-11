@@ -964,6 +964,28 @@
     color: var(--text-muted);
   }
 
+  .message.question.answered {
+    opacity: 0.75;
+  }
+  .message.question.answered .question-badge {
+    background: rgba(46, 204, 113, 0.18);
+    color: #7ee8a8;
+  }
+  .message.question.answered .question-option {
+    pointer-events: none;
+    opacity: 0.7;
+  }
+  .message.question.answered .question-custom input {
+    pointer-events: none;
+    opacity: 0.7;
+  }
+  .message.question.answered .question-submit {
+    display: none;
+  }
+  .message.question.answered .question-nav-btn {
+    display: none;
+  }
+
   .question-submit {
     border: none;
     border-radius: 999px;
@@ -3338,6 +3360,12 @@ function handleServerMessage(msg) {
       storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);
       if (sid === currentSessionId) {
         appendMessageToDOM(msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);
+        // If a user message arrived, lock any pending question cards
+        if (from === 'user') {
+          var qContainer = document.getElementById('messages-main');
+          var pendingQs = qContainer.querySelectorAll('.message.question:not(.answered)');
+          for (var qi = 0; qi < pendingQs.length; qi++) lockQuestionCard(pendingQs[qi]);
+        }
       }
       break;
 
@@ -3732,6 +3760,8 @@ function renderSessionMessages(sessionId) {
     }
   }
 
+  // Lock question cards that already have a user reply after them
+  lockAnsweredQuestions(container);
   scrollToBottom(true); // força scroll ao (re)carregar sessão
 }
 
@@ -3845,6 +3875,35 @@ function renderQuestionWizardState(root) {
   if (backBtn) backBtn.disabled = current === 0;
   var nextBtn = root.querySelector('[data-question-next]');
   if (nextBtn) nextBtn.textContent = current === total - 1 ? (interactive ? 'Responder' : 'Concluir') : 'Proxima';
+}
+
+function lockAnsweredQuestions(container) {
+  var questionNodes = container.querySelectorAll('.message.question[data-question-id]');
+  for (var i = 0; i < questionNodes.length; i++) {
+    var node = questionNodes[i];
+    var sibling = node.nextElementSibling;
+    while (sibling) {
+      if (sibling.classList.contains('message') && sibling.classList.contains('question')) break;
+      if (sibling.classList.contains('message') && sibling.classList.contains('user')) {
+        lockQuestionCard(node);
+        break;
+      }
+      sibling = sibling.nextElementSibling;
+    }
+  }
+}
+
+function lockQuestionCard(root) {
+  if (!root || root.getAttribute('data-question-answered') === 'true') return;
+  root.setAttribute('data-question-answered', 'true');
+  root.setAttribute('data-question-interactive', 'false');
+  root.classList.add('answered');
+  var badge = root.querySelector('.question-badge');
+  if (badge) badge.textContent = 'Respondida';
+  var inputs = root.querySelectorAll('input[type="radio"], input[type="checkbox"], .question-custom input');
+  for (var i = 0; i < inputs.length; i++) inputs[i].disabled = true;
+  var readonlyHint = root.querySelector('.question-readonly');
+  if (readonlyHint) readonlyHint.textContent = 'Respostas ja enviadas.';
 }
 
 function sendQuestionReplyFromWebUi(replyText) {
@@ -3962,6 +4021,7 @@ function createQuestionMessageElement(payload, timeStr, interactive) {
         return;
       }
       sendQuestionReplyFromWebUi(replyText);
+      lockQuestionCard(div);
     });
   }
 

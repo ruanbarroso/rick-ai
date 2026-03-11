@@ -361,6 +361,28 @@ body {
   color: var(--text2);
 }
 
+.message.question.answered {
+  opacity: 0.75;
+}
+.message.question.answered .question-badge {
+  background: rgba(46, 204, 113, 0.18);
+  color: #7ee8a8;
+}
+.message.question.answered .question-option {
+  pointer-events: none;
+  opacity: 0.7;
+}
+.message.question.answered .question-custom input {
+  pointer-events: none;
+  opacity: 0.7;
+}
+.message.question.answered .question-submit {
+  display: none;
+}
+.message.question.answered .question-nav-btn {
+  display: none;
+}
+
 .question-submit {
   border: none;
   border-radius: 999px;
@@ -1574,6 +1596,37 @@ function renderQuestionWizardState(root) {
   if (nextBtn) nextBtn.textContent = current === total - 1 ? (interactive ? 'Responder' : 'Concluir') : 'Proxima';
 }
 
+function lockAnsweredQuestions(container) {
+  var questionNodes = container.querySelectorAll('.message.question[data-question-id]');
+  for (var i = 0; i < questionNodes.length; i++) {
+    var node = questionNodes[i];
+    // Walk next siblings — if we find a .message.user before another .message.question,
+    // this question was answered
+    var sibling = node.nextElementSibling;
+    while (sibling) {
+      if (sibling.classList.contains('message') && sibling.classList.contains('question')) break;
+      if (sibling.classList.contains('message') && sibling.classList.contains('user')) {
+        lockQuestionCard(node);
+        break;
+      }
+      sibling = sibling.nextElementSibling;
+    }
+  }
+}
+
+function lockQuestionCard(root) {
+  if (!root || root.getAttribute('data-question-answered') === 'true') return;
+  root.setAttribute('data-question-answered', 'true');
+  root.setAttribute('data-question-interactive', 'false');
+  root.classList.add('answered');
+  var badge = root.querySelector('.question-badge');
+  if (badge) badge.textContent = 'Respondida';
+  var inputs = root.querySelectorAll('input[type="radio"], input[type="checkbox"], .question-custom input');
+  for (var i = 0; i < inputs.length; i++) inputs[i].disabled = true;
+  var readonlyHint = root.querySelector('.question-readonly');
+  if (readonlyHint) readonlyHint.textContent = 'Respostas ja enviadas.';
+}
+
 function sendQuestionReplyText(replyText) {
   if (!replyText || !ws || ws.readyState !== WebSocket.OPEN) return;
   pendingUserEcho = true;
@@ -1685,6 +1738,7 @@ function createQuestionMessage(payload, timeStr) {
         return;
       }
       sendQuestionReplyText(replyText);
+      lockQuestionCard(div);
     });
   }
 
@@ -2013,6 +2067,12 @@ function connect() {
         }
         // Typing/state indicator is managed by 'session_state' events from backend.
         appendMessage(msg.text, msg.role, msg.messageType, msg.audioUrl || null, msg.imageUrls || null, msg.fileInfos || null);
+        // If a user message arrived, lock any pending question cards
+        if (msg.role === 'user') {
+          var qContainer = document.getElementById('messages');
+          var pendingQs = qContainer.querySelectorAll('.message.question:not(.answered)');
+          for (var qi = 0; qi < pendingQs.length; qi++) lockQuestionCard(pendingQs[qi]);
+        }
         break;
 
       case 'transcription':
@@ -2040,6 +2100,8 @@ function connect() {
         for (var i = 0; i < msgs.length; i++) {
           appendHistoryMessage(msgs[i]);
         }
+        // Lock question cards that already have a user reply after them
+        lockAnsweredQuestions(container);
         // Scroll to bottom after loading history
         scrollToBottom(true);
         break;
