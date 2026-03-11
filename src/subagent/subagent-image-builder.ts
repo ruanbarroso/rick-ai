@@ -41,6 +41,7 @@ class SubagentImageBuilder {
     const policyMjsPath = `${dockerDir}/policy.mjs`;
     const promptMjsPath = `${dockerDir}/prompt.mjs`;
     const agentsMdPath = `${dockerDir}/AGENTS.md`;
+    const streamBridgePath = `${dockerDir}/stream-bridge.mjs`;
     const subagentPackagePath = `${dockerDir}/subagent.package.json`;
     const dockerfilePath = `${dockerDir}/subagent.Dockerfile`;
     const fastDockerfilePath = `${dockerDir}/subagent-fast.Dockerfile`;
@@ -67,6 +68,8 @@ class SubagentImageBuilder {
       .update(readFileSync(promptMjsPath))
       .update("\n---\n")
       .update(existsSync(agentsMdPath) ? readFileSync(agentsMdPath) : "")
+      .update("\n---\n")
+      .update(existsSync(streamBridgePath) ? readFileSync(streamBridgePath) : "")
       .update("\n---\n")
       .update(readFileSync(subagentPackagePath))
       .update("\n---\n")

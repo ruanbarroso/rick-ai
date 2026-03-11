@@ -11,7 +11,9 @@ USER root
 # Copy all runtime files in a single layer to minimise overlay depth.
 COPY --chown=agent:agent AGENTS.md tools.mjs tool-declarations.mjs \
      rick-api.mjs mcp-playwright.mjs rick-mcp.mjs opencode.json \
-     policy.mjs prompt.mjs agent.mjs /app/
+     policy.mjs prompt.mjs agent.mjs stream-bridge.mjs /app/
 
 USER agent
 WORKDIR /workspace
+
+CMD ["node", "/app/agent.mjs"]

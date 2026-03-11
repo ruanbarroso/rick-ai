@@ -138,6 +138,11 @@ export class Agent {
     return this.sessionManager.expireStaleDoneSessions();
   }
 
+  /** Persist sync state for all live sessions (called during graceful shutdown). */
+  async persistSyncState(): Promise<void> {
+    return this.sessionManager.persistAllSyncState();
+  }
+
   async killSession(sessionId: string): Promise<void> {
     return this.sessionManager.killSession(sessionId);
   }

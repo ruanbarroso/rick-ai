@@ -335,6 +335,19 @@ export class SessionManager {
 
   // ==================== SESSION RECOVERY ====================
 
+  /**
+   * Resync sessions after a main container restart.
+   *
+   * Unlike the old recoverSessions(), this method does NOT start a new agent
+   * process inside the container. The agent is already running as PID 1.
+   * Instead it:
+   * 1. Lists running subagent containers
+   * 2. Queries each agent's HTTP /health endpoint for current state
+   * 3. Fetches missed events from the agent's local outbox
+   * 4. Processes those events through handleAgentOutput (updates DB, notifies viewers)
+   * 5. Reconnects the live stream bridge
+   * 6. Sends a fresh JWT token so the agent can continue calling Rick's API
+   */
   async recoverSessions(): Promise<number> {
     try {
       const { stdout } = await execFileAsync("docker", [
@@ -346,7 +359,7 @@ export class SessionManager {
 
       const lines = stdout.trim().split("\n").filter((l) => l.trim());
       if (lines.length === 0) {
-        logger.info("Session recovery: no running subagent containers found");
+        logger.info("Session resync: no running subagent containers found");
         return 0;
       }
 
@@ -361,13 +374,13 @@ export class SessionManager {
           // Try legacy format: subagent-{type}-{id}
           const legacyMatch = containerName.match(/^subagent-(?:code|research)-([a-f0-9]+)$/);
           if (!legacyMatch) {
-            logger.warn({ containerName }, "Session recovery: skipping unrecognized container");
+            logger.warn({ containerName }, "Session resync: skipping unrecognized container");
             continue;
           }
           // Kill legacy containers — they use the old architecture
           try {
             await execFileAsync("docker", ["rm", "-f", containerName]);
-            logger.info({ containerName }, "Session recovery: killed legacy container");
+            logger.info({ containerName }, "Session resync: killed legacy container");
           } catch {}
           continue;
         }
@@ -388,9 +401,10 @@ export class SessionManager {
         let numericUserId: number | null = null;
         let variantName: string | undefined;
         let taskDescription: string | undefined;
+        let lastSyncedEventId = 0;
         try {
           const dbRow = await query(
-            `SELECT task, connector_name, user_external_id, user_id, variant_name FROM sub_agent_sessions WHERE id = $1`,
+            `SELECT task, connector_name, user_external_id, user_id, variant_name, last_synced_event_id FROM sub_agent_sessions WHERE id = $1`,
             [id]
           );
           if (dbRow.rows.length > 0) {
@@ -399,9 +413,10 @@ export class SessionManager {
             userId = dbRow.rows[0].user_external_id || "owner";
             numericUserId = dbRow.rows[0].user_id ?? null;
             variantName = dbRow.rows[0].variant_name || undefined;
+            lastSyncedEventId = dbRow.rows[0].last_synced_event_id ?? 0;
           }
         } catch (err) {
-          logger.warn({ err, sessionId: id }, "Session recovery: failed to restore routing metadata from DB, using defaults");
+          logger.warn({ err, sessionId: id }, "Session resync: failed to restore routing metadata from DB, using defaults");
         }
 
         // If variant_name wasn't persisted (old session), compute it now
@@ -409,11 +424,30 @@ export class SessionManager {
           variantName = await getSessionVariantName(id, numericUserId);
         }
 
+        // Query the agent's actual state via HTTP
+        let agentState = "waiting_user";
+        let agentLastEventId = 0;
+        try {
+          const raw = await this.querySubagentHttp(containerName, "/health");
+          const health = JSON.parse(raw);
+          agentState = health.state || "waiting_user";
+          agentLastEventId = health.lastEventId || 0;
+          logger.info({ sessionId: id, agentState, agentLastEventId, lastSyncedEventId }, "Session resync: agent health queried");
+        } catch (err) {
+          logger.warn({ err, sessionId: id }, "Session resync: agent HTTP not reachable, using DB state");
+        }
+
+        // Map agent state to session state
+        let sessionState: SessionState = "waiting_user";
+        if (agentState === "running") sessionState = "running";
+        else if (agentState === "done") sessionState = "done";
+        else if (agentState === "error") sessionState = "failed";
+
         const session: SubAgentSession = {
           id,
           containerId: containerId.trim(),
           containerName,
-          state: "waiting_user",
+          state: sessionState,
           taskDescription: taskDescription || "(sessao recuperada apos reinicio)",
           credentials: {},
           connectorName,
@@ -429,25 +463,146 @@ export class SessionManager {
           updatedAt: Date.now(),
         };
 
+        // Track last synced event ID on the session object
+        (session as any)._lastSyncedEventId = lastSyncedEventId;
+
         this.sessions.set(id, session);
         recovered++;
         this.metricsCounters.sessionsRecovered += 1;
 
-        // Start the NDJSON process for recovered session
-        this.startAgentProcess(session).catch((err) => {
-          logger.error({ err, sessionId: id }, "Failed to start agent process for recovered session");
-        });
+        // Fetch and process missed events from the agent's local outbox
+        if (agentLastEventId > lastSyncedEventId) {
+          try {
+            const { events } = await this.fetchSubagentEvents(containerName, lastSyncedEventId);
+            logger.info({ sessionId: id, missedEvents: events.length }, "Session resync: processing missed events");
+            for (const evt of events) {
+              if (evt.data) {
+                this.handleAgentOutput(session, JSON.stringify(evt.data));
+              }
+              if (typeof evt.id === "number") {
+                (session as any)._lastSyncedEventId = evt.id;
+              }
+            }
+            // Persist progress
+            this.updateLastSyncedEventId(id, (session as any)._lastSyncedEventId).catch(() => {});
+          } catch (err) {
+            logger.warn({ err, sessionId: id }, "Session resync: failed to fetch missed events");
+          }
+        }
 
-        logger.info({ sessionId: id, containerName }, "Session recovery: recovered subagent");
+        // Determine if this container has the new architecture (HTTP control server + stream bridge)
+        // or the old one (agent.mjs started via docker exec). If HTTP health check succeeded,
+        // it's a new-architecture container. Otherwise, fall back to the legacy approach.
+        const isNewArchitecture = agentLastEventId > 0 || sessionState === "running";
+
+        if (isNewArchitecture) {
+          // NEW ARCHITECTURE: send token via HTTP, reconnect stream bridge
+          const token = createAgentToken(id, userId, 86400, numericUserId ?? undefined);
+          const apiUrl = this.getCurrentApiUrl();
+          await this.sendHttpCommand(containerName, {
+            type: "update_token",
+            token,
+            apiUrl,
+          });
+
+          // Reconnect the live stream bridge (picking up from last synced event)
+          const afterEventId = (session as any)._lastSyncedEventId ?? 0;
+          this.startAgentProcess(session, afterEventId).catch((err) => {
+            logger.error({ err, sessionId: id }, "Session resync: failed to reconnect stream bridge");
+          });
+        } else {
+          // LEGACY FALLBACK: container was created with old image (no HTTP server, no stream bridge).
+          // Start a new agent.mjs process via docker exec (old behavior).
+          // This process will exit immediately if agent.mjs is already PID 1 (new image),
+          // but for old images it starts the actual agent.
+          logger.info({ sessionId: id }, "Session resync: legacy container detected, using docker exec fallback");
+          const legacyProc = spawn("docker", [
+            "exec", "-i", containerName,
+            "node", "/app/agent.mjs",
+          ], { stdio: ["pipe", "pipe", "pipe"] });
+          this.processes.set(id, legacyProc);
+
+          let buffer = "";
+          legacyProc.stdout!.on("data", (data: Buffer) => {
+            buffer += data.toString();
+            let newlineIdx;
+            while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
+              const ln = buffer.substring(0, newlineIdx).trim();
+              buffer = buffer.substring(newlineIdx + 1);
+              if (ln) this.handleAgentOutput(session, ln);
+            }
+          });
+          legacyProc.stderr!.on("data", (data: Buffer) => {
+            const text = data.toString();
+            if (text.trim()) logger.debug({ sessionId: id, stderr: text.trim().substring(0, 500) }, "Legacy sub-agent stderr");
+          });
+          legacyProc.on("exit", (code) => {
+            this.processes.delete(id);
+            if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
+              const crashed = code !== 0 && code !== null;
+              if (crashed) {
+                this.sendToUser(session, `Erro: o sub-agente encerrou inesperadamente (codigo ${code}).`, "error");
+              }
+              const newState = crashed ? "failed" : "done";
+              if (crashed) this.metricsCounters.sessionsFailed += 1;
+              session.state = newState;
+              session.updatedAt = Date.now();
+              if (this.onSessionMessage) {
+                this.onSessionMessage(session.id, "system", JSON.stringify({ state: newState }), "system");
+              }
+              this.updateSessionStatus(session.id, newState).catch(() => {});
+              execFileAsync("docker", ["rm", "-f", session.containerName]).catch(() => {});
+            }
+          });
+          legacyProc.on("error", (err) => {
+            logger.error({ err, sessionId: id }, "Legacy sub-agent process error");
+            this.processes.delete(id);
+          });
+        }
+
+        // Notify session viewers of current state
+        if (this.onSessionMessage) {
+          this.onSessionMessage(session.id, "system", JSON.stringify({ state: session.state }), "system");
+        }
+
+        logger.info({ sessionId: id, containerName, state: session.state }, "Session resync: session recovered");
       }
 
       if (recovered > 0) {
-        logger.info({ recovered }, "Session recovery: total sessions recovered");
+        logger.info({ recovered }, "Session resync: total sessions recovered");
       }
       return recovered;
     } catch (err) {
-      logger.error({ err }, "Session recovery: failed to list containers");
+      logger.error({ err }, "Session resync: failed to list containers");
       return 0;
+    }
+  }
+
+  /**
+   * Persist the last synced event ID for a session to the DB.
+   * Used for resuming event consumption after a restart.
+   */
+  private async updateLastSyncedEventId(sessionId: string, eventId: number): Promise<void> {
+    try {
+      await query(
+        `UPDATE sub_agent_sessions SET last_synced_event_id = $1 WHERE id = $2`,
+        [eventId, sessionId]
+      );
+    } catch (err) {
+      logger.warn({ err, sessionId, eventId }, "Failed to update last_synced_event_id");
+    }
+  }
+
+  /**
+   * Persist sync state for all live sessions.
+   * Called during graceful shutdown so the next startup can resume from the correct position.
+   */
+  async persistAllSyncState(): Promise<void> {
+    for (const session of this.sessions.values()) {
+      const lastSynced = (session as any)._lastSyncedEventId;
+      if (typeof lastSynced === "number" && lastSynced > 0) {
+        await this.updateLastSyncedEventId(session.id, lastSynced).catch(() => {});
+      }
     }
   }
 
@@ -865,6 +1020,85 @@ export class SessionManager {
     }
   }
 
+  // ==================== SUBAGENT HTTP CONTROL ====================
+
+  /** Port exposed by the agent's built-in HTTP control server inside its container. */
+  private static readonly SUBAGENT_HTTP_PORT = 3000;
+
+  /**
+   * Execute a curl command inside a subagent container to reach its local HTTP server.
+   * Works regardless of Docker network topology (same network, default bridge, etc.)
+   * because it runs inside the container itself.
+   */
+  private async querySubagentHttp(containerName: string, path: string, method: string = "GET", body?: string): Promise<string> {
+    const url = `http://localhost:${SessionManager.SUBAGENT_HTTP_PORT}${path}`;
+    const args = ["exec", containerName, "curl", "-sf", "--max-time", "5", "-X", method];
+    if (body) {
+      args.push("-H", "Content-Type: application/json", "-d", body);
+    }
+    args.push(url);
+    const { stdout } = await execFileAsync("docker", args, { timeout: 10_000 });
+    return stdout.trim();
+  }
+
+  /**
+   * Poll the subagent's /health endpoint until it reports ready.
+   * Retries for up to 30 seconds with 1-second intervals.
+   */
+  private async waitForAgentReady(session: SubAgentSession): Promise<void> {
+    const maxAttempts = 30;
+    for (let i = 1; i <= maxAttempts; i++) {
+      try {
+        const raw = await this.querySubagentHttp(session.containerName, "/health");
+        const health = JSON.parse(raw);
+        if (health.status === "ok") {
+          logger.info({ sessionId: session.id, attempt: i }, "Sub-agent HTTP control server ready");
+          return;
+        }
+      } catch {
+        // Not ready yet — curl failed or agent not listening
+      }
+      if (i < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+    // Don't throw — the agent may still be starting up but the stdin stream
+    // can connect anyway. Log a warning and proceed.
+    logger.warn({ sessionId: session.id }, "Sub-agent HTTP control server not ready after 30s — proceeding with stdin stream");
+  }
+
+  /**
+   * Fetch missed events from a subagent's local event store.
+   * Returns parsed events array and the lastEventId.
+   */
+  private async fetchSubagentEvents(containerName: string, afterEventId: number = 0): Promise<{ events: any[]; lastEventId: number }> {
+    try {
+      const raw = await this.querySubagentHttp(containerName, `/events?after=${afterEventId}`);
+      const result = JSON.parse(raw);
+      return {
+        events: Array.isArray(result.events) ? result.events : [],
+        lastEventId: typeof result.lastEventId === "number" ? result.lastEventId : afterEventId,
+      };
+    } catch (err) {
+      logger.warn({ err, containerName, afterEventId }, "Failed to fetch subagent events");
+      return { events: [], lastEventId: afterEventId };
+    }
+  }
+
+  /**
+   * Send a command to a subagent via its HTTP control server.
+   * Used when the stdin stream is not available (e.g. during resync after restart).
+   */
+  private async sendHttpCommand(containerName: string, command: any): Promise<boolean> {
+    try {
+      await this.querySubagentHttp(containerName, "/command", "POST", JSON.stringify(command));
+      return true;
+    } catch (err) {
+      logger.warn({ err, containerName, type: command?.type }, "Failed to send HTTP command to subagent");
+      return false;
+    }
+  }
+
   // ==================== CONTAINER MANAGEMENT ====================
 
   private async startContainer(session: SubAgentSession, env: Record<string, string>, images?: MediaAttachment[]): Promise<void> {
@@ -906,6 +1140,10 @@ export class SessionManager {
     //     we retry without resource limits as a fallback.
     const resourceArgs = ["--memory", "2g", "--pids-limit", "512"];
 
+    // The container CMD is now `node /app/agent.mjs` (set in Dockerfile).
+    // The agent starts as a resident process and exposes an HTTP control
+    // server on port 3000 for reconnection after main container restarts.
+    // No more `sleep 86400` — the agent IS the main process.
     const buildDockerRunArgs = (withResourceLimits: boolean) => [
       "run", "-d", "--init", "--ipc=host",
       ...(withResourceLimits ? resourceArgs : []),
@@ -913,7 +1151,6 @@ export class SessionManager {
       "--name", session.containerName,
       ...envArgs,
       SUBAGENT_RUNTIME_IMAGE,
-      "sleep", "86400", // 24h max lifetime
     ];
 
     // Start the container — retry without resource limits if the host doesn't support them
@@ -930,7 +1167,10 @@ export class SessionManager {
     session.containerId = stdout.trim();
     logger.info({ sessionId: session.id, container: session.containerName, containerId: session.containerId }, "Sub-agent container started");
 
-    // Start the agent process
+    // Wait for the agent's HTTP control server to become ready
+    await this.waitForAgentReady(session);
+
+    // Connect the live NDJSON stream (stdin/stdout via docker exec)
     await this.startAgentProcess(session);
 
     // If there's a task description, send it as the first message
@@ -1097,10 +1337,24 @@ export class SessionManager {
     }
   }
 
-  private async startAgentProcess(session: SubAgentSession): Promise<void> {
+  /**
+   * Connect a live NDJSON stream to the subagent via stream-bridge.mjs.
+   *
+   * The agent.mjs runs as PID 1 (resident process) inside the container.
+   * The stream-bridge.mjs is a lightweight relay that:
+   * - Reads stdin and forwards commands as POST /command to localhost:3000
+   * - Polls GET /events from localhost:3000 and writes NDJSON to stdout
+   *
+   * If this bridge process dies (e.g. main container restarts), the agent
+   * continues working autonomously. Events are stored in its local SQLite
+   * outbox and will be fetched via HTTP when the main container reconnects.
+   *
+   * @param afterEventId - Start streaming events after this event ID (for resync)
+   */
+  private async startAgentProcess(session: SubAgentSession, afterEventId: number = 0): Promise<void> {
     const proc = spawn("docker", [
       "exec", "-i", session.containerName,
-      "node", "/app/agent.mjs",
+      "node", "/app/stream-bridge.mjs", String(afterEventId),
     ], { stdio: ["pipe", "pipe", "pipe"] });
 
     this.processes.set(session.id, proc);
@@ -1133,33 +1387,25 @@ export class SessionManager {
       // Get stderr buffer if available
       const getStderr = (session as any)._stderrBuffer;
       const stderr = getStderr ? getStderr() : "";
-      
-      if (code !== 0 && code !== null) {
-        logger.error({ sessionId: session.id, exitCode: code, stderr: stderr.substring(0, 1000) }, "Sub-agent process crashed");
-      } else {
-        logger.info({ sessionId: session.id, exitCode: code }, "Sub-agent process exited");
-      }
-      
-      this.processes.delete(session.id);
-      if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
-        const crashed = code !== 0 && code !== null;
-        // Notify user if process exited abnormally (crash, OOM, etc.)
-        if (crashed) {
-          this.sendToUser(session, `Erro: o sub-agente encerrou inesperadamente (codigo ${code}).`, "error");
-        }
-        const newState = crashed ? "failed" : "done";
-        if (crashed) this.metricsCounters.sessionsFailed += 1;
-        session.state = newState;
-        session.updatedAt = Date.now();
-        // Notify session viewers of state change
-        if (this.onSessionMessage) {
-          this.onSessionMessage(session.id, "system", JSON.stringify({ state: newState }), "system");
-        }
-        this.updateSessionStatus(session.id, newState).catch(() => {});
 
-        // Kill the container immediately — no reason to keep it running after process exits
-        execFileAsync("docker", ["rm", "-f", session.containerName]).catch(() => {});
+      this.processes.delete(session.id);
+
+      // The stream bridge exiting does NOT mean the agent died.
+      // The agent is PID 1 in its own container and continues working.
+      // We need to check the actual agent state before declaring failure.
+
+      // If this was a clean exit (code 0), the bridge just disconnected.
+      // If non-zero, the bridge itself crashed (not the agent).
+      if (code !== 0 && code !== null) {
+        logger.warn({ sessionId: session.id, exitCode: code, stderr: stderr.substring(0, 1000) }, "Stream bridge exited with error");
+      } else {
+        logger.info({ sessionId: session.id }, "Stream bridge disconnected");
       }
+
+      // Check actual agent health before changing session state
+      this.checkAgentHealthAndRecover(session).catch((err) => {
+        logger.warn({ err, sessionId: session.id }, "Failed to check agent health after bridge disconnect");
+      });
     });
 
     proc.on("error", (err) => {
@@ -1168,6 +1414,71 @@ export class SessionManager {
       // Notify user about process spawn failure
       this.sendToUser(session, `Erro: falha ao iniciar o sub-agente: ${err.message}`, "error");
     });
+  }
+
+  /**
+   * After the stream bridge disconnects, check if the actual agent is still alive
+   * and decide whether to reconnect or declare the session done/failed.
+   */
+  private async checkAgentHealthAndRecover(session: SubAgentSession): Promise<void> {
+    // Don't interfere with sessions that are already terminated
+    if (session.state === "killed" || session.state === "failed" || session.state === "done") return;
+    // Don't reconnect if there's already a live bridge process
+    if (this.processes.has(session.id)) return;
+
+    // Check if the container is still running
+    try {
+      const { stdout } = await execFileAsync("docker", [
+        "inspect", "--format", "{{.State.Running}}", session.containerName,
+      ], { timeout: 5_000 });
+      if (stdout.trim() !== "true") {
+        // Container is dead — the agent truly exited
+        logger.info({ sessionId: session.id }, "Agent container stopped — marking session as done");
+        session.state = "done";
+        session.updatedAt = Date.now();
+        if (this.onSessionMessage) {
+          this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
+        }
+        this.updateSessionStatus(session.id, "done").catch(() => {});
+        execFileAsync("docker", ["rm", "-f", session.containerName]).catch(() => {});
+        return;
+      }
+    } catch {
+      // Container doesn't exist — same as stopped
+      session.state = "done";
+      session.updatedAt = Date.now();
+      if (this.onSessionMessage) {
+        this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
+      }
+      this.updateSessionStatus(session.id, "done").catch(() => {});
+      return;
+    }
+
+    // Container is still running — check agent health via HTTP
+    try {
+      const raw = await this.querySubagentHttp(session.containerName, "/health");
+      const health = JSON.parse(raw);
+      logger.info({ sessionId: session.id, agentState: health.state, lastEventId: health.lastEventId }, "Agent still alive after bridge disconnect — reconnecting");
+
+      // Fetch any missed events before reconnecting the stream
+      const lastSynced = (session as any)._lastSyncedEventId ?? 0;
+      const { events } = await this.fetchSubagentEvents(session.containerName, lastSynced);
+      for (const evt of events) {
+        if (evt.data) {
+          this.handleAgentOutput(session, JSON.stringify(evt.data));
+        }
+        if (typeof evt.id === "number") {
+          (session as any)._lastSyncedEventId = evt.id;
+        }
+      }
+
+      // Reconnect the stream bridge
+      const afterEventId = (session as any)._lastSyncedEventId ?? 0;
+      await this.startAgentProcess(session, afterEventId);
+    } catch (err) {
+      // Agent HTTP not reachable but container running — may be starting up or crashed internally
+      logger.warn({ err, sessionId: session.id }, "Agent HTTP not reachable — will retry via resync");
+    }
   }
 
   private handleAgentOutput(session: SubAgentSession, line: string): void {
@@ -1534,16 +1845,31 @@ export class SessionManager {
     this.sendToAgentProcess(session.id, { type: "history", messages });
   }
 
+  /**
+   * Send a command to the agent process.
+   * Primary path: write to the stream bridge's stdin (lowest latency).
+   * Fallback: POST /command via the agent's HTTP control server.
+   */
   private sendToAgentProcess(sessionId: string, msg: any): void {
+    // Try the live stream bridge first (stdin → stream-bridge → POST /command)
     const proc = this.processes.get(sessionId);
-    if (!proc || !proc.stdin || proc.stdin.destroyed) {
-      logger.warn({ sessionId }, "Cannot send to agent: no active process");
-      return;
+    if (proc && proc.stdin && !proc.stdin.destroyed) {
+      try {
+        proc.stdin.write(JSON.stringify(msg) + "\n");
+        return;
+      } catch (err) {
+        logger.warn({ err, sessionId }, "Failed to write to stream bridge stdin — falling back to HTTP");
+      }
     }
-    try {
-      proc.stdin.write(JSON.stringify(msg) + "\n");
-    } catch (err) {
-      logger.error({ err, sessionId }, "Failed to write to agent stdin");
+
+    // Fallback: send via HTTP directly to the agent
+    const session = this.sessions.get(sessionId);
+    if (session?.containerName) {
+      this.sendHttpCommand(session.containerName, msg).catch((err) => {
+        logger.error({ err, sessionId }, "Failed to send command via HTTP fallback");
+      });
+    } else {
+      logger.warn({ sessionId }, "Cannot send to agent: no active stream and no container name");
     }
   }
 

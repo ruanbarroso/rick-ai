@@ -204,6 +204,12 @@ async function main() {
     clearInterval(dockerCleanupTimer);
     clearInterval(staleSessionTimer);
     diskMonitor?.stop();
+    // Persist sync state for all live sub-agent sessions so we can resume
+    // from the correct event position after restart. Sub-agent containers
+    // continue running independently — they are NOT killed here.
+    await agent.persistSyncState().catch((err) => {
+      logger.warn({ err }, "Failed to persist sub-agent sync state during shutdown");
+    });
     await connectorManager.stopAll();
     await closeDatabase();
     await closeVectorPool();

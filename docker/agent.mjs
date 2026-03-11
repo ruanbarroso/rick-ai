@@ -6,6 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
+import { createServer } from "node:http";
 
 const MODEL_MAP = {
   "claude-opus-4-6": "anthropic/claude-opus-4-6",
@@ -18,9 +19,52 @@ const HISTORY_MAX_MESSAGES = 120;
 const HISTORY_MAX_CHARS = 12_000;       // Total character budget for the prelude text
 const HISTORY_MSG_MAX_CHARS = 2_000;    // Max chars per individual message (truncate code diffs)
 
+const CONTROL_HTTP_PORT = 3000;
 
+// ==================== LOCAL EVENT STORE ====================
+// Durable outbox: all events are persisted locally BEFORE being sent to stdout.
+// When the main process reconnects after a restart, it can fetch missed events.
 
+const stateDbPath = "/app/state.db";
+const stateDb = new DatabaseSync(stateDbPath);
+stateDb.exec(`
+  CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )
+`);
+stateDb.exec(`
+  CREATE TABLE IF NOT EXISTS state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )
+`);
 
+const stmtInsertEvent = stateDb.prepare("INSERT INTO events (type, data, created_at) VALUES (?, ?, ?)");
+const stmtGetEvents = stateDb.prepare("SELECT id, type, data, created_at FROM events WHERE id > ? ORDER BY id ASC");
+const stmtGetState = stateDb.prepare("SELECT value FROM state WHERE key = ?");
+const stmtSetState = stateDb.prepare("INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)");
+
+function setState(key, value) {
+  stmtSetState.run(key, String(value));
+}
+
+function getState(key) {
+  const row = stmtGetState.get(key);
+  return row ? row.value : null;
+}
+
+function getLastEventId() {
+  const row = stateDb.prepare("SELECT MAX(id) AS last_id FROM events").get();
+  return row?.last_id ?? 0;
+}
+
+/** Flag: true when stdin pipe is broken (main container restarted). */
+let stdinClosed = false;
+/** Flag: true when stdout pipe is broken. */
+let stdoutBroken = false;
 
 let currentGeneration = 0;
 let processingGeneration = 0;
@@ -34,8 +78,42 @@ let toolSeq = 0;
 const toolStarted = new Set();
 let lastRunHadAuthError = false;
 
+/**
+ * Emit an event: persist to local SQLite first, then try to write to stdout.
+ * If stdout is broken (main container restarted), the event is still safely stored
+ * and will be retrieved via the HTTP /events endpoint when the main reconnects.
+ */
 function emit(obj) {
-  process.stdout.write(`${JSON.stringify(obj)}\n`);
+  // Persist to local outbox BEFORE stdout
+  try {
+    stmtInsertEvent.run(obj.type || "unknown", JSON.stringify(obj), Date.now());
+  } catch (err) {
+    process.stderr.write(`[event-store] Failed to persist event: ${err?.message}\n`);
+  }
+
+  // Update state snapshot for key events
+  try {
+    if (obj.type === "waiting_user" || obj.type === "done" || obj.type === "error") {
+      setState("session_state", obj.type === "waiting_user" ? "waiting_user" : obj.type === "done" ? "done" : "error");
+    } else if (obj.type === "message" || obj.type === "status" || obj.type === "tool_call") {
+      setState("session_state", "running");
+    } else if (obj.type === "ready") {
+      setState("session_state", "ready");
+    }
+    setState("last_activity", String(Date.now()));
+  } catch { /* ignore state update failures */ }
+
+  // Try stdout — tolerate EPIPE if main container is gone
+  if (!stdoutBroken) {
+    try {
+      process.stdout.write(`${JSON.stringify(obj)}\n`);
+    } catch (err) {
+      if (err?.code === "EPIPE" || err?.code === "ERR_STREAM_DESTROYED") {
+        stdoutBroken = true;
+        process.stderr.write("[emit] stdout broken (EPIPE) — events continue in local store\n");
+      }
+    }
+  }
 }
 
 function isSuperseded() {
@@ -953,9 +1031,22 @@ emit({
   tools: ["opencode"],
 });
 
+// ==================== STDIN HANDLING ====================
+// When agent.mjs runs as PID 1 (CMD in Dockerfile), stdin is /dev/null
+// (container launched with -d / detached). Readline gets EOF immediately
+// and we ignore it. All commands come via the HTTP control server.
+//
+// When launched via `docker exec -i` (debug/legacy), stdin is a pipe
+// and readline works normally. We keep it for backward compatibility.
+//
+// We always create the readline — if stdin is /dev/null, it just closes
+// immediately with no lines read, which is harmless.
+
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+let stdinReceivedData = false;
 
 rl.on("line", (line) => {
+  stdinReceivedData = true;
   if (!line.trim()) return;
   let msg;
   try {
@@ -997,3 +1088,125 @@ rl.on("line", (line) => {
     return;
   }
 });
+
+rl.on("close", () => {
+  stdinClosed = true;
+  // Only log if we actually received data (real pipe, not /dev/null)
+  if (stdinReceivedData) {
+    process.stderr.write("[stdin] closed — commands will be received via HTTP control server.\n");
+  }
+});
+
+// Tolerate stdout errors globally (EPIPE when main container is gone)
+process.stdout.on("error", (err) => {
+  if (err?.code === "EPIPE" || err?.code === "ERR_STREAM_DESTROYED") {
+    stdoutBroken = true;
+  }
+});
+
+// ==================== CONTROL HTTP SERVER ====================
+// Lightweight HTTP server for the main container to:
+// 1. Check agent health/state (GET /health)
+// 2. Fetch missed events after reconnection (GET /events?after=N)
+// 3. Send commands when stdin is unavailable (POST /command)
+
+/** Route a command received via HTTP (same format as stdin NDJSON). */
+function handleHttpCommand(msg) {
+  if (!msg || typeof msg !== "object" || !msg.type) return;
+
+  if (msg.type === "interrupt") {
+    handleInterrupt(msg.generation);
+    return;
+  }
+  if (msg.type === "update_token") {
+    handleUpdateToken(msg);
+    return;
+  }
+  if (msg.type === "update_model") {
+    handleUpdateModel(msg);
+    return;
+  }
+  if (msg.type === "history") {
+    handleHistory(msg);
+    return;
+  }
+  if (msg.type === "ping") {
+    emit({ type: "pong" });
+    return;
+  }
+  if (msg.type === "message") {
+    runChain = runChain
+      .then(() => handleTurn(msg))
+      .catch((err) => emitError(err?.message || "Erro interno da fila de execucao"));
+    return;
+  }
+}
+
+const httpServer = createServer((req, res) => {
+  const url = new URL(req.url || "/", `http://localhost:${CONTROL_HTTP_PORT}`);
+
+  // CORS-free, no auth needed — only reachable within the Docker network
+  res.setHeader("Content-Type", "application/json");
+
+  // GET /health — agent state snapshot
+  if (req.method === "GET" && url.pathname === "/health") {
+    const state = getState("session_state") || "unknown";
+    const lastActivity = Number(getState("last_activity") || "0");
+    const lastEventId = getLastEventId();
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      status: "ok",
+      state,
+      lastEventId,
+      lastActivity,
+      stdinClosed,
+      stdoutBroken,
+      uptime: Math.floor(process.uptime()),
+    }));
+    return;
+  }
+
+  // GET /events?after=N — fetch events with id > N
+  if (req.method === "GET" && url.pathname === "/events") {
+    const after = parseInt(url.searchParams.get("after") || "0", 10) || 0;
+    try {
+      const rows = stmtGetEvents.all(after);
+      const events = rows.map((r) => ({ id: r.id, type: r.type, data: JSON.parse(r.data), created_at: r.created_at }));
+      res.writeHead(200);
+      res.end(JSON.stringify({ events, lastEventId: getLastEventId() }));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: err?.message || "Failed to query events" }));
+    }
+    return;
+  }
+
+  // POST /command — receive a command (same as stdin NDJSON)
+  if (req.method === "POST" && url.pathname === "/command") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const msg = JSON.parse(body);
+        handleHttpCommand(msg);
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
+      }
+    });
+    return;
+  }
+
+  // 404 for anything else
+  res.writeHead(404);
+  res.end(JSON.stringify({ error: "Not found" }));
+});
+
+httpServer.listen(CONTROL_HTTP_PORT, "0.0.0.0", () => {
+  process.stderr.write(`[http] Control server listening on port ${CONTROL_HTTP_PORT}\n`);
+});
+
+// Don't let the HTTP server prevent shutdown when the agent is truly done
+httpServer.unref();

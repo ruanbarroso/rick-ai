@@ -29,7 +29,12 @@ RUN chmod -R a+rX /ms-playwright
 # Copy all runtime files in a single layer to minimise overlay depth.
 COPY --chown=agent:agent AGENTS.md tools.mjs tool-declarations.mjs \
      rick-api.mjs mcp-playwright.mjs rick-mcp.mjs opencode.json \
-     policy.mjs prompt.mjs agent.mjs /app/
+     policy.mjs prompt.mjs agent.mjs stream-bridge.mjs /app/
 
 USER agent
 WORKDIR /workspace
+
+# The agent runs as a resident process (PID 1 via --init).
+# It persists all events to a local SQLite outbox and exposes
+# a lightweight HTTP control server on port 3000 for reconnection.
+CMD ["node", "/app/agent.mjs"]

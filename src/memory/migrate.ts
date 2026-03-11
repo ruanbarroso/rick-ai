@@ -323,6 +323,17 @@ const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_memory_history_key ON memory_history(category, key)`,
     ],
   },
+
+  {
+    name: "018_subagent_event_sync",
+    statements: [
+      // Track the last synced event ID per sub-agent session.
+      // The sub-agent persists all events in a local SQLite outbox inside its container.
+      // When the main container restarts, it reads missed events from the sub-agent
+      // starting from this position. This enables lossless resynchronization.
+      `ALTER TABLE sub_agent_sessions ADD COLUMN IF NOT EXISTS last_synced_event_id INTEGER DEFAULT 0`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {
