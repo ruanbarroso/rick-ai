@@ -977,6 +977,14 @@ export class WebConnector implements Connector {
                   } else {
                     const fileName = f.name || "arquivo";
                     attachmentCount += 1;
+
+                    // Tentar decodificar como texto (mesma heurística do web UI)
+                    const isLikelyText = buffer.length <= 512_000 && !buffer.some((b: number) => b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b));
+                    if (isLikelyText) {
+                      const content = buffer.toString("utf-8");
+                      fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+                    }
+
                     try {
                       const id = genId();
                       await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
@@ -1210,9 +1218,22 @@ export class WebConnector implements Connector {
           logger.error({ err }, "Failed to save PDF blob");
         }
       } else {
-        // Outros tipos binários: salvar e mostrar como card de arquivo genérico
+        // Outros tipos: tentar decodificar como texto UTF-8.
+        // Muitos arquivos com application/octet-stream (.key, .env, .cfg, etc.)
+        // são na verdade texto puro que o LLM pode ler.
         const fileName = f.name || "arquivo";
-        logger.info({ mimeType: f.mimeType, name: fileName }, "Generic file received");
+        attachmentCount += 1;
+        logger.info({ mimeType: f.mimeType, name: fileName, size: buffer.length }, "Generic file received");
+
+        // Heurística: se o buffer não contém bytes de controle (exceto \n, \r, \t),
+        // é provavelmente texto legível.
+        const isLikelyText = buffer.length <= 512_000 && !buffer.some((b) => b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b));
+        if (isLikelyText) {
+          const content = buffer.toString("utf-8");
+          fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+          logger.info({ type: "generic-as-text", name: fileName, chars: content.length }, "Generic file decoded as text");
+        }
+
         try {
           const id = genId();
           await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
