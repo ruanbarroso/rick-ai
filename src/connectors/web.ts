@@ -983,6 +983,9 @@ export class WebConnector implements Connector {
                     if (isLikelyText) {
                       const content = buffer.toString("utf-8");
                       fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+                    } else {
+                      const sizeKB = Math.round(buffer.length / 1024);
+                      fileTexts.push(`\n\n[Arquivo anexado: "${fileName}" (${f.mimeType}, ${sizeKB}KB) — conteúdo binário, não é possível ler diretamente]`);
                     }
 
                     try {
@@ -1232,6 +1235,11 @@ export class WebConnector implements Connector {
           const content = buffer.toString("utf-8");
           fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
           logger.info({ type: "generic-as-text", name: fileName, chars: content.length }, "Generic file decoded as text");
+        } else {
+          // Binário real: informar nome, tipo e tamanho para o LLM ter contexto
+          const sizeKB = Math.round(buffer.length / 1024);
+          fileTexts.push(`\n\n[Arquivo anexado: "${fileName}" (${f.mimeType}, ${sizeKB}KB) — conteúdo binário, não é possível ler diretamente]`);
+          logger.info({ type: "generic-binary", name: fileName, sizeKB }, "Binary file metadata added to prompt");
         }
 
         try {
