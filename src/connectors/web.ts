@@ -780,16 +780,20 @@ export class WebConnector implements Connector {
                   logger.error({ err }, "Failed to save PDF blob (session viewer)");
                 }
               } else {
-                // Outros: tentar decodificar como texto, senão informar metadata
+                // Outros: passar arquivo real como MediaAttachment + texto/metadata no prompt
                 const fileName = f.name || "arquivo";
                 attachmentCount += 1;
+
+                // Passar arquivo real para subagent (docker cp ao container)
+                imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName });
+
                 const isLikelyText = buffer.length <= 512_000 && !buffer.some((b: number) => b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b));
                 if (isLikelyText) {
                   const content = buffer.toString("utf-8");
                   fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
                 } else {
                   const sizeKB = Math.round(buffer.length / 1024);
-                  fileTexts.push(`\n\n[Arquivo anexado: "${fileName}" (${f.mimeType}, ${sizeKB}KB) — conteúdo binário, não é possível ler diretamente]`);
+                  fileTexts.push(`\n\n[Arquivo anexado: "${fileName}" (${f.mimeType}, ${sizeKB}KB) — arquivo copiado ao workspace do agente]`);
                 }
                 try {
                   const id = genId();
@@ -1008,6 +1012,9 @@ export class WebConnector implements Connector {
                     const fileName = f.name || "arquivo";
                     attachmentCount += 1;
 
+                    // Passar arquivo real como MediaAttachment para subagents
+                    imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName });
+
                     // Tentar decodificar como texto (mesma heurística do web UI)
                     const isLikelyText = buffer.length <= 512_000 && !buffer.some((b: number) => b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b));
                     if (isLikelyText) {
@@ -1015,7 +1022,7 @@ export class WebConnector implements Connector {
                       fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
                     } else {
                       const sizeKB = Math.round(buffer.length / 1024);
-                      fileTexts.push(`\n\n[Arquivo anexado: "${fileName}" (${f.mimeType}, ${sizeKB}KB) — conteúdo binário, não é possível ler diretamente]`);
+                      fileTexts.push(`\n\n[Arquivo anexado: "${fileName}" (${f.mimeType}, ${sizeKB}KB) — arquivo copiado ao workspace do agente]`);
                     }
 
                     try {
@@ -1251,25 +1258,28 @@ export class WebConnector implements Connector {
           logger.error({ err }, "Failed to save PDF blob");
         }
       } else {
-        // Outros tipos: tentar decodificar como texto UTF-8.
-        // Muitos arquivos com application/octet-stream (.key, .env, .cfg, etc.)
-        // são na verdade texto puro que o LLM pode ler.
+        // Outros tipos: sempre passar o arquivo real como MediaAttachment
+        // (será copiado ao container do subagent via docker cp).
+        // Além disso, para texto legível, também injetar conteúdo inline no prompt.
         const fileName = f.name || "arquivo";
         attachmentCount += 1;
         logger.info({ mimeType: f.mimeType, name: fileName, size: buffer.length }, "Generic file received");
 
+        // Passar o arquivo real como MediaAttachment para subagents
+        imageMedias.push({ data: buffer, mimeType: f.mimeType, fileName });
+
         // Heurística: se o buffer não contém bytes de controle (exceto \n, \r, \t),
-        // é provavelmente texto legível.
+        // é provavelmente texto legível — também injetar conteúdo no prompt.
         const isLikelyText = buffer.length <= 512_000 && !buffer.some((b) => b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b));
         if (isLikelyText) {
           const content = buffer.toString("utf-8");
           fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
           logger.info({ type: "generic-as-text", name: fileName, chars: content.length }, "Generic file decoded as text");
         } else {
-          // Binário real: informar nome, tipo e tamanho para o LLM ter contexto
+          // Binário real: informar metadata para o LLM ter contexto
           const sizeKB = Math.round(buffer.length / 1024);
-          fileTexts.push(`\n\n[Arquivo anexado: "${fileName}" (${f.mimeType}, ${sizeKB}KB) — conteúdo binário, não é possível ler diretamente]`);
-          logger.info({ type: "generic-binary", name: fileName, sizeKB }, "Binary file metadata added to prompt");
+          fileTexts.push(`\n\n[Arquivo anexado: "${fileName}" (${f.mimeType}, ${sizeKB}KB) — arquivo copiado ao workspace do agente]`);
+          logger.info({ type: "generic-binary", name: fileName, sizeKB }, "Binary file passed as MediaAttachment");
         }
 
         try {
