@@ -1208,5 +1208,10 @@ httpServer.listen(CONTROL_HTTP_PORT, "0.0.0.0", () => {
   process.stderr.write(`[http] Control server listening on port ${CONTROL_HTTP_PORT}\n`);
 });
 
-// Don't let the HTTP server prevent shutdown when the agent is truly done
-httpServer.unref();
+// The HTTP server keeps the Node.js event loop alive, which is correct:
+// agent.mjs is the resident PID 1 process in the container and must stay
+// running to accept commands via HTTP. In detached mode (-d), stdin is
+// /dev/null and readline closes immediately — without the HTTP server
+// reference the process would exit with code 0.
+//
+// When the agent needs to shut down, use process.exit() explicitly.
