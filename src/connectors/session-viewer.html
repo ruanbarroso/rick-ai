@@ -1756,7 +1756,12 @@ function appendQuestionMessage(text, timeStr) {
   if (payload.requestId) {
     var existingQuestions = container.querySelectorAll('[data-question-id]');
     for (var q = 0; q < existingQuestions.length; q++) {
-      if (existingQuestions[q].getAttribute('data-question-id') === payload.requestId) return true;
+      if (existingQuestions[q].getAttribute('data-question-id') === payload.requestId) {
+        // Move existing question card to the end so it's visible after new messages
+        container.insertBefore(existingQuestions[q], typing);
+        scrollToBottom();
+        return true;
+      }
     }
   }
 
