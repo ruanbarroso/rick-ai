@@ -4730,7 +4730,7 @@ function renderAttachmentsPreviews() {
     var f = pendingFiles[i];
     html += '<div class="attachment-chip">';
     if (f.previewUrl) {
-      html += '<img src="' + f.previewUrl + '" alt="">';
+      html += '<img src="' + f.previewUrl + '" alt="" onclick="event.stopPropagation(); openImageFullscreen(this.src)" style="cursor:pointer">';
     } else {
       // Non-image file: show emoji icon
       html += '<span style="font-size:1.4rem;flex-shrink:0;">' + getFileIcon(f.mimeType) + '</span>';
