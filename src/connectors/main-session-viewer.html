@@ -830,7 +830,19 @@ function connect() {
           // Update local preview with server URLs if available
           break;
         }
-        // Typing indicator is hidden by the backend via a separate 'typing' event.
+        // Hide typing indicator client-side when agent message arrives,
+        // in case the 'typing:false' event was delivered before the message.
+        if (msg.role === 'agent') {
+          var typingEl = document.getElementById('typing-indicator');
+          typingEl.classList.remove('visible');
+          var statusText = document.getElementById('status-text');
+          statusText.textContent = 'Online';
+          statusText.className = 'online';
+          var statusDot = document.getElementById('status-dot');
+          statusDot.className = 'status-dot running';
+          isProcessing = false;
+          updateSendButton();
+        }
         appendMessage(msg.text, msg.role, msg.messageType, msg.audioUrl || null, msg.imageUrls || null, msg.fileInfos || null);
         break;
 
