@@ -749,7 +749,9 @@ export class SessionManager {
     credentials: Record<string, string>,
     env: Record<string, string>,
     images?: MediaAttachment[],
-    numericUserId?: number
+    numericUserId?: number,
+    imageUrls?: string[],
+    fileInfos?: Array<{ url: string; name: string; mimeType: string }>
   ): Promise<SubAgentSession> {
     const id = randomBytes(8).toString("hex");
     const containerName = `subagent-${id}`;
@@ -788,7 +790,7 @@ export class SessionManager {
 
     try {
       await subagentImageBuilder.ensureForSession();
-      await this.startContainer(session, env, images);
+      await this.startContainer(session, env, images, imageUrls, fileInfos);
     } catch (err) {
       logger.error({ err, sessionId: id }, "Failed to start sub-agent container");
       session.state = "killed";
@@ -1117,7 +1119,7 @@ export class SessionManager {
 
   // ==================== CONTAINER MANAGEMENT ====================
 
-  private async startContainer(session: SubAgentSession, env: Record<string, string>, images?: MediaAttachment[]): Promise<void> {
+  private async startContainer(session: SubAgentSession, env: Record<string, string>, images?: MediaAttachment[], imageUrls?: string[], fileInfos?: Array<{ url: string; name: string; mimeType: string }>): Promise<void> {
     // === Agent API: generate JWT and resolve upfront credentials ===
     const agentApiEnv = await this.buildAgentApiEnv(session);
 
@@ -1197,10 +1199,13 @@ export class SessionManager {
         this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
       }
 
-      // Persist and broadcast user message
-      this.saveSessionMessage(session.id, "user", session.taskDescription).catch(() => {});
+      // Persist and broadcast user message (include image/file URLs for viewer display)
+      this.saveSessionMessage(session.id, "user", session.taskDescription, "text", undefined, imageUrls, fileInfos).catch(() => {});
       if (this.onSessionMessage) {
-        this.onSessionMessage(session.id, "user", session.taskDescription);
+        this.onSessionMessage(session.id, "user", session.taskDescription, "text", {
+          imageUrls: imageUrls && imageUrls.length > 0 ? imageUrls : undefined,
+          fileInfos: fileInfos && fileInfos.length > 0 ? fileInfos : undefined,
+        });
       }
 
       // Copy images into container and send to agent

@@ -736,7 +736,7 @@ Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a inform
     let session;
     try {
       session = await this.sessionManager.createSession(
-        userMessage, connectorName, userPhone, resolved, env, imageMedias, userId
+        userMessage, connectorName, userPhone, resolved, env, imageMedias, userId, imageUrls, fileInfos
       );
     } catch (err) {
       logger.error({ err }, "Sub-agent session failed");
