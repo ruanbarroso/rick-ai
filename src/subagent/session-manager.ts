@@ -242,6 +242,16 @@ export class SessionManager {
    */
   private sessionGenerations = new Map<string, number>();
 
+  /**
+   * Timers for recovery message acknowledgement.
+   * When resumeInterruptedTurn re-sends a user message after server restart,
+   * we start a timer. If the agent doesn't emit any activity event within the
+   * timeout, we revert the session to waiting_user so the UI doesn't stay
+   * stuck on "Digitando..." forever.
+   */
+  private recoveryTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  private static readonly RECOVERY_ACK_TIMEOUT_MS = 60_000; // 60 seconds
+
   /** Cached Docker network name for sub-agent containers (null = use default bridge) */
   private resolvedNetwork: string | null = null;
   /** Cached API host for sub-agents to reach the main container */
@@ -806,6 +816,9 @@ export class SessionManager {
       throw new Error(`No session with id ${sessionId}`);
     }
 
+    // Clear any pending recovery timeout — a new user message supersedes it
+    this.clearRecoveryTimeout(sessionId);
+
     // Increment generation for this new message
     const generation = (this.sessionGenerations.get(sessionId) ?? 0) + 1;
     this.sessionGenerations.set(sessionId, generation);
@@ -863,6 +876,9 @@ export class SessionManager {
       this.metricsCounters.sessionsKilled += 1;
       return;
     }
+
+    // Clear any pending recovery timeout
+    this.clearRecoveryTimeout(sessionId);
 
     // Kill the agent process
     const proc = this.processes.get(sessionId);
@@ -1484,6 +1500,13 @@ export class SessionManager {
   private handleAgentOutput(session: SubAgentSession, line: string): void {
     try {
       const msg = JSON.parse(line);
+
+      // If the agent emits any substantive event, clear the recovery timeout —
+      // it proves the agent received and is processing the re-sent message.
+      if (msg.type === "message" || msg.type === "status" || msg.type === "tool_call" ||
+          msg.type === "waiting_user" || msg.type === "question" || msg.type === "provider_error") {
+        this.clearRecoveryTimeout(session.id);
+      }
       
       switch (msg.type) {
         case "ready":
@@ -1817,6 +1840,12 @@ export class SessionManager {
         model: session.preferredModel,
         mode: session.executionMode,
       });
+
+      // Start a timeout: if the agent doesn't acknowledge with any activity event
+      // (message, status, tool_call, waiting_user, question, etc.) within the
+      // timeout window, revert the state to waiting_user so the UI doesn't stay
+      // stuck on "Digitando..." forever.
+      this.startRecoveryTimeout(session);
     } else {
       // The agent had already responded — just wait for new user input
       session.state = "waiting_user";
@@ -1824,6 +1853,46 @@ export class SessionManager {
       if (this.onSessionMessage) {
         this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
       }
+    }
+  }
+
+  /**
+   * Start a recovery acknowledgement timeout for a session.
+   * If the agent doesn't emit any activity event within RECOVERY_ACK_TIMEOUT_MS,
+   * we assume the re-sent message was lost and revert the session to waiting_user.
+   */
+  private startRecoveryTimeout(session: SubAgentSession): void {
+    // Clear any existing timer for this session
+    this.clearRecoveryTimeout(session.id);
+
+    const timer = setTimeout(() => {
+      this.recoveryTimeouts.delete(session.id);
+      // Only revert if the session is still in "running" state (the recovery turn hasn't progressed)
+      if (session.state !== "running") return;
+
+      logger.warn(
+        { sessionId: session.id, timeoutMs: SessionManager.RECOVERY_ACK_TIMEOUT_MS },
+        "Recovery timeout: agent did not acknowledge re-sent message — reverting to waiting_user"
+      );
+
+      session.state = "waiting_user";
+      session.updatedAt = Date.now();
+      if (this.onSessionMessage) {
+        this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+      }
+    }, SessionManager.RECOVERY_ACK_TIMEOUT_MS);
+
+    this.recoveryTimeouts.set(session.id, timer);
+  }
+
+  /**
+   * Clear a recovery timeout for a session (called when the agent emits activity).
+   */
+  private clearRecoveryTimeout(sessionId: string): void {
+    const timer = this.recoveryTimeouts.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.recoveryTimeouts.delete(sessionId);
     }
   }
 
