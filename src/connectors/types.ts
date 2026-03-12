@@ -41,6 +41,13 @@ export interface IncomingMessage {
    * have their own dedicated UI panels for follow-up messages.
    */
   skipSubAgentRelay?: boolean;
+  /**
+   * When true, the connector has already persisted this message to the conversations
+   * table. The Agent should skip its own save to avoid duplicates.
+   * Used by WhatsApp connector which saves messages early for admin visibility
+   * (blocked/pending users still appear in history).
+   */
+  messageSaved?: boolean;
 }
 
 /**

@@ -258,7 +258,10 @@ export class Agent {
 
     // Save user message EARLY so it appears in history even if request is superseded.
     // This ensures subsequent messages have full context of what user said.
-    await this.memory.saveMessageByUserId(user.id, "user", rawText, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
+    // Skip if the connector already persisted the message (e.g. WhatsApp saves early for admin visibility).
+    if (!msg.messageSaved) {
+      await this.memory.saveMessageByUserId(user.id, "user", rawText, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
+    }
     const userMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
       ? { audioUrl, imageUrls, fileInfos } : undefined;
     this.notifyMainViewers(user.id, "user", rawText, "text", connectorName, userMediaInfo);

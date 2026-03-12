@@ -634,6 +634,7 @@ export class WhatsAppConnector implements Connector {
         imageUrls: earlyImageUrl ? [earlyImageUrl] : undefined,
         fileInfos: earlyFileInfo ? [earlyFileInfo] : undefined,
         quotedText: quotedText || undefined,
+        messageSaved: true, // already saved at line 472 for admin visibility
       };
 
       const response = await this.manager.handleIncomingMessage(incoming);
