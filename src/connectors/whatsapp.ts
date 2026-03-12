@@ -95,6 +95,23 @@ export class WhatsAppConnector implements Connector {
   private static versionCache: [number, number, number] | null = null;
 
   /**
+   * Debounce buffer for rapid text-only messages from the same user.
+   * When a user sends multiple texts in quick succession (e.g. "Acessa nosso GitHub"
+   * followed by "Vê os bugs que temos" 5 seconds later), we combine them into a
+   * single message so only one sub-agent is created.
+   * Messages with media (audio/image/document) flush the buffer immediately.
+   */
+  private static readonly TEXT_DEBOUNCE_MS = 3000;
+  private pendingTexts = new Map<string, {
+    texts: string[];
+    timer: ReturnType<typeof setTimeout>;
+    chatJid: string;
+    senderId: string;
+    user: { id: number; phone: string; displayName: string | null; role: string | null; status: string };
+    quotedText?: string;
+  }>();
+
+  /**
    * Callback for QR code events — allows the web connector or other
    * consumers to receive QR codes for display.
    */
@@ -241,6 +258,12 @@ export class WhatsAppConnector implements Connector {
       clearInterval(interval);
     }
     this.typingIntervals.clear();
+
+    // Clear all pending debounce timers (don't flush — we're shutting down)
+    for (const entry of this.pendingTexts.values()) {
+      clearTimeout(entry.timer);
+    }
+    this.pendingTexts.clear();
 
     if (this.sock) {
       this.sock.end(undefined);
@@ -612,6 +635,44 @@ export class WhatsAppConnector implements Connector {
       await this.sock?.presenceSubscribe(chatJid);
       await this.sock?.sendPresenceUpdate("composing", chatJid);
 
+      // ==================== Debounce: buffer text-only messages ====================
+      // When users send rapid sequential texts (e.g. 2 messages in 5s), combine them
+      // into a single message so only one classification/sub-agent is triggered.
+      // Media messages (audio/image/document) flush any pending buffer and route immediately.
+      const hasMedia = !!media;
+      if (!hasMedia && promptText) {
+        // Flush any pending buffer for this user if a media message arrives
+        // (not the case here — this is text-only, so just buffer)
+        const existing = this.pendingTexts.get(senderId);
+        if (existing) {
+          clearTimeout(existing.timer);
+          existing.texts.push(promptText);
+          if (quotedText && !existing.quotedText) existing.quotedText = quotedText;
+          existing.timer = setTimeout(() => this.flushPendingTexts(senderId), WhatsAppConnector.TEXT_DEBOUNCE_MS);
+          logger.info({ senderId, bufferedCount: existing.texts.length, debounceMs: WhatsAppConnector.TEXT_DEBOUNCE_MS }, "Buffered rapid text message");
+        } else {
+          this.pendingTexts.set(senderId, {
+            texts: [promptText],
+            timer: setTimeout(() => this.flushPendingTexts(senderId), WhatsAppConnector.TEXT_DEBOUNCE_MS),
+            chatJid,
+            senderId,
+            user: user as any,
+            quotedText: quotedText || undefined,
+          });
+          logger.info({ senderId, debounceMs: WhatsAppConnector.TEXT_DEBOUNCE_MS }, "Started text debounce window");
+        }
+        return;
+      }
+
+      // Media message — flush any pending text buffer first (prepend to this message)
+      const flushedTexts = this.consumePendingTexts(senderId);
+      if (flushedTexts && !hasMedia) {
+        // Edge case: no media and no promptText — shouldn't happen, but guard
+        promptText = flushedTexts;
+      } else if (flushedTexts && hasMedia) {
+        promptText = flushedTexts + "\n\n" + promptText;
+      }
+
       // Build IncomingMessage and route through ConnectorManager
       // For images: pass as both media (for Gemini vision) and imageMedias (for sub-agent injection)
       const incomingImageMedias: MediaAttachment[] = [];
@@ -746,6 +807,79 @@ export class WhatsAppConnector implements Connector {
     } catch (err) {
       logger.error({ err }, "Error handling poll update");
     }
+  }
+
+  // ==================== Debounce helpers ====================
+
+  /**
+   * Flush all buffered text messages for a user after the debounce window expires.
+   * Combines all texts with newline, builds an IncomingMessage, and routes it
+   * through the ConnectorManager as if it were a single message.
+   */
+  private async flushPendingTexts(senderId: string): Promise<void> {
+    const entry = this.pendingTexts.get(senderId);
+    if (!entry) return;
+    this.pendingTexts.delete(senderId);
+
+    const combinedText = entry.texts.join("\n");
+    logger.info(
+      { senderId, messageCount: entry.texts.length, combinedLength: combinedText.length },
+      "Flushing debounced text messages"
+    );
+
+    try {
+      const incoming: IncomingMessage = {
+        connectorName: this.name,
+        userId: entry.senderId,
+        numericUserId: entry.user.id,
+        userRole: entry.user.role as any,
+        userStatus: entry.user.status as any,
+        userName: entry.user.displayName || undefined,
+        text: combinedText,
+        quotedText: entry.quotedText,
+        messageSaved: true, // individual messages already saved for admin visibility
+      };
+
+      const response = await this.manager.handleIncomingMessage(incoming);
+
+      if (response) {
+        await this.sendTextMessage(entry.chatJid, response);
+      }
+    } catch (err) {
+      logger.error({ err, senderId }, "Error flushing debounced texts");
+      try {
+        await this.sendTextMessage(
+          entry.chatJid,
+          "Desculpa, tive um erro processando sua mensagem. Tenta de novo?"
+        );
+      } catch {}
+    }
+
+    // Stop typing after sending
+    try {
+      await this.sock?.sendPresenceUpdate("paused", entry.chatJid);
+    } catch {}
+  }
+
+  /**
+   * Consume (extract and clear) any pending buffered texts for a user.
+   * Called when a media message arrives — the buffered texts are prepended
+   * to the media message's prompt so they're not lost.
+   * Returns the combined text, or null if no buffer existed.
+   */
+  private consumePendingTexts(senderId: string): string | null {
+    const entry = this.pendingTexts.get(senderId);
+    if (!entry) return null;
+
+    clearTimeout(entry.timer);
+    this.pendingTexts.delete(senderId);
+
+    const combinedText = entry.texts.join("\n");
+    logger.info(
+      { senderId, messageCount: entry.texts.length },
+      "Consumed pending texts for media message"
+    );
+    return combinedText;
   }
 
   // ==================== Internal helpers ====================
