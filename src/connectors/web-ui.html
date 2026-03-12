@@ -2491,7 +2491,7 @@
         <button id="attach-btn" class="compose-attach" onclick="document.getElementById('file-input').click()" title="Anexar arquivos">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
         </button>
-        <input type="file" id="file-input" multiple accept="image/*,text/plain,text/markdown,text/csv,text/html,application/json,application/pdf,.txt,.md,.csv,.json,.pdf,.doc,.docx,.xlsx,.xls,.pptx,.ppt" onchange="handleFileSelect(event)" style="display:none">
+        <input type="file" id="file-input" multiple onchange="handleFileSelect(event)" style="display:none">
 
         <div class="recording-bar" id="recording-bar">
           <button class="recording-cancel" onclick="cancelRecording()" title="Cancelar">
