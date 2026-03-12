@@ -761,6 +761,11 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
     child.stderr.on("data", (chunk) => {
       resetWatchdog();
+      // Reset turn completion timer on stderr activity: between step_finish and
+      // the next step_start, the LLM API call may take 30+ seconds but OpenCode
+      // logs activity to stderr (via --print-logs). Without this reset, the timer
+      // would kill the process while it's legitimately waiting for the LLM response.
+      if (turnCompletionTimer) startTurnCompletionTimer();
       stderrBuffer += chunk.toString();
       // Detect rate limit from OpenCode logs (enabled via --print-logs).
       // Only check the new chunk to avoid re-matching old buffer content.
