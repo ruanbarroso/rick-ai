@@ -869,7 +869,7 @@ export class SessionManager {
       // Session not in memory (e.g. already expired or server restarted) —
       // still update the DB and try to remove the container
       try {
-        await execFileAsync("docker", ["rm", "-f", `subagent-${sessionId}`]);
+        await execFileAsync("docker", ["rm", "-f", `subagent-${sessionId}`], { timeout: 15_000 });
         logger.info({ sessionId }, "Orphan sub-agent container killed");
       } catch { /* container may not exist */ }
       await this.updateSessionStatus(sessionId, "killed");
@@ -887,10 +887,10 @@ export class SessionManager {
       this.processes.delete(sessionId);
     }
 
-    // Kill the container
+    // Kill the container (with timeout to prevent gateway timeouts when container is Dead/stuck)
     if (session.containerId) {
       try {
-        await execFileAsync("docker", ["rm", "-f", session.containerName]);
+        await execFileAsync("docker", ["rm", "-f", session.containerName], { timeout: 15_000 });
         logger.info({ sessionId, container: session.containerName }, "Sub-agent container killed");
       } catch (err) {
         logger.warn({ err, container: session.containerName }, "Failed to kill container");
