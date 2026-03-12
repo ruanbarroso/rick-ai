@@ -1072,7 +1072,8 @@ REGRAS IMPORTANTES:
 CAPACIDADES:
 - Voce roda no Gemini Flash para conversa direta.
 - Voce tem acesso a memorias estruturadas (chave-valor)${hasSemanticMemory ? " e semanticas (busca por significado)" : ""}
-- Voce pode listar, buscar, ou apagar memorias${userCanDelegate ? `
+- Voce pode listar, buscar, salvar ou apagar memorias
+- Voce NAO pode transferir propriedade de memorias, alterar quem criou uma memoria, mover memorias entre usuarios, nem renomear categorias em lote. Se pedirem, diga honestamente que essa operacao nao esta disponivel e requer intervencao manual.${userCanDelegate ? `
 - Existe um sub-agente autonomo que pode ser acionado para tarefas complexas (programar, pesquisar na web, acessar contas via browser). O roteamento e automatico e acontece ANTES desta conversa.
 - Credenciais do sub-agente ficam na categoria "credenciais" ou "senhas" da sua memoria
 - Conexoes OAuth (Claude, GPT) sao gerenciadas pelo painel de configuracoes na interface web` : ""}
