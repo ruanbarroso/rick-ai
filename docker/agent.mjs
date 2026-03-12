@@ -1172,8 +1172,9 @@ const httpServer = createServer((req, res) => {
     try {
       const rows = stmtGetEvents.all(after);
       const events = rows.map((r) => ({ id: r.id, type: r.type, data: JSON.parse(r.data), created_at: r.created_at }));
+      const state = getState("session_state") || "unknown";
       res.writeHead(200);
-      res.end(JSON.stringify({ events, lastEventId: getLastEventId() }));
+      res.end(JSON.stringify({ events, lastEventId: getLastEventId(), state }));
     } catch (err) {
       res.writeHead(500);
       res.end(JSON.stringify({ error: err?.message || "Failed to query events" }));

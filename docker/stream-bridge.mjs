@@ -58,7 +58,7 @@ async function pollEvents() {
         signal: AbortSignal.timeout(5000),
       });
       if (res.ok) {
-        const { events, lastEventId: serverLastId } = await res.json();
+        const { events, lastEventId: serverLastId, state } = await res.json();
         if (Array.isArray(events)) {
           for (const evt of events) {
             if (evt.data) {
@@ -69,22 +69,14 @@ async function pollEvents() {
             }
           }
         }
-        // Track idle state for adaptive polling
         if (typeof serverLastId === "number") lastEventId = Math.max(lastEventId, serverLastId);
+        // Use agent state from /events response for adaptive polling (no separate /health call needed)
+        if (typeof state === "string") {
+          idleState = state === "waiting_user" || state === "done" || state === "ready";
+        }
       }
     } catch {
-      // Agent not reachable — it may have exited. Check if container is still alive.
-    }
-
-    // Check agent state for adaptive polling interval
-    try {
-      const healthRes = await fetch(`${AGENT_URL}/health`, { signal: AbortSignal.timeout(2000) });
-      if (healthRes.ok) {
-        const health = await healthRes.json();
-        idleState = health.state === "waiting_user" || health.state === "done" || health.state === "ready";
-      }
-    } catch {
-      // Ignore health check failures during polling
+      // Agent not reachable — it may have exited or still starting up.
     }
 
     const interval = idleState ? POLL_INTERVAL_IDLE_MS : POLL_INTERVAL_MS;
