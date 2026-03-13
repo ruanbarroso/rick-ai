@@ -52,9 +52,9 @@ if (process.stdin.readable && !process.stdin.destroyed) {
   });
 
   rl.on("close", () => {
-    // Main container stdin closed — stop polling and exit gracefully
-    polling = false;
-    process.exit(0);
+    // When launched without `docker exec -i`, stdin is closed immediately.
+    // Do NOT exit here — the bridge must keep polling /events and streaming
+    // stdout even when command input is unavailable.
   });
 }
 
