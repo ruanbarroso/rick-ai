@@ -508,19 +508,33 @@ export class SessionManager {
           variantName = await getSessionVariantName(id, numericUserId);
         }
 
-        // Query the agent's actual state via HTTP
+        // Query the agent's actual state via HTTP.
+        // Retry up to 3 times with 2s delay to avoid false negatives when the
+        // agent is busy processing a turn (event loop congestion, slow curl).
+        // A single failed health check previously caused recovery to fall into the
+        // legacy fallback path, spawning a second agent.mjs that exits with code 1
+        // (EADDRINUSE on port 3000) — incorrectly reported as a crash.
         let agentState = "waiting_user";
         let agentLastEventId = 0;
         let agentHealthReachable = false;
-        try {
-          const raw = await this.querySubagentHttp(containerName, "/health");
-          const health = JSON.parse(raw);
-          agentState = health.state || "waiting_user";
-          agentLastEventId = health.lastEventId || 0;
-          agentHealthReachable = true;
-          logger.info({ sessionId: id, agentState, agentLastEventId, lastSyncedEventId }, "Session resync: agent health queried");
-        } catch (err) {
-          logger.warn({ err, sessionId: id }, "Session resync: agent HTTP not reachable, using DB state");
+        const healthRetries = 3;
+        for (let attempt = 1; attempt <= healthRetries; attempt++) {
+          try {
+            const raw = await this.querySubagentHttp(containerName, "/health");
+            const health = JSON.parse(raw);
+            agentState = health.state || "waiting_user";
+            agentLastEventId = health.lastEventId || 0;
+            agentHealthReachable = true;
+            logger.info({ sessionId: id, agentState, agentLastEventId, lastSyncedEventId, attempt }, "Session resync: agent health queried");
+            break;
+          } catch (err) {
+            if (attempt < healthRetries) {
+              logger.debug({ err, sessionId: id, attempt }, "Session resync: agent health check failed, retrying...");
+              await new Promise((r) => setTimeout(r, 2000));
+            } else {
+              logger.warn({ err, sessionId: id, attempts: healthRetries }, "Session resync: agent HTTP not reachable after retries, using DB state");
+            }
+          }
         }
 
         // Map agent state to session state
@@ -612,6 +626,7 @@ export class SessionManager {
           this.processes.set(id, legacyProc);
 
           let buffer = "";
+          let legacyStderr = "";
           legacyProc.stdout!.on("data", (data: Buffer) => {
             buffer += data.toString();
             let newlineIdx;
@@ -623,12 +638,23 @@ export class SessionManager {
           });
           legacyProc.stderr!.on("data", (data: Buffer) => {
             const text = data.toString();
+            legacyStderr += text;
             if (text.trim()) logger.debug({ sessionId: id, stderr: text.trim().substring(0, 500) }, "Legacy sub-agent stderr");
           });
           legacyProc.on("exit", (code) => {
             this.processes.delete(id);
             if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
               const crashed = code !== 0 && code !== null;
+              // Detect false positive: if the second agent.mjs exits with code 1 because
+              // port 3000 is already in use (EADDRINUSE), the container actually has the
+              // new architecture — this is NOT a real crash. Try to recover via stream bridge.
+              if (crashed && legacyStderr.includes("EADDRINUSE")) {
+                logger.info({ sessionId: id, exitCode: code }, "Legacy fallback: EADDRINUSE detected — container has new architecture, switching to stream bridge");
+                this.startAgentProcess(session, (session as any)._lastSyncedEventId ?? 0).catch((err) => {
+                  logger.error({ err, sessionId: id }, "Failed to start stream bridge after EADDRINUSE detection");
+                });
+                return;
+              }
               if (crashed) {
                 this.sendToUser(session, `Erro: o sub-agente encerrou inesperadamente (codigo ${code}).`, "error");
               }
