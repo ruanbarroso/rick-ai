@@ -1160,13 +1160,9 @@ export class SessionManager {
       ? ["--network", this.resolvedNetwork]
       : ["--add-host=host.docker.internal:host-gateway"];
 
-    // Resource limits to protect the host from runaway containers.
-    // --memory 4g : cap at 4GB (Node ~70MB idle, Chrome ~300-600MB, build/test peaks ~2-3GB)
-    // --pids-limit 512 : prevent fork bombs / zombie accumulation
-    // 4GB is needed for large React/Next.js projects that run tsc, next build,
-    // or full test suites (e.g. 2700+ tests). 2GB caused OOM kills on builds.
-    // Safe on any host: production has 62GB, ubuntu has 23GB.
-    const resourceArgs = ["--memory", "4g", "--pids-limit", "512"];
+    // No memory/CPU limits — containers share host resources freely.
+    // The pids-limit is kept as a safety net against fork bombs.
+    const resourceArgs = ["--pids-limit", "512"];
 
     // The container CMD is now `node /app/agent.mjs` (set in Dockerfile).
     // The agent starts as a resident process and exposes an HTTP control
