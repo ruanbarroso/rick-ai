@@ -58,6 +58,14 @@ export class Agent {
   private pendingMemoryFailures = new Map<number, string[]>();
 
   /**
+   * Track the most recently created sub-agent session per user.
+   * Used to kill orphaned sessions when a newer message supersedes the one that
+   * created the session (e.g., late WhatsApp message after debounce already fired).
+   * Key: userPhone, Value: { sessionId, generation, createdAt }
+   */
+  private userLastCreatedSession = new Map<string, { sessionId: string; generation: number; createdAt: number }>();
+
+  /**
    * Monotonically increasing generation counter per user.
    * Incremented each time a new message arrives for a user.
    */
@@ -175,6 +183,30 @@ export class Agent {
     this.userGenerations.set(userId, generation);
 
     logger.info({ userId, generation, text: msg.text?.substring(0, 30) }, "handleMessage: new message arrived");
+
+    // Abort any in-flight LLM call for this user (classification or simple chat)
+    const prevState = this.userAbortControllers.get(userId);
+    if (prevState) {
+      logger.info({ userId, prevGen: prevState.generation, newGen: generation }, "Aborting in-flight processing for superseded message");
+      prevState.controller.abort();
+    }
+
+    // Kill recently-created sub-agent sessions from superseded messages.
+    // If the previous message already completed delegateToSubAgent (created a session),
+    // but the user sent a new message within 30 seconds, the old session is stale —
+    // the user clearly intended the new message to replace the old one.
+    const lastSession = this.userLastCreatedSession.get(userId);
+    if (lastSession && lastSession.generation < generation) {
+      const ageMs = Date.now() - lastSession.createdAt;
+      if (ageMs < 30_000) {
+        logger.info({ userId, sessionId: lastSession.sessionId, ageMs, prevGen: lastSession.generation, newGen: generation },
+          "Killing recently-created sub-agent from superseded message");
+        this.sessionManager.killSession(lastSession.sessionId).catch((err) => {
+          logger.warn({ err, sessionId: lastSession.sessionId }, "Failed to kill superseded session");
+        });
+        this.userLastCreatedSession.delete(userId);
+      }
+    }
 
     // Create AbortController for this request (used to cancel LLM calls)
     const abortController = new AbortController();
@@ -418,7 +450,8 @@ export class Agent {
           imageUrls,
           allImageMedias,
           fileInfos,
-          user.id
+          user.id,
+          generation
         );
       }
 
@@ -651,7 +684,8 @@ Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a inform
     imageUrls?: string[],
     imageMedias?: MediaAttachment[],
     fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
-    userId?: number
+    userId?: number,
+    generation?: number
   ): Promise<string> {
     if (!userId) {
       logger.error("delegateToSubAgent called without userId — aborting delegation");
@@ -732,6 +766,12 @@ Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a inform
 
     // NOTE: user message already saved and notified by handleMessageInternal — no duplicate save here
 
+    // Check if superseded by newer message before the expensive createSession call
+    if (generation !== undefined && this.isSuperseded(userPhone, generation)) {
+      logger.info({ userPhone, generation }, "Superseded before sub-agent creation — skipping delegation");
+      return "";
+    }
+
     // Start the sub-agent container
     let session;
     try {
@@ -741,6 +781,26 @@ Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a inform
     } catch (err) {
       logger.error({ err }, "Sub-agent session failed");
       return `Erro ao executar sub-agente: ${(err as Error).message}`;
+    }
+
+    // Check if superseded AFTER session creation — if so, kill the session we just created
+    // to avoid orphaned sub-agents working on stale messages
+    if (generation !== undefined && this.isSuperseded(userPhone, generation)) {
+      logger.info({ userPhone, generation, sessionId: session.id }, "Superseded after sub-agent creation — killing orphaned session");
+      this.sessionManager.killSession(session.id).catch((err) => {
+        logger.warn({ err, sessionId: session.id }, "Failed to kill superseded sub-agent session");
+      });
+      return "";
+    }
+
+    // Track this session as the most recently created for this user.
+    // Used by handleMessage() to kill it if a new message arrives within 30s.
+    if (generation !== undefined) {
+      this.userLastCreatedSession.set(userPhone, {
+        sessionId: session.id,
+        generation,
+        createdAt: Date.now(),
+      });
     }
 
     // Build ack with variant name + public session link (if webBaseUrl configured)
