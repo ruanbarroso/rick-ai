@@ -131,7 +131,7 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 - **Build/Plan mode**: Session viewer mode is preserved; Rick maps mode to OpenCode agent (`build` or `plan`).
 - **Credential injection**: Sub-agent syncs Claude/OpenAI auth to OpenCode `auth.json` using Rick Agent API OAuth bundles (`access`, `refresh`, `expires`, `accountId` when applicable). API-key fallback remains supported.
 - **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick APIs from MCP tools — scoped to the owner's data.
-- **Session recovery**: Running containers are recovered after Rick restarts
+- **Session recovery**: Running containers reconnect after Rick restarts, and exited active sessions are restarted without removing live containers during resync
 - **Image freshness**: `subagent` image is rebuilt automatically whenever bundle hash or Rick version label differs (no stale image reuse across versions)
 - **Local fast-build fallback**: when `subagent-base:chrome` exists, builds use a fast Dockerfile that only copies runtime `.mjs` files; if base is missing, Rick first seeds it from `subagent:current`/`subagent` when available, otherwise falls back to full bootstrap build and re-tags base locally
 - **Centralized image builder**: main container warms the `subagent` image in background at startup; new sessions reuse `subagent:current`, while a new version builds in the background and is promoted atomically when ready

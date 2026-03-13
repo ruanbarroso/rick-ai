@@ -359,9 +359,8 @@ export class SessionManager {
    * 6. Sends a fresh JWT token so the agent can continue calling Rick's API
    */
   async recoverSessions(): Promise<number> {
-    // Clean up dead subagent containers (exited after server restart, OOM, etc.)
-    // Only remove containers that finished more than 60s ago to avoid race conditions
-    // with containers that just exited and might be mid-restart.
+    // Restart exited subagent containers when the session was still active.
+    // Only finished, killed, failed, or orphaned containers are removed.
     try {
       const { stdout: deadOut } = await execFileAsync("docker", [
         "ps", "-a",
@@ -370,7 +369,8 @@ export class SessionManager {
         "--format", "{{.Names}}\t{{.FinishedAt}}",
       ]);
       const deadLines = deadOut.trim().split("\n").filter((l) => l.trim());
-      let cleaned = 0;
+      let restarted = 0;
+      let removed = 0;
       for (const line of deadLines) {
         const [name, finishedAt] = line.split("\t");
         if (!name) continue;
@@ -385,17 +385,51 @@ export class SessionManager {
         }
 
         const match = name.match(/^subagent-([a-f0-9]+)$/);
-        if (match) {
-          this.updateSessionStatus(match[1], "done").catch(() => {});
+        if (!match) {
+          await this.removeContainerIfInactive("unknown", name, "unrecognized exited container", null).catch(() => false);
+          removed++;
+          continue;
         }
-        execFileAsync("docker", ["rm", "-f", name]).catch(() => {});
-        cleaned++;
+
+        const sessionId = match[1];
+        let dbStatus: string | null = null;
+        try {
+          const dbRow = await query(
+            `SELECT status FROM sub_agent_sessions WHERE id = $1`,
+            [sessionId],
+          );
+          dbStatus = dbRow.rows[0]?.status ?? null;
+        } catch (err) {
+          logger.warn({ err, sessionId, containerName: name }, "Session resync: failed to load exited container status from DB");
+        }
+
+        const shouldRestart = dbStatus === "starting" || dbStatus === "running" || dbStatus === "waiting_user";
+        if (shouldRestart) {
+          try {
+            await execFileAsync("docker", ["start", name], { timeout: 15_000 });
+            logger.info({ name, sessionId, finishedAt, dbStatus }, "Session resync: restarted exited subagent container");
+            restarted++;
+            continue;
+          } catch (err: any) {
+            logger.warn({ err: err?.message, name, sessionId, dbStatus }, "Session resync: failed to restart exited subagent container");
+          }
+        }
+
+        if (await this.removeContainerIfInactive(sessionId, name, shouldRestart ? "restart failed for exited container" : "terminal exited container", shouldRestart ? "done" : dbStatus)) {
+          removed++;
+        }
+        if (shouldRestart) {
+          this.updateSessionStatus(sessionId, "done").catch(() => {});
+        }
       }
-      if (cleaned > 0) {
-        logger.info({ cleaned }, "Session resync: cleaned up dead subagent containers");
+      if (restarted > 0 || removed > 0) {
+        logger.info({ restarted, removed }, "Session resync: processed exited subagent containers");
+      }
+      if (restarted > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
     } catch (err) {
-      logger.warn({ err }, "Session resync: failed to clean up dead containers");
+      logger.warn({ err }, "Session resync: failed to process exited containers");
     }
 
     try {
@@ -420,17 +454,7 @@ export class SessionManager {
         // Parse: subagent-{id}
         const match = containerName.match(/^subagent-([a-f0-9]+)$/);
         if (!match) {
-          // Try legacy format: subagent-{type}-{id}
-          const legacyMatch = containerName.match(/^subagent-(?:code|research)-([a-f0-9]+)$/);
-          if (!legacyMatch) {
-            logger.warn({ containerName }, "Session resync: skipping unrecognized container");
-            continue;
-          }
-          // Kill legacy containers — they use the old architecture
-          try {
-            await execFileAsync("docker", ["rm", "-f", containerName]);
-            logger.info({ containerName }, "Session resync: killed legacy container");
-          } catch {}
+          logger.warn({ containerName }, "Session resync: skipping unrecognized running container");
           continue;
         }
 
@@ -476,11 +500,13 @@ export class SessionManager {
         // Query the agent's actual state via HTTP
         let agentState = "waiting_user";
         let agentLastEventId = 0;
+        let agentHealthReachable = false;
         try {
           const raw = await this.querySubagentHttp(containerName, "/health");
           const health = JSON.parse(raw);
           agentState = health.state || "waiting_user";
           agentLastEventId = health.lastEventId || 0;
+          agentHealthReachable = true;
           logger.info({ sessionId: id, agentState, agentLastEventId, lastSyncedEventId }, "Session resync: agent health queried");
         } catch (err) {
           logger.warn({ err, sessionId: id }, "Session resync: agent HTTP not reachable, using DB state");
@@ -545,7 +571,7 @@ export class SessionManager {
         // Determine if this container has the new architecture (HTTP control server + stream bridge)
         // or the old one (agent.mjs started via docker exec). If HTTP health check succeeded,
         // it's a new-architecture container. Otherwise, fall back to the legacy approach.
-        const isNewArchitecture = agentLastEventId > 0 || sessionState === "running";
+        const isNewArchitecture = agentHealthReachable;
 
         if (isNewArchitecture) {
           // NEW ARCHITECTURE: send token via HTTP, reconnect stream bridge
@@ -603,7 +629,7 @@ export class SessionManager {
                 this.onSessionMessage(session.id, "system", JSON.stringify({ state: newState }), "system");
               }
               this.updateSessionStatus(session.id, newState).catch(() => {});
-              execFileAsync("docker", ["rm", "-f", session.containerName]).catch(() => {});
+              this.removeContainerIfInactive(session.id, session.containerName, "legacy recovery process exited", newState).catch(() => {});
             }
           });
           legacyProc.on("error", (err) => {
@@ -1164,6 +1190,40 @@ export class SessionManager {
       return true;
     } catch (err) {
       logger.warn({ err, containerName, type: command?.type }, "Failed to send HTTP command to subagent");
+      return false;
+    }
+  }
+
+  private async isContainerRunning(containerName: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync("docker", [
+        "inspect", "--format", "{{.State.Running}}", containerName,
+      ], { timeout: 5_000 });
+      return stdout.trim() === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  private async removeContainerIfInactive(sessionId: string, containerName: string, reason: string, sessionStatus?: string | null): Promise<boolean> {
+    const running = await this.isContainerRunning(containerName);
+    if (running) {
+      logger.warn({ sessionId, containerName, reason, sessionStatus, dockerRunning: true }, "Refusing to remove active subagent container");
+      return false;
+    }
+
+    const terminal = sessionStatus === "done" || sessionStatus === "killed" || sessionStatus === "failed" || sessionStatus == null;
+    if (!terminal) {
+      logger.warn({ sessionId, containerName, reason, sessionStatus, dockerRunning: false }, "Refusing to remove non-terminal subagent container");
+      return false;
+    }
+
+    try {
+      await execFileAsync("docker", ["rm", "-f", containerName], { timeout: 10_000 });
+      logger.info({ sessionId, containerName, reason, sessionStatus, dockerRunning: false }, "Removed inactive subagent container");
+      return true;
+    } catch (err) {
+      logger.warn({ err, sessionId, containerName, reason, sessionStatus, dockerRunning: false }, "Failed to remove inactive subagent container");
       return false;
     }
   }
