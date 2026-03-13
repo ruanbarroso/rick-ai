@@ -359,6 +359,30 @@ export class SessionManager {
    * 6. Sends a fresh JWT token so the agent can continue calling Rick's API
    */
   async recoverSessions(): Promise<number> {
+    // Clean up dead subagent containers (exited after server restart, OOM, etc.)
+    try {
+      const { stdout: deadOut } = await execFileAsync("docker", [
+        "ps", "-a",
+        "--filter", "name=subagent-",
+        "--filter", "status=exited",
+        "--format", "{{.Names}}",
+      ]);
+      const deadContainers = deadOut.trim().split("\n").filter((l) => l.trim());
+      if (deadContainers.length > 0) {
+        logger.info({ count: deadContainers.length }, "Session resync: cleaning up dead subagent containers");
+        for (const name of deadContainers) {
+          const match = name.match(/^subagent-([a-f0-9]+)$/);
+          if (match) {
+            // Mark session as done in DB so it doesn't get recovered again
+            this.updateSessionStatus(match[1], "done").catch(() => {});
+          }
+          execFileAsync("docker", ["rm", "-f", name]).catch(() => {});
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, "Session resync: failed to clean up dead containers");
+    }
+
     try {
       const { stdout } = await execFileAsync("docker", [
         "ps",
