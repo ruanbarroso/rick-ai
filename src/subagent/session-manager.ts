@@ -578,6 +578,15 @@ export class SessionManager {
           this.onSessionMessage(session.id, "system", JSON.stringify({ state: session.state }), "system");
         }
 
+        // Check for unsent user messages: if the agent is in waiting_user but the
+        // last DB message is from the user, it means a user message arrived AFTER
+        // the agent's last response but BEFORE the server restart. Re-send it.
+        if (session.state === "waiting_user") {
+          this.checkAndResendUnsentMessage(session).catch((err) => {
+            logger.warn({ err, sessionId: id }, "Session resync: failed to check for unsent messages");
+          });
+        }
+
         logger.info({ sessionId: id, containerName, state: session.state }, "Session resync: session recovered");
       }
 
@@ -1900,6 +1909,57 @@ export class SessionManager {
         this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
       }
     }
+  }
+
+  /**
+   * Check for unsent user messages after session recovery.
+   *
+   * Handles the case where a user message arrived via the session viewer AFTER
+   * the agent's last response but BEFORE the server restart. The message is
+   * persisted in session_messages (the viewer WebSocket handler saves it)
+   * but was never forwarded to the agent via sendToSession().
+   *
+   * Waits briefly for the stream bridge to connect before sending.
+   */
+  private async checkAndResendUnsentMessage(session: SubAgentSession): Promise<void> {
+    const history = await this.getSessionHistory(session.id);
+    // Find the last user/agent text message (skip tool_use, system, errors)
+    const textMessages = history.filter(
+      (m) => (m.role === "user" || m.role === "agent") && m.content && m.message_type !== "tool_use" && m.message_type !== "system"
+    );
+    const lastMsg = textMessages.length > 0 ? textMessages[textMessages.length - 1] : null;
+
+    if (!lastMsg || lastMsg.role !== "user") return;
+
+    // Wait a moment for the stream bridge to connect before sending
+    await new Promise((r) => setTimeout(r, 2000));
+
+    logger.info(
+      { sessionId: session.id, messagePreview: lastMsg.content.substring(0, 80) },
+      "Session resync: found unsent user message — re-sending to agent"
+    );
+
+    // Re-send the message directly to the agent process.
+    // We do NOT use sendToSession() because the message is already in the DB.
+    const generation = (this.sessionGenerations.get(session.id) ?? 0) + 1;
+    this.sessionGenerations.set(session.id, generation);
+    session.state = "running";
+    session.pendingQuestion = null;
+    session.turnHadStreamedText = false;
+    session.updatedAt = Date.now();
+    if (this.onSessionMessage) {
+      this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
+    }
+    this.sendToAgentProcess(session.id, {
+      type: "message",
+      text: lastMsg.content,
+      generation,
+      model: session.preferredModel,
+      mode: session.executionMode,
+    });
+
+    // Start recovery timeout in case the agent doesn't respond
+    this.startRecoveryTimeout(session);
   }
 
   /**
