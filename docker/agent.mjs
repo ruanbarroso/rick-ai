@@ -101,7 +101,7 @@ function emit(obj) {
   try {
     if (obj.type === "waiting_user" || obj.type === "done" || obj.type === "error") {
       setState("session_state", obj.type === "waiting_user" ? "waiting_user" : obj.type === "done" ? "done" : "error");
-    } else if (obj.type === "message" || obj.type === "status" || obj.type === "tool_call") {
+    } else if (obj.type === "message" || obj.type === "status" || obj.type === "tool_call" || obj.type === "model_active") {
       setState("session_state", "running");
     } else if (obj.type === "ready") {
       setState("session_state", "ready");

@@ -362,27 +362,35 @@ export class SessionManager {
     // Restart exited subagent containers when the session was still active.
     // Only finished, killed, failed, or orphaned containers are removed.
     try {
+      // Note: {{.FinishedAt}} is NOT available in `docker ps --format` (it's a
+      // `docker inspect` field).  Use just {{.Names}} and fetch finish time via
+      // `docker inspect` when we need to check recency.
       const { stdout: deadOut } = await execFileAsync("docker", [
         "ps", "-a",
         "--filter", "name=subagent-",
         "--filter", "status=exited",
-        "--format", "{{.Names}}\t{{.FinishedAt}}",
+        "--format", "{{.Names}}",
       ]);
       const deadLines = deadOut.trim().split("\n").filter((l) => l.trim());
       let restarted = 0;
       let removed = 0;
-      for (const line of deadLines) {
-        const [name, finishedAt] = line.split("\t");
+      for (const name of deadLines) {
         if (!name) continue;
 
-        // Skip containers that exited less than 60s ago
-        if (finishedAt) {
-          const finishedTime = new Date(finishedAt).getTime();
-          if (!isNaN(finishedTime) && Date.now() - finishedTime < 60_000) {
-            logger.debug({ name, finishedAt }, "Session resync: skipping recently exited container");
-            continue;
+        // Skip containers that exited less than 60s ago (fetch via docker inspect)
+        try {
+          const { stdout: inspectOut } = await execFileAsync("docker", [
+            "inspect", "--format", "{{.State.FinishedAt}}", name,
+          ]);
+          const finishedAt = inspectOut.trim();
+          if (finishedAt) {
+            const finishedTime = new Date(finishedAt).getTime();
+            if (!isNaN(finishedTime) && Date.now() - finishedTime < 60_000) {
+              logger.debug({ name, finishedAt }, "Session resync: skipping recently exited container");
+              continue;
+            }
           }
-        }
+        } catch { /* inspect failed — proceed with the container anyway */ }
 
         const match = name.match(/^subagent-([a-f0-9]+)$/);
         if (!match) {
@@ -407,7 +415,7 @@ export class SessionManager {
         if (shouldRestart) {
           try {
             await execFileAsync("docker", ["start", name], { timeout: 15_000 });
-            logger.info({ name, sessionId, finishedAt, dbStatus }, "Session resync: restarted exited subagent container");
+            logger.info({ name, sessionId, dbStatus }, "Session resync: restarted exited subagent container");
             restarted++;
             continue;
           } catch (err: any) {
@@ -1663,8 +1671,12 @@ export class SessionManager {
 
       // If the agent emits any substantive event, clear the recovery timeout —
       // it proves the agent received and is processing the re-sent message.
+      // model_active is included because it's the first event emitted by handleTurn(),
+      // proving the agent started processing.  Without it, the 60s timeout fires
+      // while the agent is legitimately cascading between LLM providers (~3-4 min).
       if (!recoveryReplay && (msg.type === "message" || msg.type === "status" || msg.type === "tool_call" ||
-          msg.type === "waiting_user" || msg.type === "question" || msg.type === "provider_error")) {
+          msg.type === "waiting_user" || msg.type === "question" || msg.type === "provider_error" ||
+          msg.type === "model_active")) {
         this.clearRecoveryTimeout(session.id);
       }
       
