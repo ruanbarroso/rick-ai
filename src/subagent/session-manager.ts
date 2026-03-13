@@ -360,24 +360,39 @@ export class SessionManager {
    */
   async recoverSessions(): Promise<number> {
     // Clean up dead subagent containers (exited after server restart, OOM, etc.)
+    // Only remove containers that finished more than 60s ago to avoid race conditions
+    // with containers that just exited and might be mid-restart.
     try {
       const { stdout: deadOut } = await execFileAsync("docker", [
         "ps", "-a",
         "--filter", "name=subagent-",
         "--filter", "status=exited",
-        "--format", "{{.Names}}",
+        "--format", "{{.Names}}\t{{.FinishedAt}}",
       ]);
-      const deadContainers = deadOut.trim().split("\n").filter((l) => l.trim());
-      if (deadContainers.length > 0) {
-        logger.info({ count: deadContainers.length }, "Session resync: cleaning up dead subagent containers");
-        for (const name of deadContainers) {
-          const match = name.match(/^subagent-([a-f0-9]+)$/);
-          if (match) {
-            // Mark session as done in DB so it doesn't get recovered again
-            this.updateSessionStatus(match[1], "done").catch(() => {});
+      const deadLines = deadOut.trim().split("\n").filter((l) => l.trim());
+      let cleaned = 0;
+      for (const line of deadLines) {
+        const [name, finishedAt] = line.split("\t");
+        if (!name) continue;
+
+        // Skip containers that exited less than 60s ago
+        if (finishedAt) {
+          const finishedTime = new Date(finishedAt).getTime();
+          if (!isNaN(finishedTime) && Date.now() - finishedTime < 60_000) {
+            logger.debug({ name, finishedAt }, "Session resync: skipping recently exited container");
+            continue;
           }
-          execFileAsync("docker", ["rm", "-f", name]).catch(() => {});
         }
+
+        const match = name.match(/^subagent-([a-f0-9]+)$/);
+        if (match) {
+          this.updateSessionStatus(match[1], "done").catch(() => {});
+        }
+        execFileAsync("docker", ["rm", "-f", name]).catch(() => {});
+        cleaned++;
+      }
+      if (cleaned > 0) {
+        logger.info({ cleaned }, "Session resync: cleaned up dead subagent containers");
       }
     } catch (err) {
       logger.warn({ err }, "Session resync: failed to clean up dead containers");
