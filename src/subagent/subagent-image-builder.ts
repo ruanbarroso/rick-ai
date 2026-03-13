@@ -349,7 +349,24 @@ class SubagentImageBuilder {
   }
 
   async ensureForSession(opts?: { onStatus?: (status: SessionImageStatus) => void }): Promise<string> {
-    const local = this.getLocalFingerprint();
+    let local: ReturnType<typeof this.getLocalFingerprint>;
+    try {
+      local = this.getLocalFingerprint();
+    } catch (err: any) {
+      // During OTA deploy, docker/ files may be temporarily absent (ENOENT).
+      // If we already have a working image (current or legacy), use it instead of failing.
+      if (err?.code === "ENOENT") {
+        if (await this.imageExists(CURRENT_IMAGE)) {
+          logger.warn({ err: err.message }, "docker/ files temporarily unavailable (OTA deploy?) — using existing subagent image");
+          return CURRENT_IMAGE;
+        }
+        if (await this.imageExists(LEGACY_IMAGE)) {
+          logger.warn({ err: err.message }, "docker/ files temporarily unavailable (OTA deploy?) — using legacy subagent image");
+          return LEGACY_IMAGE;
+        }
+      }
+      throw err;
+    }
 
     await this.ensureCurrentTagExists();
     await this.ensureBaseImageExists();
