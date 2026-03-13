@@ -2,7 +2,7 @@
 
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, rm, access, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -558,12 +558,64 @@ let lastRunHadRateLimitError = false;
  *  Set during cascade to ignore log replay from previous model's session. */
 let ignoreStderrRateLimitUntil = 0;
 
+// ==================== OPENCODE SQLITE DB ERROR HANDLING ====================
+// When killTree() terminates an OpenCode process during cascade, the SQLite DB
+// at ~/.local/share/opencode/opencode.db may still be locked by the dying process
+// (WAL checkpoint, journal flush, etc.). The next OpenCode invocation then hits
+// "SQLiteError: database is locked" and fails instantly.
+//
+// Additionally, if we delete the DB to recover, the in-memory openCodeSessionId
+// becomes a dangling reference — OpenCode can't find that session in the new DB
+// and silently produces no output.
+//
+// Strategy:
+// 1. Detect "database is locked" and similar SQLite errors in stderr/exit output
+// 2. Delete the corrupted DB and clear openCodeSessionId
+// 3. Add a delay between killTree() and the next spawn to let SQLite release locks
+
+const OPENCODE_DB_PATH = join(homedir(), ".local", "share", "opencode", "opencode.db");
+
+/** Detect SQLite-related errors that indicate a corrupt or locked DB */
+function isSqliteDbError(message) {
+  const lower = String(message || "").toLowerCase();
+  return lower.includes("database is locked")
+    || lower.includes("database is malformed")
+    || lower.includes("database disk image is malformed")
+    || lower.includes("sqliteerror")
+    || lower.includes("unable to open database");
+}
+
+/** Detect errors that suggest the openCodeSessionId is dangling (session not found in DB) */
+function isDanglingSessionError(message) {
+  const lower = String(message || "").toLowerCase();
+  return lower.includes("session not found")
+    || lower.includes("no such session")
+    || lower.includes("session_id");
+}
+
+/** Delete the OpenCode SQLite DB and its WAL/SHM files to recover from corruption/locks */
+async function nukeOpenCodeDb() {
+  const files = [OPENCODE_DB_PATH, `${OPENCODE_DB_PATH}-wal`, `${OPENCODE_DB_PATH}-shm`, `${OPENCODE_DB_PATH}-journal`];
+  for (const f of files) {
+    try { await rm(f, { force: true }); } catch { /* ignore */ }
+  }
+  process.stderr.write(`[opencode-db] Deleted OpenCode DB and WAL/SHM files\n`);
+}
+
+/** Small delay to let OS release file locks after killing a process tree */
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+let lastRunHadDbError = false;
+
 function runOpencodeTurn({ text, model, mode, images }) {
   return new Promise((resolve, reject) => {
     const runStartedAt = Date.now();
     const configContent = JSON.stringify(buildOpencodeConfig());
     const selectedModel = pickModel(model);
     lastRunHadRateLimitError = false;
+    lastRunHadDbError = false;
 
     const args = [
       "opencode-ai",
@@ -789,6 +841,14 @@ function runOpencodeTurn({ text, model, mode, images }) {
         lastRunHadRateLimitError = true;
         killTree();
         finish(new Error("Rate limit detectado nos logs do OpenCode"));
+        return;
+      }
+      // Detect SQLite DB errors (database is locked, malformed, etc.)
+      if (isSqliteDbError(chunk.toString()) && !lastRunHadDbError) {
+        process.stderr.write(`[opencode-db] SQLite error detected in stderr: ${chunk.toString().substring(0, 300)}\n`);
+        lastRunHadDbError = true;
+        killTree();
+        finish(new Error("SQLite database error: " + chunk.toString().substring(0, 200)));
       }
     });
 
@@ -841,7 +901,22 @@ function runOpencodeTurn({ text, model, mode, images }) {
           process.stderr.write(`[rate-limit] Process exit (code=${code}): ${detail.substring(0, 300)}\n`);
           lastRunHadRateLimitError = true;
         }
+        // Check if the exit was due to SQLite DB errors
+        if (isSqliteDbError(detail) || isDanglingSessionError(detail)) {
+          process.stderr.write(`[opencode-db] DB error on exit (code=${code}): ${detail.substring(0, 300)}\n`);
+          lastRunHadDbError = true;
+        }
         finish(new Error(detail));
+        return;
+      }
+
+      // Detect silent failure: process exited 0 but produced no text and no tool output.
+      // This happens when openCodeSessionId references a session that doesn't exist in the DB
+      // (e.g. after DB was deleted). OpenCode silently exits without doing anything.
+      if (!finalText && !gotMeaningfulOutput && openCodeSessionId) {
+        process.stderr.write(`[opencode-db] Silent exit with session '${openCodeSessionId}' — likely dangling session ID\n`);
+        lastRunHadDbError = true;
+        finish(new Error("OpenCode exited silently — possible dangling session ID"));
         return;
       }
 
@@ -928,6 +1003,12 @@ async function handleTurn(payload) {
         // including rate-limit messages. To prevent false-positive detection,
         // set a grace period during which stderr rate-limit patterns are ignored.
         ignoreStderrRateLimitUntil = Date.now() + 30_000; // 30s grace for log replay (OpenCode startup + MCP init + session replay)
+
+        // Add a delay between cascade attempts to let SQLite release locks
+        // from the killed process. Without this, the next model may hit
+        // "database is locked" if the previous process is still dying.
+        await sleepMs(1500);
+
         emitStatus(`Modelo '${modelsToTry[i - 1]}' falhou (rate limit), tentando '${tryModelId}'...`);
         emit({ type: "model_active", modelId: tryModelId, modelName: tryModelId });
       }
@@ -950,6 +1031,33 @@ async function handleTurn(payload) {
         break; // Success — exit the cascade
       } catch (runErr) {
         lastError = runErr;
+
+        // SQLite DB error: delete the DB, clear session ID, and retry the SAME model.
+        // This handles "database is locked", "database is malformed", dangling session IDs, etc.
+        // We retry only once to avoid infinite loops if the DB keeps getting corrupted.
+        if (lastRunHadDbError && !isSuperseded() && !interrupted) {
+          process.stderr.write(`[opencode-db] DB error detected — nuking DB, clearing session, retrying same model\n`);
+          emitStatus("Erro no banco de dados do OpenCode — limpando e tentando novamente...");
+          await nukeOpenCodeDb();
+          openCodeSessionId = "";  // Clear dangling reference
+          await sleepMs(1000);     // Let the OS fully release file locks
+          lastRunHadDbError = false;
+          toolStarted.clear();
+          try {
+            result = await runOpencodeTurn(runArgs);
+            lastError = null;
+            break;
+          } catch (retryErr) {
+            lastError = retryErr;
+            // If it fails again with a DB error, don't retry — fall through to cascade or fail
+            if (lastRunHadDbError) {
+              process.stderr.write(`[opencode-db] DB error persisted after nuke — giving up on DB recovery\n`);
+            }
+            // If it was a rate limit on the retry, continue cascading
+            if (lastRunHadRateLimitError) continue;
+            break;
+          }
+        }
 
         // Auth error: refresh tokens and retry the SAME model once before cascading
         if (lastRunHadAuthError && !lastRunHadRateLimitError && !isSuperseded() && !interrupted) {
