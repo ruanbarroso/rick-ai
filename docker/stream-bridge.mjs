@@ -31,28 +31,32 @@ let polling = true;
 let idleState = false;
 
 // ==================== STDIN → POST /command ====================
+// Stdin may not be connected (when launched without -i flag).
+// Commands are sent via HTTP fallback from the main container.
 
-const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+if (process.stdin.readable && !process.stdin.destroyed) {
+  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
-rl.on("line", async (line) => {
-  if (!line.trim()) return;
-  try {
-    await fetch(`${AGENT_URL}/command`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: line,
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch (err) {
-    process.stderr.write(`[bridge] Failed to forward command: ${err?.message}\n`);
-  }
-});
+  rl.on("line", async (line) => {
+    if (!line.trim()) return;
+    try {
+      await fetch(`${AGENT_URL}/command`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: line,
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch (err) {
+      process.stderr.write(`[bridge] Failed to forward command: ${err?.message}\n`);
+    }
+  });
 
-rl.on("close", () => {
-  // Main container stdin closed — stop polling and exit gracefully
-  polling = false;
-  process.exit(0);
-});
+  rl.on("close", () => {
+    // Main container stdin closed — stop polling and exit gracefully
+    polling = false;
+    process.exit(0);
+  });
+}
 
 // ==================== GET /events → stdout ====================
 

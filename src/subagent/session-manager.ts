@@ -1418,10 +1418,13 @@ export class SessionManager {
    * @param afterEventId - Start streaming events after this event ID (for resync)
    */
   private async startAgentProcess(session: SubAgentSession, afterEventId: number = 0): Promise<void> {
+    // Note: no -i flag — stdin is not connected. Commands are sent via HTTP
+    // fallback in sendToAgentProcess(). The -i flag caused stdout pipe stalls
+    // in docker exec, preventing events from reaching the main container.
     const proc = spawn("docker", [
-      "exec", "-i", session.containerName,
+      "exec", session.containerName,
       "node", "/app/stream-bridge.mjs", String(afterEventId),
-    ], { stdio: ["pipe", "pipe", "pipe"] });
+    ], { stdio: ["ignore", "pipe", "pipe"] });
 
     this.processes.set(session.id, proc);
 
