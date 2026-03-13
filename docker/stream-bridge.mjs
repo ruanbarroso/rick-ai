@@ -62,7 +62,13 @@ async function pollEvents() {
         if (Array.isArray(events)) {
           for (const evt of events) {
             if (evt.data) {
-              process.stdout.write(`${JSON.stringify(evt.data)}\n`);
+              // Include the event ID so the main container can track sync progress.
+              // Injected as _eventId — handleAgentOutput extracts it and updates
+              // _lastSyncedEventId without re-fetching events after a bridge reconnect.
+              const payload = typeof evt.id === "number"
+                ? { ...evt.data, _eventId: evt.id }
+                : evt.data;
+              process.stdout.write(`${JSON.stringify(payload)}\n`);
             }
             if (typeof evt.id === "number" && evt.id > lastEventId) {
               lastEventId = evt.id;

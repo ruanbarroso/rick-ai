@@ -21,6 +21,12 @@ const HISTORY_MSG_MAX_CHARS = 2_000;    // Max chars per individual message (tru
 
 const CONTROL_HTTP_PORT = 3000;
 
+/** Strip ANSI escape sequences from a string (colors, cursor movement, etc.) */
+function stripAnsi(str) {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
+}
+
 // ==================== LOCAL EVENT STORE ====================
 // Durable outbox: all events are persisted locally BEFORE being sent to stdout.
 // When the main process reconnects after a restart, it can fetch missed events.
@@ -824,7 +830,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
       }
 
       if (code !== 0) {
-        const rawDetail = stderrBuffer.trim() || stdoutBuffer.trim() || `opencode run exited with code ${code}`;
+        const rawDetail = stripAnsi(stderrBuffer.trim() || stdoutBuffer.trim() || `opencode run exited with code ${code}`);
         // Truncate error detail to prevent enormous messages from large stderr dumps
         // (e.g. when context window overflows from a massive user message).
         const detail = rawDetail.length > 2000 ? rawDetail.substring(0, 2000) + "... (truncado)" : rawDetail;
@@ -975,10 +981,10 @@ async function handleTurn(payload) {
     emitWaitingUser(result || "");
   } catch (err) {
     if (String(err?.message || "").includes("Interrupted")) {
-      emitWaitingUser("Interrompido.");
+      emitWaitingUser("Interrompido pelo usuario. Envie uma nova mensagem para continuar.");
       return;
     }
-    const rawErrorMsg = err?.message || "Falha ao processar com OpenCode";
+    const rawErrorMsg = stripAnsi(err?.message || "Falha ao processar com OpenCode");
     // Truncate to avoid sending megabytes of stderr as an error message
     const errorMsg = rawErrorMsg.length > 1000 ? rawErrorMsg.substring(0, 1000) + "... (truncado)" : rawErrorMsg;
     emitError(errorMsg);

@@ -480,14 +480,17 @@ export class SessionManager {
         recovered++;
         this.metricsCounters.sessionsRecovered += 1;
 
-        // Fetch and process missed events from the agent's local outbox
+        // Fetch and process missed events from the agent's local outbox.
+        // Use recoveryReplay=true so events are only used to rebuild in-memory state
+        // (session.output, session.state) without re-saving to DB or broadcasting
+        // to session viewers — those events were already persisted before the restart.
         if (agentLastEventId > lastSyncedEventId) {
           try {
             const { events } = await this.fetchSubagentEvents(containerName, lastSyncedEventId);
             logger.info({ sessionId: id, missedEvents: events.length }, "Session resync: processing missed events");
             for (const evt of events) {
               if (evt.data) {
-                this.handleAgentOutput(session, JSON.stringify(evt.data));
+                this.handleAgentOutput(session, JSON.stringify(evt.data), true);
               }
               if (typeof evt.id === "number") {
                 (session as any)._lastSyncedEventId = evt.id;
@@ -1502,19 +1505,42 @@ export class SessionManager {
     }
   }
 
-  private handleAgentOutput(session: SubAgentSession, line: string): void {
+  /**
+   * Process a single NDJSON line from the sub-agent.
+   *
+   * @param recoveryReplay - When true, only update in-memory state (output, session.state).
+   *   Do NOT save to DB or broadcast to session viewers. Used during recoverSessions()
+   *   to replay events that were already persisted before the server restart.
+   */
+  private handleAgentOutput(session: SubAgentSession, line: string, recoveryReplay: boolean = false): void {
     try {
       const msg = JSON.parse(line);
 
+      // Track event ID from the stream bridge for sync state.
+      // The stream bridge injects _eventId into each event payload so we can
+      // persist the sync position and avoid re-fetching events after a restart.
+      if (typeof msg._eventId === "number") {
+        const prevId = (session as any)._lastSyncedEventId ?? 0;
+        if (msg._eventId > prevId) {
+          (session as any)._lastSyncedEventId = msg._eventId;
+          // Persist every 10 events to avoid excessive DB writes
+          if (msg._eventId % 10 === 0 || msg.type === "waiting_user" || msg.type === "done") {
+            this.updateLastSyncedEventId(session.id, msg._eventId).catch(() => {});
+          }
+        }
+        delete msg._eventId; // Clean up so downstream code doesn't see it
+      }
+
       // If the agent emits any substantive event, clear the recovery timeout —
       // it proves the agent received and is processing the re-sent message.
-      if (msg.type === "message" || msg.type === "status" || msg.type === "tool_call" ||
-          msg.type === "waiting_user" || msg.type === "question" || msg.type === "provider_error") {
+      if (!recoveryReplay && (msg.type === "message" || msg.type === "status" || msg.type === "tool_call" ||
+          msg.type === "waiting_user" || msg.type === "question" || msg.type === "provider_error")) {
         this.clearRecoveryTimeout(session.id);
       }
       
       switch (msg.type) {
         case "ready":
+          if (recoveryReplay) break; // Skip — ready events during replay are stale
           logger.info({ sessionId: session.id, providers: msg.providers, tools: msg.tools?.length }, "Sub-agent ready");
           // For recovered sessions: inject fresh JWT token and conversation history
           // (the old token in the container's env may be invalid if JWT_SECRET changed)
@@ -1531,6 +1557,7 @@ export class SessionManager {
           break;
 
         case "history_loaded":
+          if (recoveryReplay) break; // Skip — history_loaded during replay is stale
           logger.info({ sessionId: session.id, count: msg.count }, "Agent conversation history restored");
           // After history injection, check if the last message was from the user
           // (i.e. the agent was mid-turn when the server restarted). If so, re-send
@@ -1550,7 +1577,7 @@ export class SessionManager {
 
         case "message":
           if (msg.text) {
-            if (session.state !== "running") {
+            if (!recoveryReplay && session.state !== "running") {
               session.state = "running";
               if (this.onSessionMessage) {
                 this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
@@ -1559,58 +1586,62 @@ export class SessionManager {
             session.output += msg.text + "\n";
             session.updatedAt = Date.now();
             session.turnHadStreamedText = true;
-            this.sendToUser(session, msg.text);
+            if (!recoveryReplay) this.sendToUser(session, msg.text);
           }
           break;
 
         case "status":
           // Status updates (tool execution, LLM switching, context rotation)
           if (msg.message) {
-            if (session.state !== "running") {
+            if (!recoveryReplay && session.state !== "running") {
               session.state = "running";
               if (this.onSessionMessage) {
                 this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
               }
             }
-            const statusText = normalizeStatusToolLine(msg.message);
-            this.sendToUser(session, statusText, "tool_use");
+            if (!recoveryReplay) {
+              const statusText = normalizeStatusToolLine(msg.message);
+              this.sendToUser(session, statusText, "tool_use");
+            }
           }
           break;
 
         case "tool_call":
           if (msg.event && msg.name) {
-            if (session.state !== "running") {
+            if (!recoveryReplay && session.state !== "running") {
               session.state = "running";
               if (this.onSessionMessage) {
                 this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
               }
             }
 
-            if (msg.event === "start") {
-              this.metricsCounters.toolCallsStarted += 1;
-              const toolLine = formatToolLifecycleLine({
-                event: "start",
-                name: msg.name,
-                args: typeof msg.input === "object" && msg.input ? msg.input : {},
-              });
-              this.sendToUser(session, toolLine, "tool_use");
-            } else if (msg.event === "completed") {
-              this.metricsCounters.toolCallsCompleted += 1;
-              const toolLine = formatToolLifecycleLine({
-                event: "completed",
-                name: msg.name,
-                durationMs: typeof msg.durationMs === "number" ? msg.durationMs : undefined,
-                outputPreview: typeof msg.outputPreview === "string" ? msg.outputPreview : undefined,
-              });
-              this.sendToUser(session, toolLine, "tool_use");
-            } else if (msg.event === "error") {
-              this.metricsCounters.toolCallsErrored += 1;
-              const toolLine = formatToolLifecycleLine({
-                event: "error",
-                name: msg.name,
-                message: typeof msg.message === "string" ? msg.message : "erro na ferramenta",
-              });
-              this.sendToUser(session, toolLine, "tool_use");
+            if (!recoveryReplay) {
+              if (msg.event === "start") {
+                this.metricsCounters.toolCallsStarted += 1;
+                const toolLine = formatToolLifecycleLine({
+                  event: "start",
+                  name: msg.name,
+                  args: typeof msg.input === "object" && msg.input ? msg.input : {},
+                });
+                this.sendToUser(session, toolLine, "tool_use");
+              } else if (msg.event === "completed") {
+                this.metricsCounters.toolCallsCompleted += 1;
+                const toolLine = formatToolLifecycleLine({
+                  event: "completed",
+                  name: msg.name,
+                  durationMs: typeof msg.durationMs === "number" ? msg.durationMs : undefined,
+                  outputPreview: typeof msg.outputPreview === "string" ? msg.outputPreview : undefined,
+                });
+                this.sendToUser(session, toolLine, "tool_use");
+              } else if (msg.event === "error") {
+                this.metricsCounters.toolCallsErrored += 1;
+                const toolLine = formatToolLifecycleLine({
+                  event: "error",
+                  name: msg.name,
+                  message: typeof msg.message === "string" ? msg.message : "erro na ferramenta",
+                });
+                this.sendToUser(session, toolLine, "tool_use");
+              }
             }
             session.updatedAt = Date.now();
           }
@@ -1655,10 +1686,12 @@ export class SessionManager {
           session.updatedAt = Date.now();
           session.turnHadStreamedText = false;
 
-          this.sendToUser(session, JSON.stringify(pendingQuestion), "question");
+          if (!recoveryReplay) {
+            this.sendToUser(session, JSON.stringify(pendingQuestion), "question");
 
-          if (this.onSessionMessage) {
-            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+            if (this.onSessionMessage) {
+              this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+            }
           }
 
           logger.info({ sessionId: session.id, requestId, questionCount: questions.length }, "Sub-agent asked a question");
@@ -1669,7 +1702,7 @@ export class SessionManager {
           if (isSubAgentModelId(msg.modelId)) {
             session.preferredModel = msg.modelId;
             session.updatedAt = Date.now();
-            if (this.onSessionMessage) {
+            if (!recoveryReplay && this.onSessionMessage) {
               this.onSessionMessage(
                 session.id,
                 "system",
@@ -1682,25 +1715,29 @@ export class SessionManager {
 
         case "provider_error":
           if (msg.message) {
-            const message = String(msg.message);
-            this.metricsCounters.providerErrors += 1;
-            if (message.includes("Limite maximo de passos")) this.metricsCounters.maxStepsHits += 1;
-            if (message.includes("Sem execucao concreta detectada")) this.metricsCounters.noExecutionGuards += 1;
-            this.sendToUser(session, msg.message, "error");
+            if (!recoveryReplay) {
+              const message = String(msg.message);
+              this.metricsCounters.providerErrors += 1;
+              if (message.includes("Limite maximo de passos")) this.metricsCounters.maxStepsHits += 1;
+              if (message.includes("Sem execucao concreta detectada")) this.metricsCounters.noExecutionGuards += 1;
+              this.sendToUser(session, msg.message, "error");
+            }
           }
           break;
 
         case "fallback_used":
-          this.metricsCounters.fallbackUsed += 1;
+          if (!recoveryReplay) this.metricsCounters.fallbackUsed += 1;
           break;
 
         case "provider_retry":
-          if (msg.reason === "timeout") this.metricsCounters.timeoutRetries += 1;
-          if (msg.reason === "auth") this.metricsCounters.authRetries += 1;
+          if (!recoveryReplay) {
+            if (msg.reason === "timeout") this.metricsCounters.timeoutRetries += 1;
+            if (msg.reason === "auth") this.metricsCounters.authRetries += 1;
+          }
           break;
 
         case "context_compacted":
-          this.metricsCounters.contextCompactions += 1;
+          if (!recoveryReplay) this.metricsCounters.contextCompactions += 1;
           break;
 
         case "waiting_user":
@@ -1713,18 +1750,20 @@ export class SessionManager {
             // Only send the result text if it wasn't already streamed via "message" events.
             // The agent emits each text chunk as "message" during streaming AND the full
             // concatenated text as "waiting_user" result — sending both causes duplicates.
-            if (!session.turnHadStreamedText) {
+            if (!recoveryReplay && !session.turnHadStreamedText) {
               const messageType = isExecutionOperationalFailure(msg.result) ? "error" : "text";
               this.sendToUser(session, msg.result, messageType);
             }
           }
           session.turnHadStreamedText = false; // reset for next turn
-          // Notify session viewers of state change
-          if (this.onSessionMessage) {
-            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+          if (!recoveryReplay) {
+            // Notify session viewers of state change
+            if (this.onSessionMessage) {
+              this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+            }
+            logger.info({ sessionId: session.id }, "Sub-agent waiting for user input");
+            this.metricsCounters.turnsCompleted += 1;
           }
-          logger.info({ sessionId: session.id }, "Sub-agent waiting for user input");
-          this.metricsCounters.turnsCompleted += 1;
           break;
 
         case "done":
@@ -1733,38 +1772,42 @@ export class SessionManager {
           if (msg.result) {
             session.output += msg.result + "\n";
             // Only send the result if it wasn't already streamed via "message" events
-            if (!session.turnHadStreamedText) {
+            if (!recoveryReplay && !session.turnHadStreamedText) {
               this.sendToUser(session, msg.result);
             }
           }
           session.turnHadStreamedText = false;
-          // Notify session viewers of state change (not rendered as a chat bubble)
-          if (this.onSessionMessage) {
-            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
-          }
-          // Persist done state to DB
-          this.updateSessionStatus(session.id, "done").catch(() => {});
-          // Fire post-session learning callback (fire-and-forget)
-          if (this.onSessionDone && session.output.trim()) {
-            try {
-              this.onSessionDone(session.id, session.taskDescription, session.output, session.numericUserId);
-            } catch (err) {
-              logger.warn({ err, sessionId: session.id }, "Post-session learning callback failed");
+          if (!recoveryReplay) {
+            // Notify session viewers of state change (not rendered as a chat bubble)
+            if (this.onSessionMessage) {
+              this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
             }
+            // Persist done state to DB
+            this.updateSessionStatus(session.id, "done").catch(() => {});
+            // Fire post-session learning callback (fire-and-forget)
+            if (this.onSessionDone && session.output.trim()) {
+              try {
+                this.onSessionDone(session.id, session.taskDescription, session.output, session.numericUserId);
+              } catch (err) {
+                logger.warn({ err, sessionId: session.id }, "Post-session learning callback failed");
+              }
+            }
+            logger.info({ sessionId: session.id }, "Sub-agent task done");
           }
-          logger.info({ sessionId: session.id }, "Sub-agent task done");
           break;
 
         case "error":
-          logger.error({ sessionId: session.id, error: msg.message }, "Sub-agent error");
-          if (msg.message) {
-            this.sendToUser(session, `Erro: ${msg.message}`, "error");
+          if (!recoveryReplay) {
+            logger.error({ sessionId: session.id, error: msg.message }, "Sub-agent error");
+            if (msg.message) {
+              this.sendToUser(session, `Erro: ${msg.message}`, "error");
+            }
           }
           // After an error, the sub-agent returns to waiting for input —
           // update state so the UI shows the compose bar instead of "Digitando..."
           session.state = "waiting_user";
           session.updatedAt = Date.now();
-          if (this.onSessionMessage) {
+          if (!recoveryReplay && this.onSessionMessage) {
             this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
           }
           break;
