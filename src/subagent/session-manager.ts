@@ -475,9 +475,10 @@ export class SessionManager {
         let variantName: string | undefined;
         let taskDescription: string | undefined;
         let lastSyncedEventId = 0;
+        let restoredExecutionMode: SubAgentExecutionMode = DEFAULT_SUBAGENT_EXECUTION_MODE;
         try {
           const dbRow = await query(
-            `SELECT task, connector_name, user_external_id, user_id, variant_name, last_synced_event_id FROM sub_agent_sessions WHERE id = $1`,
+            `SELECT task, connector_name, user_external_id, user_id, variant_name, last_synced_event_id, execution_mode FROM sub_agent_sessions WHERE id = $1`,
             [id]
           );
           if (dbRow.rows.length > 0) {
@@ -487,6 +488,8 @@ export class SessionManager {
             numericUserId = dbRow.rows[0].user_id ?? null;
             variantName = dbRow.rows[0].variant_name || undefined;
             lastSyncedEventId = dbRow.rows[0].last_synced_event_id ?? 0;
+            const dbMode = dbRow.rows[0].execution_mode;
+            if (dbMode && isSubAgentExecutionMode(dbMode)) restoredExecutionMode = dbMode;
           }
         } catch (err) {
           logger.warn({ err, sessionId: id }, "Session resync: failed to restore routing metadata from DB, using defaults");
@@ -530,7 +533,7 @@ export class SessionManager {
           numericUserId,
           variantName,
           preferredModel: DEFAULT_SUBAGENT_MODEL,
-          executionMode: DEFAULT_SUBAGENT_EXECUTION_MODE,
+          executionMode: restoredExecutionMode,
           output: "",
           pendingQuestion: null,
           recovered: true,
@@ -1074,6 +1077,16 @@ export class SessionManager {
     }
     session.executionMode = mode;
     session.updatedAt = Date.now();
+
+    // Persist to DB so the mode survives main container restarts
+    query(
+      `UPDATE sub_agent_sessions SET execution_mode = $1 WHERE id = $2`,
+      [mode, sessionId],
+    ).catch((err) => logger.warn({ err, sessionId, mode }, "Failed to persist execution mode to DB"));
+
+    // Notify the running agent so the next turn uses the new mode
+    this.sendToAgentProcess(sessionId, { type: "update_mode", mode });
+
     return session.executionMode;
   }
 
@@ -2181,11 +2194,11 @@ export class SessionManager {
     if (!session.numericUserId) return;
     try {
       await query(
-        `INSERT INTO sub_agent_sessions (id, user_id, task, status, connector_name, user_external_id, variant_name, started_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        `INSERT INTO sub_agent_sessions (id, user_id, task, status, connector_name, user_external_id, variant_name, execution_mode, started_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
          ON CONFLICT (id) DO NOTHING`,
         [session.id, session.numericUserId, session.taskDescription || null, "active",
-          session.connectorName, session.userId, session.variantName || null]
+          session.connectorName, session.userId, session.variantName || null, session.executionMode]
       );
     } catch (err) {
       logger.warn({ err, sessionId: session.id }, "Failed to persist session to DB");

@@ -334,6 +334,16 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE sub_agent_sessions ADD COLUMN IF NOT EXISTS last_synced_event_id INTEGER DEFAULT 0`,
     ],
   },
+
+  {
+    name: "019_subagent_execution_mode",
+    statements: [
+      // Persist the execution mode (plan/build) so it survives main container restarts.
+      // Without this, recovered sessions always default to "build" even if the user
+      // had explicitly switched to "plan".
+      `ALTER TABLE sub_agent_sessions ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(10) DEFAULT 'build'`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {

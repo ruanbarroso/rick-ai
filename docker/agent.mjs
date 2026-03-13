@@ -860,7 +860,9 @@ async function handleTurn(payload) {
   // Use pending model (from live switch) if set, otherwise use payload model
   const requestedModel = pendingModelId || (typeof payload.model === "string" ? payload.model : DEFAULT_MODEL_ID);
   pendingModelId = ""; // consume it
-  const mode = payload.mode === "plan" ? "plan" : "build";
+  // Use pending mode (from live switch via viewer) if set, otherwise use payload mode
+  const mode = pendingMode || (payload.mode === "plan" ? "plan" : "build");
+  pendingMode = ""; // consume it
   const userText = String(payload.text || "").trim();
 
   emit({ type: "model_active", modelId: requestedModel, modelName: requestedModel });
@@ -1024,6 +1026,15 @@ function handleUpdateModel(payload) {
   }
 }
 
+/** Updated execution mode (plan/build) for the next turn. Does NOT interrupt a running turn. */
+let pendingMode = "";
+function handleUpdateMode(payload) {
+  if (typeof payload.mode === "string" && (payload.mode === "plan" || payload.mode === "build")) {
+    pendingMode = payload.mode;
+    emit({ type: "mode_updated", mode: payload.mode });
+  }
+}
+
 function handleHistory(payload) {
   const incoming = Array.isArray(payload.messages) ? payload.messages : [];
   historyMessages = incoming
@@ -1082,6 +1093,11 @@ rl.on("line", (line) => {
     return;
   }
 
+  if (msg.type === "update_mode") {
+    handleUpdateMode(msg);
+    return;
+  }
+
   if (msg.type === "history") {
     handleHistory(msg);
     return;
@@ -1135,6 +1151,10 @@ function handleHttpCommand(msg) {
   }
   if (msg.type === "update_model") {
     handleUpdateModel(msg);
+    return;
+  }
+  if (msg.type === "update_mode") {
+    handleUpdateMode(msg);
     return;
   }
   if (msg.type === "history") {
