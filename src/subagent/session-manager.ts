@@ -1491,12 +1491,14 @@ export class SessionManager {
       const health = JSON.parse(raw);
       logger.info({ sessionId: session.id, agentState: health.state, lastEventId: health.lastEventId }, "Agent still alive after bridge disconnect — reconnecting");
 
-      // Fetch any missed events before reconnecting the stream
+      // Fetch any missed events before reconnecting the stream.
+      // Use recoveryReplay=true to avoid re-saving/re-broadcasting events
+      // that were already persisted — only rebuild in-memory state.
       const lastSynced = (session as any)._lastSyncedEventId ?? 0;
       const { events } = await this.fetchSubagentEvents(session.containerName, lastSynced);
       for (const evt of events) {
         if (evt.data) {
-          this.handleAgentOutput(session, JSON.stringify(evt.data));
+          this.handleAgentOutput(session, JSON.stringify(evt.data), true);
         }
         if (typeof evt.id === "number") {
           (session as any)._lastSyncedEventId = evt.id;
