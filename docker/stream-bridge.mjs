@@ -11,6 +11,16 @@
  */
 
 import { createInterface } from "node:readline";
+import { writeSync } from "node:fs";
+
+/**
+ * Write a line to stdout using synchronous fs.writeSync(fd=1).
+ * This bypasses Node.js stream buffering which can stall inside
+ * `docker exec -i` pipes, causing events to never reach the main container.
+ */
+function writeLine(line) {
+  writeSync(1, line + "\n");
+}
 
 const AGENT_URL = "http://localhost:3000";
 const POLL_INTERVAL_MS = 500;  // 500ms polling — good balance between latency and load
@@ -68,7 +78,7 @@ async function pollEvents() {
               const payload = typeof evt.id === "number"
                 ? { ...evt.data, _eventId: evt.id }
                 : evt.data;
-              process.stdout.write(`${JSON.stringify(payload)}\n`);
+              writeLine(JSON.stringify(payload));
             }
             if (typeof evt.id === "number" && evt.id > lastEventId) {
               lastEventId = evt.id;
