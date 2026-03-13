@@ -1339,7 +1339,7 @@ export class SessionManager {
    * Build environment variables for the Agent API (JWT token + upfront credentials).
    * Build environment variables for the Agent API (JWT token + upfront credentials).
    */
-  private async buildAgentApiEnv(session: SubAgentSession): Promise<Record<string, string>> {
+   private async buildAgentApiEnv(session: SubAgentSession): Promise<Record<string, string>> {
     const agentEnv: Record<string, string> = {};
 
     // JWT token for authenticating against Rick's /api/agent/* endpoints
@@ -1350,6 +1350,16 @@ export class SessionManager {
     const apiUrl = this.getCurrentApiUrl();
     agentEnv.RICK_SESSION_TOKEN = token;
     agentEnv.RICK_API_URL = apiUrl;
+
+    // Inject the session owner's display name so the sub-agent can address them correctly.
+    // Without this, the LLM tends to guess "Ruan" because most memories were created by him.
+    if (session.numericUserId) {
+      try {
+        const userRow = await query(`SELECT display_name FROM users WHERE id = $1`, [session.numericUserId]);
+        const displayName = userRow.rows[0]?.display_name;
+        if (displayName) agentEnv.RICK_USER_NAME = displayName;
+      } catch { /* non-critical — agent just won't know the user's name */ }
+    }
     agentEnv.RICK_PLAYWRIGHT_MCP_COMMAND = process.env.RICK_PLAYWRIGHT_MCP_COMMAND
       || JSON.stringify(["node", "/app/node_modules/@playwright/mcp/cli.js", "--browser", "chrome", "--no-sandbox"]);
 
