@@ -49,10 +49,14 @@ async function callRick(path, init = {}) {
   return json;
 }
 
+// Use the configured assistant name in tool descriptions so the LLM refers to
+// the assistant by its custom name (e.g. "Zoe") instead of hardcoded "Rick".
+const agentName = process.env.AGENT_NAME || "Rick";
+
 const tools = [
   {
     name: "rick_memory",
-    description: "Lista memorias do Rick. Sem categoria retorna todas.",
+    description: `Lista memorias da ${agentName}. Sem categoria retorna todas.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -63,7 +67,7 @@ const tools = [
   },
   {
     name: "rick_search",
-    description: "Busca semantica nas memorias/conversas do Rick.",
+    description: `Busca semantica nas memorias/conversas da ${agentName}.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -76,7 +80,7 @@ const tools = [
   },
   {
     name: "rick_save_memory",
-    description: "Tenta salvar memoria no Rick principal.",
+    description: `Tenta salvar memoria na ${agentName} principal.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -90,7 +94,7 @@ const tools = [
   },
   {
     name: "rick_delete_memory",
-    description: "Remove uma memoria incorreta, desatualizada ou lixo do Rick. Use quando encontrar memorias com dados errados ou que nao fazem sentido.",
+    description: `Remove uma memoria incorreta, desatualizada ou lixo da ${agentName}. Use quando encontrar memorias com dados errados ou que nao fazem sentido.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -103,7 +107,7 @@ const tools = [
   },
   {
     name: "rick_conversations",
-    description: "Lista conversas recentes do usuario no Rick.",
+    description: `Lista conversas recentes do usuario na ${agentName}.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -114,7 +118,7 @@ const tools = [
   },
   {
     name: "rick_config",
-    description: "Retorna configuracao operacional segura do Rick.",
+    description: `Retorna configuracao operacional segura da ${agentName}.`,
     inputSchema: {
       type: "object",
       properties: {},

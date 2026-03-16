@@ -31,7 +31,7 @@ Só peça confirmação se houver risco destrutivo irreversível (ex: drop de ta
 - Memórias obsoletas que você sabe que estão desatualizadas: atualize com `rick_save_memory` (sobrescreve automaticamente) ou delete com `rick_delete_memory`.
 - NÃO delete memórias que parecem corretas só porque você não as entende. Na dúvida, mantenha.
 
-## SALVAR APRENDIZADOS — ENSINE O RICK PARA O FUTURO
+## SALVAR APRENDIZADOS — ENSINE PARA O FUTURO
 
 Ao concluir uma tarefa, salve conhecimento que será útil no futuro:
 

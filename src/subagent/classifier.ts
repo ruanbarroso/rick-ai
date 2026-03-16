@@ -5,14 +5,15 @@ import { logger } from "../config/logger.js";
 
 const CLASSIFIER_MODEL = config.gemini.model;
 
-const CLASSIFIER_PROMPT = `Voce e um roteador de mensagens. Classifique a mensagem do usuario.
+function buildClassifierPrompt(name: string): string {
+  return `Voce e um roteador de mensagens. Classifique a mensagem do usuario.
 
 CATEGORIAS:
 
-SELF — Rick (assistente) responde diretamente. Use para:
+SELF — ${name} (assistente) responde diretamente. Use para:
 - Conversa casual, saudacoes, perguntas simples
 - Pedir para lembrar/salvar/esquecer informacoes (memoria)
-- Perguntas sobre o proprio Rick ou suas capacidades
+- Perguntas sobre o proprio ${name} ou suas capacidades
 - Explicacoes conceituais curtas
 - Opinioes, conselhos, dicas rapidas
 - Quando o usuario fala COM o assistente diretamente
@@ -35,7 +36,7 @@ REGRAS:
 1. Na DUVIDA = SELF
 2. Mencionar tecnologia NAO significa delegar. "Explica React" = SELF
 3. "Salve/lembre/guarde" = SELF (memoria)
-4. Instrucoes diretas AO Rick = SELF
+4. Instrucoes diretas AO ${name} = SELF
 5. DELEGATE para tarefas que precisam de ACAO (codigo, browser, pesquisa, automacao)
 
 FORMATO DE RESPOSTA (uma unica linha):
@@ -60,6 +61,7 @@ Exemplos:
 IMPORTANTE: NAO liste "outlook,gmail" juntos a menos que o usuario tenha mencionado ambos.
 
 Responda APENAS com o formato acima. Nada mais.`;
+}
 
 let geminiClient: GoogleGenerativeAI | null = null;
 
@@ -72,7 +74,7 @@ function getClient(): GoogleGenerativeAI {
 
 /**
  * Classify a user message using Gemini Flash to determine routing.
- * Returns null for SELF (Rick handles directly), or a TaskClassification for DELEGATE.
+ * Returns null for SELF (main assistant handles directly), or a TaskClassification for DELEGATE.
  * @param signal Optional AbortSignal to cancel the classification request
  */
 export async function classifyTask(userMessage: string, signal?: AbortSignal): Promise<TaskClassification | null> {
@@ -94,7 +96,7 @@ export async function classifyTask(userMessage: string, signal?: AbortSignal): P
     const client = getClient();
     const model = client.getGenerativeModel({
       model: CLASSIFIER_MODEL,
-      systemInstruction: CLASSIFIER_PROMPT,
+      systemInstruction: buildClassifierPrompt(config.agentName),
     });
 
     // Apply abort signal via Promise.race
@@ -131,7 +133,7 @@ export async function classifyTask(userMessage: string, signal?: AbortSignal): P
       };
     }
 
-    // SELF or anything else — Rick handles directly
+    // SELF or anything else — main assistant handles directly
     return null;
   } catch (err) {
     logger.warn({ err }, "LLM classifier failed, defaulting to SELF");
