@@ -609,8 +609,25 @@ function sleepMs(ms) {
 
 let lastRunHadDbError = false;
 
+// Safety timeout for runOpencodeTurn: if the Promise doesn't resolve within this
+// period, force-reject to prevent handleTurn from hanging forever.
+// This catches edge cases where child.on("close") never fires or finish() has a
+// race condition that prevents resolve/reject from being called.
+// Set to 12 minutes (longer than WATCHDOG_MS=10min to let the watchdog fire first).
+const RUN_SAFETY_TIMEOUT_MS = 12 * 60_000;
+
+function withSafetyTimeout(promise, timeoutMs, label) {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label}: safety timeout after ${timeoutMs / 60_000} minutes — Promise never resolved`));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+}
+
 function runOpencodeTurn({ text, model, mode, images }) {
-  return new Promise((resolve, reject) => {
+  const innerPromise = new Promise((resolve, reject) => {
     const runStartedAt = Date.now();
     const configContent = JSON.stringify(buildOpencodeConfig());
     const selectedModel = pickModel(model);
@@ -930,6 +947,9 @@ function runOpencodeTurn({ text, model, mode, images }) {
       finish(null, finalText);
     });
   });
+  // Wrap with a safety timeout to prevent the Promise from hanging forever
+  // if child.on("close") never fires or finish() has a race condition.
+  return withSafetyTimeout(innerPromise, RUN_SAFETY_TIMEOUT_MS, "runOpencodeTurn");
 }
 
 async function handleTurn(payload) {
