@@ -723,7 +723,14 @@ function runOpencodeTurn({ text, model, mode, images }) {
     // After a tool_use, the LLM needs time to process the result and generate
     // the next response — that can take 30+ seconds with rate-limit retries.
     // After step_finish with no subsequent step_start, the turn is truly done.
-    const TURN_COMPLETION_GRACE_MS = 30_000; // 30s after last step_finish
+    //
+    // NOTE: 30s was too aggressive — with large contexts (100+ tool calls),
+    // the LLM API response can take 60+ seconds between step_finish and the
+    // next step_start. This caused premature turn termination in long sessions
+    // (e.g. session 99f81e0553e713a5 was killed mid-implementation).
+    // The stderr reset mechanism (line ~826) mitigates this when OpenCode emits
+    // logs, but API calls to Claude can be silent for 60+ seconds.
+    const TURN_COMPLETION_GRACE_MS = 120_000; // 2 minutes after last step_finish
     let turnCompletionTimer = null;
     function startTurnCompletionTimer() {
       if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
