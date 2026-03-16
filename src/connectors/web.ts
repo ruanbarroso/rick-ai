@@ -470,7 +470,7 @@ export class WebConnector implements Connector {
             canWrite = tokenUserId != null && tokenUserId === session.numericUserId;
             // Session is live — send history + info
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
-            const canManageProviders = session.numericUserId != null && session.numericUserId !== 1;
+            const canManageProviders = session.numericUserId != null;
             ws.send(JSON.stringify({
               type: "session_info",
               session: {
@@ -494,7 +494,7 @@ export class WebConnector implements Connector {
             // Map DB status ('active'|'done'|'killed') to viewer state
             const state = dbInfo?.status === "killed" ? "killed" : "done";
             const variantName = dbInfo?.variantName || undefined;
-            const canManageProviders = dbInfo?.numericUserId != null && dbInfo.numericUserId !== 1;
+            const canManageProviders = dbInfo?.numericUserId != null;
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
             ws.send(JSON.stringify({
               type: "session_info",
@@ -1403,12 +1403,9 @@ export class WebConnector implements Connector {
       const devRepo = process.env.DEV_REPO_URL || "";
       const githubToken = process.env.GITHUB_TOKEN || "";
 
-      const anthropicConn = this.adminUserId != null
-        ? await this.claudeOAuth.isConnected(this.adminUserId)
-        : { connected: false };
-      const openaiConn = this.adminUserId != null
-        ? await this.openaiOAuth.isConnected(this.adminUserId)
-        : { connected: false };
+      // Check shared (user_id=NULL) OAuth status for the settings UI
+      const anthropicConn = await this.claudeOAuth.isConnected(null);
+      const openaiConn = await this.openaiOAuth.isConnected(null);
 
       // Check if GitHub token has push access to the project repo
       let githubRepoWriteAccess = false;
@@ -1704,19 +1701,19 @@ export class WebConnector implements Connector {
     const liveSession = this.agentBridge.getSessionsForUI().find((s) => s.id === sessionId);
     const liveUserId = liveSession?.numericUserId ?? null;
     if (liveUserId != null) {
-      return { userId: liveUserId, canManageProviders: liveUserId !== 1 };
+      return { userId: liveUserId, canManageProviders: true };
     }
 
     const dbInfo = await this.agentBridge.getSessionInfoFromDB(sessionId);
     const dbUserId = dbInfo?.numericUserId ?? null;
-    return { userId: dbUserId, canManageProviders: dbUserId != null && dbUserId !== 1 };
+    return { userId: dbUserId, canManageProviders: dbUserId != null };
   }
 
   private async getSessionOAuthStatus(sessionId: string): Promise<{
     canManageProviders: boolean;
     providers: {
-      anthropic: { connected: boolean; source: "user" | "admin" | "none"; email: string | null };
-      openai: { connected: boolean; source: "user" | "admin" | "none"; email: string | null };
+      anthropic: { connected: boolean; source: "user" | "shared" | "none"; email: string | null };
+      openai: { connected: boolean; source: "user" | "shared" | "none"; email: string | null };
     };
   }> {
     const resolved = await this.resolveSessionOAuthUser(sessionId);
@@ -1732,24 +1729,24 @@ export class WebConnector implements Connector {
       return empty;
     }
 
-    const adminUserId = 1;
-    const [userClaude, userOpenAI, adminClaude, adminOpenAI] = await Promise.all([
+    // Check user's own tokens and shared (user_id=NULL) tokens
+    const [userClaude, userOpenAI, sharedClaude, sharedOpenAI] = await Promise.all([
       this.claudeOAuth.isConnected(resolved.userId),
       this.openaiOAuth.isConnected(resolved.userId),
-      this.claudeOAuth.isConnected(adminUserId),
-      this.openaiOAuth.isConnected(adminUserId),
+      this.claudeOAuth.isConnected(null),
+      this.openaiOAuth.isConnected(null),
     ]);
 
     const anthropic = userClaude.connected
       ? { connected: true, source: "user" as const, email: userClaude.email || null }
-      : adminClaude.connected
-        ? { connected: true, source: "admin" as const, email: adminClaude.email || null }
+      : sharedClaude.connected
+        ? { connected: true, source: "shared" as const, email: sharedClaude.email || null }
         : { connected: false, source: "none" as const, email: null };
 
     const openai = userOpenAI.connected
       ? { connected: true, source: "user" as const, email: userOpenAI.email || null }
-      : adminOpenAI.connected
-        ? { connected: true, source: "admin" as const, email: adminOpenAI.email || null }
+      : sharedOpenAI.connected
+        ? { connected: true, source: "shared" as const, email: sharedOpenAI.email || null }
         : { connected: false, source: "none" as const, email: null };
 
     return {
@@ -1787,19 +1784,15 @@ export class WebConnector implements Connector {
         return;
       }
 
-      if (this.adminUserId == null) {
-        this.send(ws, { type: "oauth_result", provider, success: false, error: "Admin user not resolved yet." });
-        return;
-      }
-
+      // Save as shared token (user_id=NULL) — the settings UI configures the default/fallback OAuth
       if (provider === "anthropic") {
-        const res = await this.claudeOAuth.exchangeCode(this.adminUserId, input);
+        const res = await this.claudeOAuth.exchangeCode(null, input);
         this.send(ws, { type: "oauth_result", provider, success: res.success, error: res.error || null, email: res.email || null });
         return;
       }
 
       if (provider === "openai") {
-        const res = await this.openaiOAuth.exchangeCallback(this.adminUserId, input);
+        const res = await this.openaiOAuth.exchangeCallback(null, input);
         this.send(ws, { type: "oauth_result", provider, success: res.success, error: res.error || null, email: res.email || null });
         return;
       }
@@ -1813,17 +1806,14 @@ export class WebConnector implements Connector {
 
   private async handleOAuthDisconnect(ws: WebSocket, provider: string): Promise<void> {
     try {
-      if (this.adminUserId == null) {
-        this.send(ws, { type: "oauth_result", provider, success: false, error: "Admin user not resolved yet." });
-        return;
-      }
+      // Disconnect shared token (user_id=NULL) — the settings UI manages default/fallback OAuth
       if (provider === "anthropic") {
-        await this.claudeOAuth.disconnect(this.adminUserId);
+        await this.claudeOAuth.disconnect(null);
         this.send(ws, { type: "oauth_result", provider, success: true });
         return;
       }
       if (provider === "openai") {
-        await this.openaiOAuth.disconnect(this.adminUserId);
+        await this.openaiOAuth.disconnect(null);
         this.send(ws, { type: "oauth_result", provider, success: true });
         return;
       }

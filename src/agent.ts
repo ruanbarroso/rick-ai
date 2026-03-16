@@ -614,22 +614,21 @@ Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a inform
    * subagents access data via the read-only Agent API (/api/agent/*) with JWT auth.
    */
 
-  /** Resolve a Claude OAuth token, falling back to admin (id=1) when the user has none. */
+  /** Resolve a Claude OAuth token, falling back to shared (user_id=NULL) when the user has none. */
   private async resolveClaudeToken(userId: number): Promise<string | null> {
-    const adminUserId = 1;
-    const uids = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
-    for (const uid of uids) {
+    // Try user's own token first, then fall back to shared token (user_id=NULL in DB)
+    const uidsToTry: (number | null)[] = [userId, null];
+    for (const uid of uidsToTry) {
       const token = await this.claudeOAuth.getValidToken(uid);
       if (token) return token;
     }
     return null;
   }
 
-  /** Resolve an OpenAI OAuth token, falling back to admin (id=1) when the user has none. */
+  /** Resolve an OpenAI OAuth token, falling back to shared (user_id=NULL) when the user has none. */
   private async resolveOpenAIToken(userId: number): Promise<{ accessToken: string; accountId: string | null } | null> {
-    const adminUserId = 1;
-    const uids = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
-    for (const uid of uids) {
+    const uidsToTry: (number | null)[] = [userId, null];
+    for (const uid of uidsToTry) {
       const token = await this.openaiOAuth.getValidToken(uid);
       if (token) return token;
     }

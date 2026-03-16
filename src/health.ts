@@ -655,9 +655,8 @@ async function handleAgentApiGet(
         return;
       }
 
-      // OAuth tokens are global — try user first, then fall back to admin (id=1)
-      const adminUserId = 1;
-      const userIdsToTry = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
+      // Try user's own token first, then fall back to shared token (user_id=NULL)
+      const userIdsToTry: (number | null)[] = [userId, null];
 
       let accessToken: string | null = null;
       let accountId: string | null = null;
@@ -700,8 +699,8 @@ async function handleAgentApiGet(
         return;
       }
 
-      const adminUserId = 1;
-      const userIdsToTry = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
+      // Try user's own token first, then fall back to shared token (user_id=NULL)
+      const userIdsToTry: (number | null)[] = [userId, null];
 
       let auth: Record<string, any> | null = null;
       for (const uid of userIdsToTry) {

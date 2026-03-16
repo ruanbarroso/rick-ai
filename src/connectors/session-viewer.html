@@ -1344,9 +1344,9 @@ function updateProviderCard(provider, data) {
     badge.textContent = 'Conectado';
     action.textContent = 'Desconectar';
     action.className = 'provider-action danger';
-  } else if (data.connected && data.source === 'admin') {
+  } else if (data.connected && data.source === 'shared') {
     badge.classList.add('fallback');
-    badge.textContent = 'Usando admin';
+    badge.textContent = 'Compartilhado';
     action.textContent = 'Conectar';
     action.className = 'provider-action';
   } else {

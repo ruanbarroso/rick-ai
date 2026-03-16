@@ -77,6 +77,14 @@ function generatePKCE(): { codeVerifier: string; codeChallenge: string; state: s
 
 // ==================== CLAUDE OAUTH SERVICE ====================
 
+/** Cache key for shared (user_id=NULL) tokens. Maps can't use null as a key. */
+const SHARED_CACHE_KEY = -1;
+
+/** Convert userId (number|null) to a cache map key. */
+function cacheKey(userId: number | null): number {
+  return userId ?? SHARED_CACHE_KEY;
+}
+
 export class ClaudeOAuthService {
   /**
    * In-memory storage for pending auth flows.
@@ -85,7 +93,7 @@ export class ClaudeOAuthService {
   private pendingAuths = new Map<string, PendingAuth>();
 
   /**
-   * In-memory token cache keyed by userId.
+   * In-memory token cache keyed by userId (or SHARED_CACHE_KEY for shared tokens).
    * Avoids hitting DB and refresh endpoint on every getValidToken() call.
    * All callers (sub-agents, etc.) share this cache.
    */
@@ -145,7 +153,7 @@ export class ClaudeOAuthService {
    * The user pastes a code in format "code#state" from claude.ai.
    */
   async exchangeCode(
-    userId: number,
+    userId: number | null,
     rawCode: string
   ): Promise<{ success: boolean; error?: string; email?: string }> {
     // Parse code — Anthropic returns "code#state"
@@ -212,7 +220,7 @@ export class ClaudeOAuthService {
       await this.saveTokens(userId, tokens);
 
       // Update in-memory cache
-      this.tokenCache.set(userId, {
+      this.tokenCache.set(cacheKey(userId), {
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
         expiresAt: Date.now() + tokens.expires_in * 1000,
@@ -246,59 +254,61 @@ export class ClaudeOAuthService {
    * Deduplicates concurrent refresh attempts.
    * Returns null if user is not connected.
    */
-  async getValidToken(userId: number, forceRefresh = false): Promise<string | null> {
+  async getValidToken(userId: number | null, forceRefresh = false): Promise<string | null> {
+    const ck = cacheKey(userId);
     // 1. Check in-memory cache first (skip when force-refreshing, e.g. after 401)
     if (!forceRefresh) {
-      const cached = this.tokenCache.get(userId);
+      const cached = this.tokenCache.get(ck);
       if (cached && cached.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
         return cached.accessToken;
       }
     } else {
-      this.tokenCache.delete(userId);
+      this.tokenCache.delete(ck);
     }
 
     // 2. Cache miss or expired — load from DB
     const stored = await this.loadTokens(userId);
     if (!stored) {
-      this.tokenCache.delete(userId);
+      this.tokenCache.delete(ck);
       return null;
     }
 
     // 3. Token still valid? Update cache and return (skip when force-refreshing)
     if (!forceRefresh && stored.expiresAt > Date.now() + EXPIRY_BUFFER_MS) {
-      this.tokenCache.set(userId, stored);
+      this.tokenCache.set(ck, stored);
       return stored.accessToken;
     }
 
     // 4. Token expired (or force refresh) — need refresh. Deduplicate concurrent refreshes.
     if (!stored.refreshToken) {
       logger.warn({ userId }, "Claude OAuth: no refresh token, disconnecting");
-      this.tokenCache.delete(userId);
+      this.tokenCache.delete(ck);
       await this.disconnect(userId);
       return null;
     }
 
     // If a refresh is already in progress for this user, wait for it
-    const existing = this.refreshInProgress.get(userId);
+    const existing = this.refreshInProgress.get(ck);
     if (existing) {
       return existing;
     }
 
     // Start the refresh and store the promise so others can wait on it
     const refreshPromise = this.doRefresh(userId, stored.refreshToken);
-    this.refreshInProgress.set(userId, refreshPromise);
+    this.refreshInProgress.set(ck, refreshPromise);
 
     try {
       return await refreshPromise;
     } finally {
-      this.refreshInProgress.delete(userId);
+      this.refreshInProgress.delete(ck);
     }
   }
 
   /**
    * Actually perform the token refresh. Separated to allow deduplication.
    */
-  private async doRefresh(userId: number, refreshToken: string): Promise<string | null> {
+  private async doRefresh(userId: number | null, refreshToken: string): Promise<string | null> {
+    const ck = cacheKey(userId);
     try {
       const refreshed = await this.refreshTokens(refreshToken);
       await this.saveTokens(userId, refreshed);
@@ -311,13 +321,13 @@ export class ClaudeOAuthService {
         accountEmail: refreshed.account?.email_address || null,
         orgName: refreshed.organization?.name || null,
       };
-      this.tokenCache.set(userId, newTokens);
+      this.tokenCache.set(ck, newTokens);
 
       logger.info({ userId }, "Claude OAuth: token refreshed (deduped in-process)");
       return refreshed.access_token;
     } catch (err) {
       logger.error({ err, userId }, "Claude OAuth: refresh failed");
-      this.tokenCache.delete(userId);
+      this.tokenCache.delete(ck);
       await this.markDisconnected(userId);
       return null;
     }
@@ -327,7 +337,7 @@ export class ClaudeOAuthService {
    * Returns OAuth bundle in OpenCode-compatible shape.
    * Ensures token freshness first, then returns access+refresh+expiry.
    */
-  async getAuthBundle(userId: number, forceRefresh = false): Promise<{
+  async getAuthBundle(userId: number | null, forceRefresh = false): Promise<{
     accessToken: string;
     refreshToken: string;
     expiresAt: number;
@@ -349,14 +359,14 @@ export class ClaudeOAuthService {
    * Invalidate the in-memory cache for a user.
    * Call this when tokens are known to be invalid (e.g. 401 from external service).
    */
-  invalidateCache(userId: number): void {
-    this.tokenCache.delete(userId);
+  invalidateCache(userId: number | null): void {
+    this.tokenCache.delete(cacheKey(userId));
   }
 
   /**
    * Check if the user has a Claude OAuth connection.
    */
-  async isConnected(userId: number): Promise<{
+  async isConnected(userId: number | null): Promise<{
     connected: boolean;
     email?: string;
     expiresAt?: number;
@@ -377,12 +387,13 @@ export class ClaudeOAuthService {
   /**
    * Disconnect the user's Claude OAuth.
    */
-  async disconnect(userId: number): Promise<void> {
-    this.tokenCache.delete(userId);
-    await query(
-      `DELETE FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude'`,
-      [userId]
-    );
+  async disconnect(userId: number | null): Promise<void> {
+    this.tokenCache.delete(cacheKey(userId));
+    if (userId == null) {
+      await query(`DELETE FROM oauth_tokens WHERE user_id IS NULL AND provider = 'claude'`);
+    } else {
+      await query(`DELETE FROM oauth_tokens WHERE user_id = $1 AND provider = 'claude'`, [userId]);
+    }
     logger.info({ userId }, "Claude OAuth: disconnected");
   }
 
@@ -415,7 +426,7 @@ export class ClaudeOAuthService {
   }
 
   private async saveTokens(
-    userId: number,
+    userId: number | null,
     tokens: TokenResponse
   ): Promise<void> {
     await this.saveTokensWithQuery(query, userId, tokens);
@@ -423,7 +434,7 @@ export class ClaudeOAuthService {
 
   private async saveTokensWithQuery(
     q: (text: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number }>,
-    userId: number,
+    userId: number | null,
     tokens: TokenResponse
   ): Promise<void> {
     const expiresAt = Date.now() + tokens.expires_in * 1000;
@@ -431,10 +442,11 @@ export class ClaudeOAuthService {
     const email = tokens.account?.email_address || null;
     const orgName = tokens.organization?.name || null;
 
+    // Use COALESCE(user_id, 0) for the unique constraint to handle NULL (shared tokens)
     await q(
       `INSERT INTO oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, updated_at)
        VALUES ($1, 'claude', $2, $3, $4, $5, $6, $7, NOW())
-       ON CONFLICT (user_id, provider)
+       ON CONFLICT (COALESCE(user_id, 0), provider)
        DO UPDATE SET
          access_token = excluded.access_token,
          refresh_token = excluded.refresh_token,
@@ -456,13 +468,17 @@ export class ClaudeOAuthService {
     );
   }
 
-  private async loadTokens(userId: number): Promise<OAuthTokens | null> {
-    const result = await query(
-      `SELECT access_token, refresh_token, expires_at, scopes, account_email, org_name
-       FROM oauth_tokens 
-       WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
-      [userId]
-    );
+  private async loadTokens(userId: number | null): Promise<OAuthTokens | null> {
+    const result = userId == null
+      ? await query(
+          `SELECT access_token, refresh_token, expires_at, scopes, account_email, org_name
+           FROM oauth_tokens 
+           WHERE user_id IS NULL AND provider = 'claude' AND is_active = TRUE`)
+      : await query(
+          `SELECT access_token, refresh_token, expires_at, scopes, account_email, org_name
+           FROM oauth_tokens 
+           WHERE user_id = $1 AND provider = 'claude' AND is_active = TRUE`,
+          [userId]);
 
     if (result.rows.length === 0) return null;
 
@@ -477,12 +493,12 @@ export class ClaudeOAuthService {
     };
   }
 
-  private async markDisconnected(userId: number): Promise<void> {
-    this.tokenCache.delete(userId);
-    await query(
-      `UPDATE oauth_tokens SET is_active = FALSE, updated_at = NOW()
-       WHERE user_id = $1 AND provider = 'claude'`,
-      [userId]
-    );
+  private async markDisconnected(userId: number | null): Promise<void> {
+    this.tokenCache.delete(cacheKey(userId));
+    if (userId == null) {
+      await query(`UPDATE oauth_tokens SET is_active = FALSE, updated_at = NOW() WHERE user_id IS NULL AND provider = 'claude'`);
+    } else {
+      await query(`UPDATE oauth_tokens SET is_active = FALSE, updated_at = NOW() WHERE user_id = $1 AND provider = 'claude'`, [userId]);
+    }
   }
 }

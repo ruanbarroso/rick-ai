@@ -344,6 +344,23 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE sub_agent_sessions ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(10) DEFAULT 'build'`,
     ],
   },
+  {
+    name: "020_shared_oauth_tokens",
+    statements: [
+      // Move admin (user_id=1) OAuth tokens to "shared" (user_id=NULL).
+      // Shared tokens are the fallback for users who haven't connected their own accounts.
+      // This decouples the admin's personal OAuth from the shared/default OAuth,
+      // allowing the admin to connect their own account separately via the session viewer.
+      //
+      // Step 1: Drop the old unique constraint/index that doesn't allow NULL user_id duplicates
+      `DROP INDEX IF EXISTS oauth_tokens_user_id_provider_unique`,
+      `DROP INDEX IF EXISTS idx_oauth_tokens_uid_provider`,
+      // Step 2: Move admin tokens to shared (NULL)
+      `UPDATE oauth_tokens SET user_id = NULL WHERE user_id = 1`,
+      // Step 3: Create a unique index that treats NULL as a single value using COALESCE
+      `CREATE UNIQUE INDEX IF NOT EXISTS oauth_tokens_user_provider_unique ON oauth_tokens(COALESCE(user_id, 0), provider)`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {
