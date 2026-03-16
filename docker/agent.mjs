@@ -613,8 +613,10 @@ let lastRunHadDbError = false;
 // period, force-reject to prevent handleTurn from hanging forever.
 // This catches edge cases where child.on("close") never fires or finish() has a
 // race condition that prevents resolve/reject from being called.
-// Set to 12 minutes (longer than WATCHDOG_MS=10min to let the watchdog fire first).
-const RUN_SAFETY_TIMEOUT_MS = 12 * 60_000;
+// Set to 30 minutes: long enough for legitimate turns (yarn install, tsc, multiple
+// tool calls) but short enough to eventually unstick a truly broken session.
+// The 10-minute watchdog (WATCHDOG_MS) catches silent hangs much sooner.
+const RUN_SAFETY_TIMEOUT_MS = 30 * 60_000;
 
 function withSafetyTimeout(promise, timeoutMs, label) {
   let timer;
@@ -684,8 +686,15 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
     // Kill the entire process group (npx → opencode → MCP servers → Chrome).
     // With detached: true, child.pid is the process group leader.
+    // Send SIGTERM first, then SIGKILL after a grace period to ensure cleanup.
+    // Without SIGKILL, long-running bash commands (yarn install, tsc, etc.) may
+    // ignore SIGTERM and keep the process tree alive, causing zombie processes
+    // and allowing a second OpenCode to start while the first is still running.
     const killTree = () => {
       try { process.kill(-child.pid, "SIGTERM"); } catch { /* ignore */ }
+      setTimeout(() => {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* ignore — already dead */ }
+      }, 5_000);
     };
 
     activeProcess = child;
