@@ -2423,7 +2423,7 @@ function renderAttachmentsPreviews() {
   for (var i = 0; i < pendingFiles.length; i++) {
     var f = pendingFiles[i];
     html += '<div class="attachment-chip">';
-    if (f.previewUrl) html += '<img src="' + f.previewUrl + '" alt="">';
+    if (f.previewUrl) html += '<img src="' + f.previewUrl + '" alt="" onclick="event.stopPropagation(); openImageFullscreen(this.src)" style="cursor:pointer">';
     html += '<span class="chip-name">' + escapeHtml(f.name) + '</span>';
     html += '<button class="chip-remove" onclick="removeFile(' + i + ')" title="Remover">&times;</button>';
     html += '</div>';
