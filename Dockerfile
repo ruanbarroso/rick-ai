@@ -65,6 +65,6 @@ COPY .rick-version* ./
 EXPOSE 80
 
 # Use the entrypoint script that manages embedded PostgreSQL.
-# The base node image's docker-entrypoint.sh checks if the file is executable
-# and runs it directly (without prepending "node"). The chmod+sed above ensures this.
+# Override the base node image's ENTRYPOINT which would prepend "node" to .sh files.
+ENTRYPOINT ["/bin/bash"]
 CMD ["/app/scripts/entrypoint.sh"]
