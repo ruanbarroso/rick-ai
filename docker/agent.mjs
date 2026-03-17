@@ -1380,6 +1380,16 @@ const httpServer = createServer((req, res) => {
   res.end(JSON.stringify({ error: "Not found" }));
 });
 
+httpServer.on("error", (err) => {
+  process.stderr.write(`[http] FATAL: Cannot start control server — ${err.message}\n`);
+  // Explicitly mention EADDRINUSE so the main container's legacy fallback handler
+  // can detect this and switch to stream bridge instead of declaring a crash.
+  if (err.code === "EADDRINUSE") {
+    process.stderr.write(`[http] EADDRINUSE on port ${CONTROL_HTTP_PORT} — another agent.mjs is already running\n`);
+  }
+  process.exit(1);
+});
+
 httpServer.listen(CONTROL_HTTP_PORT, "0.0.0.0", () => {
   process.stderr.write(`[http] Control server listening on port ${CONTROL_HTTP_PORT}\n`);
 });

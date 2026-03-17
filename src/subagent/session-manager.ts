@@ -639,9 +639,12 @@ export class SessionManager {
           legacyProc.stderr!.on("data", (data: Buffer) => {
             const text = data.toString();
             legacyStderr += text;
-            if (text.trim()) logger.debug({ sessionId: id, stderr: text.trim().substring(0, 500) }, "Legacy sub-agent stderr");
+            if (text.trim()) logger.info({ sessionId: id, stderr: text.trim().substring(0, 500) }, "Legacy sub-agent stderr");
           });
-          legacyProc.on("exit", (code) => {
+          // Use "close" instead of "exit" to ensure all stderr data has been
+          // received before checking legacyStderr. The "exit" event can fire before
+          // all stdio data is flushed, causing EADDRINUSE detection to miss the error.
+          legacyProc.on("close", (code) => {
             this.processes.delete(id);
             if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
               const crashed = code !== 0 && code !== null;
