@@ -293,7 +293,9 @@ export class WebConnector implements Connector {
                 try { pendingCount = await this.userService.getPendingCount(); } catch (_) {}
               }
 
-              this.send(ws, { type: "auth_ok", pendingCount });
+              // Include the admin's sessionsToken so the web-ui can open /m/<token> for the main session
+              const adminSessionsToken = this.adminUserId != null ? getUserSessionsToken(this.adminUserId) : undefined;
+              this.send(ws, { type: "auth_ok", pendingCount, sessionsToken: adminSessionsToken });
               logger.info("Web client authenticated");
 
               if (this.whatsappConnector) {

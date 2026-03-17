@@ -191,23 +191,7 @@
     flex-shrink: 0;
   }
 
-  .logout-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 10px 12px;
-    border-radius: 8px;
-    border: none;
-    background: transparent;
-    color: var(--danger);
-    cursor: pointer;
-    font-size: 0.85rem;
-    font-weight: 600;
-    transition: background 0.15s;
-  }
-
-  .logout-btn:hover { background: rgba(239, 68, 68, 0.1); }
+  /* logout-btn styles now in .sidebar-footer-btn */
 
   .session-item {
     display: flex;
@@ -1448,23 +1432,36 @@
   }
 
   /* ==================== SETTINGS PANEL ==================== */
-  .settings-overlay {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    background: rgba(0,0,0,0.5);
-    z-index: 200;
-    display: none;
-    opacity: 0;
-    transition: opacity 0.3s;
+  /* Settings inline (replaces the old modal) */
+  .settings-inline {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 32px;
+    max-width: 700px;
+    margin: 0 auto;
+    width: 100%;
   }
+  .settings-inline::-webkit-scrollbar { width: 6px; }
+  .settings-inline::-webkit-scrollbar-track { background: transparent; }
+  .settings-inline::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-  .settings-overlay.visible {
-    display: block;
-    opacity: 1;
+  .sidebar-footer-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 16px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background 0.15s, color 0.15s;
+    border-radius: 8px;
   }
+  .sidebar-footer-btn:hover { background: var(--bg-surface); color: var(--text); }
+  .sidebar-footer-btn.logout-btn:hover { color: #ef4444; }
+  .sidebar-footer-btn svg { fill: currentColor; flex-shrink: 0; }
 
   .confirm-overlay {
     position: fixed;
@@ -1525,74 +1522,7 @@
     justify-content: flex-end;
   }
 
-  .settings-panel {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.95);
-    width: 620px;
-    max-width: calc(100% - 32px);
-    height: 80vh;
-    max-height: 720px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    z-index: 201;
-    display: flex;
-    flex-direction: column;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.25s ease, transform 0.25s ease;
-  }
-
-  .settings-panel.visible {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translate(-50%, -50%) scale(1);
-  }
-
-  .settings-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-    border-radius: 16px 16px 0 0;
-  }
-
-  .settings-header h2 {
-    font-size: 1.2rem;
-    font-weight: 700;
-  }
-
-  .settings-close {
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    border: none;
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.4rem;
-    transition: background 0.15s, color 0.15s;
-  }
-
-  .settings-close:hover { background: var(--bg-surface); color: var(--text); }
-
-  .settings-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 20px 24px;
-    border-radius: 0 0 16px 16px;
-  }
-
-  .settings-body::-webkit-scrollbar { width: 6px; }
-  .settings-body::-webkit-scrollbar-track { background: transparent; }
-  .settings-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  /* Settings panel CSS removed — settings are now inline in main-area */
 
   .settings-section {
     margin-bottom: 12px;
@@ -2276,29 +2206,8 @@
       display: flex;
     }
 
-    .sidebar-header-actions .settings-btn-header,
-    .sidebar-header-actions .users-btn-header {
-      display: none;
-    }
-
-    .message { max-width: 92%; }
-
-    .settings-panel {
-      width: 100%;
-      max-width: 100%;
-      height: 100%;
-      max-height: 100%;
-      border-radius: 0;
-      border: none;
-    }
-
-    .settings-header {
-      border-radius: 0;
-    }
-
-    .settings-body {
-      border-radius: 0;
-      -webkit-overflow-scrolling: touch;
+    .settings-inline {
+      padding: 16px;
     }
 
     .confirm-modal {
@@ -2413,20 +2322,12 @@
           <div class="sidebar-title" id="sidebar-title">Rick AI</div>
           <div class="sidebar-subtitle" id="header-status">Conectando...</div>
         </div>
-        <div class="sidebar-header-actions">
-          <button class="users-btn-header" id="users-btn-desktop" onclick="openUsers()" title="Usuarios">
-            <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-            <span class="users-badge hidden" id="users-badge-desktop">0</span>
-          </button>
-          <button class="settings-btn-header" onclick="openSettings()" title="Configuracoes">
-            <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
-          </button>
-        </div>
+        <!-- Header actions removed — settings are now inline in main area -->
       </div>
 
       <div class="sidebar-sessions" id="sidebar-sessions">
-        <!-- Main session always pinned -->
-        <div class="session-item active" id="session-main" onclick="switchSession('main')">
+        <!-- Main session — opens in new tab like sub-agents -->
+        <div class="session-item" id="session-main" onclick="openMainSession()">
           <div class="session-icon main">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
           </div>
@@ -2434,9 +2335,7 @@
             <div class="session-name" id="main-session-name">Rick C-137</div>
             <div class="session-desc">Sessao principal</div>
           </div>
-          <button class="session-clear" onclick="event.stopPropagation(); confirmClearHistory()" title="Limpar historico">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM8 9h8v10H8V9zm7.5-5l-1-1h-5l-1 1H5v2h14V4h-3.5z"/></svg>
-          </button>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="opacity:0.4;flex-shrink:0;"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
         </div>
 
         <!-- Ephemeral sessions rendered below -->
@@ -2446,7 +2345,12 @@
       </div>
 
       <div class="sidebar-footer">
-        <button class="logout-btn" onclick="doLogout()">
+        <button class="sidebar-footer-btn" onclick="openUsers()" style="position:relative;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          Usuarios
+          <span class="users-badge hidden" id="users-badge-desktop" style="position:absolute;top:4px;right:8px;">0</span>
+        </button>
+        <button class="sidebar-footer-btn logout-btn" onclick="doLogout()">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
           Sair
         </button>
@@ -2454,7 +2358,7 @@
 
     </div>
 
-    <!-- Main area -->
+    <!-- Main area — Settings panel (replaces the old chat interface) -->
     <div class="main-area">
       <div class="connection-bar" id="connection-bar"></div>
 
@@ -2467,79 +2371,10 @@
             <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
             <span class="users-badge hidden" id="users-badge-mobile">0</span>
           </button>
-          <button class="settings-btn-header" onclick="openSettings()" title="Configuracoes">
-            <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
-          </button>
         </div>
       </div>
 
-      <!-- Messages container per session (we keep them in a map, show/hide) -->
-      <div class="messages" id="messages-main">
-        <div class="typing-indicator" id="typing-indicator">
-          <span></span><span></span><span></span>
-        </div>
-      </div>
-
-      <!-- Floating scroll-to-bottom button (shown when user scrolls up) -->
-      <button id="scroll-bottom-btn" onclick="scrollToBottom(true)" title="Ir para o final" aria-label="Ir para o final">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
-      </button>
-
-      <div class="attachments-preview" id="attachments-preview"></div>
-
-      <div class="compose-bar">
-        <button id="attach-btn" class="compose-attach" onclick="document.getElementById('file-input').click()" title="Anexar arquivos">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-        </button>
-        <input type="file" id="file-input" multiple onchange="handleFileSelect(event)" style="display:none">
-
-        <div class="recording-bar" id="recording-bar">
-          <button class="recording-cancel" onclick="cancelRecording()" title="Cancelar">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM8 9h8v10H8V9zm7.5-5l-1-1h-5l-1 1H5v2h14V4h-3.5z"/></svg>
-          </button>
-          <div class="recording-indicator">
-            <span class="recording-dot"></span>
-            <span class="recording-text">Gravando...</span>
-            <span class="recording-timer" id="recording-timer">0:00</span>
-          </div>
-          <button class="recording-send" onclick="finishRecording()" title="Parar gravacao">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
-          </button>
-        </div>
-
-        <div class="audio-preview-bar" id="audio-preview-bar">
-          <button class="audio-discard" onclick="discardAudio()" title="Descartar audio">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM8 9h8v10H8V9zm7.5-5l-1-1h-5l-1 1H5v2h14V4h-3.5z"/></svg>
-          </button>
-          <audio id="audio-preview-player" controls preload="metadata"></audio>
-          <button class="audio-send" onclick="sendMessage()" title="Enviar">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-          </button>
-        </div>
-
-        <div class="input-area" id="input-area">
-          <textarea id="msg-input" rows="1" placeholder="Digite..."
-            onkeydown="handleKeyDown(event)" oninput="autoResize(this)" onpaste="handlePaste(event)"></textarea>
-          <button id="mic-btn" onclick="startRecording()" title="Gravar audio">
-            <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
-          </button>
-          <button class="send-btn" id="send-btn" onclick="sendMessage()" title="Enviar">
-            <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- SETTINGS PANEL -->
-<div class="settings-overlay" id="settings-overlay" onclick="closeSettings()"></div>
-<div class="settings-panel" id="settings-panel">
-  <div class="settings-header">
-    <h2>Configuracoes</h2>
-    <button class="settings-close" onclick="closeSettings()">&times;</button>
-  </div>
-  <div class="settings-body">
+      <div class="settings-inline" id="settings-inline">
 
     <!-- Version & Updates -->
     <div class="settings-section">
@@ -2893,6 +2728,8 @@
       </div>
     </div>
 
+      </div>
+    </div>
   </div>
 </div>
 
@@ -3073,7 +2910,7 @@ var pendingUserEcho = false;
 var reconnectAttempts = 0;
 var reconnectTimer = null;
 var password = '';
-var currentSessionId = 'main';
+var adminSessionsToken = '';
 var sessionMessages = { main: [] };
 var ephemeralSessions = [];
 var sessionsPollTimer = null;
@@ -3223,13 +3060,15 @@ function handleServerMessage(msg) {
     case 'auth_ok':
       authenticated = true;
       reconnectAttempts = 0;
+      if (msg.sessionsToken) adminSessionsToken = msg.sessionsToken;
       try { localStorage.setItem('rick_pwd', password); } catch(e) {}
+      // Load settings inline (they're always visible now)
+      setTimeout(function() { loadSettingsInline(); }, 100);
       // After a deploy the server restarts — check if we should reopen settings
       if (deployInProgress) {
         deployInProgress = false;
-        // The health poll path will handle the reload — just clear the flag
       }
-      // Reopen settings modal after OTA reload (flag set before reload)
+      // Handle OTA reload version check
       if (sessionStorage.getItem('rick_ota_reopen_settings')) {
         sessionStorage.removeItem('rick_ota_reopen_settings');
         var otaExpected = sessionStorage.getItem('rick_ota_expected_version');
@@ -3665,6 +3504,14 @@ function openSessionPage(sessionId, sessionToken) {
     url += '?t=' + encodeURIComponent(sessionToken);
   }
   window.open(url, '_blank');
+}
+
+function openMainSession() {
+  if (!adminSessionsToken) {
+    showToast('Sessao principal nao disponivel', true);
+    return;
+  }
+  window.open('/m/' + encodeURIComponent(adminSessionsToken), '_blank');
 }
 
 function confirmClearHistory() {
@@ -4903,33 +4750,21 @@ function downloadLogs() {
 }
 
 // ==================== SETTINGS ====================
-function openSettings() {
-  document.getElementById('settings-overlay').classList.add('visible');
-  document.getElementById('settings-panel').classList.add('visible');
-
-  // Request current settings
+// Settings are now inline — load them on auth_ok instead of modal open
+function loadSettingsInline() {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'get_settings' }));
   }
-
   loadSubagentMetrics();
   if (subagentMetricsTimer) clearInterval(subagentMetricsTimer);
   subagentMetricsTimer = setInterval(function() {
-    var panel = document.getElementById('settings-panel');
-    if (panel && panel.classList.contains('visible')) {
-      loadSubagentMetrics();
-    }
+    loadSubagentMetrics();
   }, 12000);
 }
 
-function closeSettings() {
-  document.getElementById('settings-overlay').classList.remove('visible');
-  document.getElementById('settings-panel').classList.remove('visible');
-  if (subagentMetricsTimer) {
-    clearInterval(subagentMetricsTimer);
-    subagentMetricsTimer = null;
-  }
-}
+// Kept for backward compatibility with any code that calls openSettings()
+function openSettings() { loadSettingsInline(); }
+function closeSettings() { /* no-op — settings are always visible */ }
 
 // ==================== USERS PANEL ====================
 
