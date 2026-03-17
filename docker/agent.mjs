@@ -841,9 +841,14 @@ function runOpencodeTurn({ text, model, mode, images }) {
           const err = event.error;
           let message;
           let msgLower = "";
+          let statusCode = "";
+          let isRetryable = "";
           if (err && typeof err === "object") {
             message = (err.data && err.data.message) ? String(err.data.message) : String(err.name || JSON.stringify(err));
             msgLower = String(message).toLowerCase();
+            statusCode = String(err.data?.statusCode || "");
+            isRetryable = String(err.data?.isRetryable || "");
+            process.stderr.write(`[provider-error] JSON error: name=${String(err.name || "")}, statusCode=${statusCode}, isRetryable=${isRetryable}, message=${String(message).substring(0, 250)}\n`);
             // Detect auth errors so handleTurn can retry with refreshed tokens.
             // Covers: "401", "auth", "Auth", "Token refresh failed", "OAuth token has been revoked"
             if (String(err.name || "").includes("Auth") ||
@@ -856,7 +861,6 @@ function runOpencodeTurn({ text, model, mode, images }) {
             // Detect rate limit using the structured error object (statusCode, isRetryable, message)
             // This is the most reliable path — OpenCode already exhausted its internal retries.
             if (isStructuredRateLimitError(err)) {
-              const statusCode = err.data?.statusCode || "";
               process.stderr.write(`[rate-limit] JSON error: name=${err.name}, statusCode=${statusCode}, isRetryable=${err.data?.isRetryable}, message=${String(message).substring(0, 200)}\n`);
               lastRunHadRateLimitError = true;
               killTree();
@@ -1107,8 +1111,11 @@ async function handleTurn(payload) {
           process.stderr.write(`[opencode-db] DB error detected — nuking DB, clearing session, retrying same model\n`);
           emitStatus("Erro no banco de dados do OpenCode — limpando e tentando novamente...");
           await nukeOpenCodeDb();
-          openCodeSessionId = "";  // Clear dangling reference
-          await sleepMs(1000);     // Let the OS fully release file locks
+          // Clear ALL in-memory session continuity so the retry starts fully fresh.
+          // This is more aggressive than before because dangling session IDs can
+          // survive DB nukes in edge cases and cause another silent exit.
+          openCodeSessionId = "";
+          await sleepMs(1500);     // Let the OS fully release file locks
           lastRunHadDbError = false;
           toolStarted.clear();
           try {
@@ -1117,12 +1124,18 @@ async function handleTurn(payload) {
             break;
           } catch (retryErr) {
             lastError = retryErr;
-            // If it fails again with a DB error, don't retry — fall through to cascade or fail
+            // If it fails again with a DB/session issue, fall through to cascade.
             if (lastRunHadDbError) {
-              process.stderr.write(`[opencode-db] DB error persisted after nuke — giving up on DB recovery\n`);
+              process.stderr.write(`[opencode-db] DB/session error persisted after nuke — cascading to next model\n`);
+              emitStatus(`Erro persistente na sessao do OpenCode com '${tryModelId}' — tentando o proximo modelo...`);
+              continue;
             }
             // If it was a rate limit on the retry, continue cascading
             if (lastRunHadRateLimitError) continue;
+            // Auth error after DB recovery — let the auth branch below refresh and retry/cascade
+            if (lastRunHadAuthError) {
+              process.stderr.write(`[opencode-db] Retry after DB reset hit auth error — handing off to auth recovery\n`);
+            }
             break;
           }
         }
