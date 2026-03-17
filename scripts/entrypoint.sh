@@ -56,10 +56,12 @@ init_embedded_pg() {
   mkdir -p "$PGRUN" /var/log/postgresql
   chown postgres:postgres "$PGRUN" /var/log/postgresql
 
-  # Configure for local-only, trust auth (no password needed inside the container)
+  # Configure for local-only, trust auth (no password needed inside the container).
+  # On Debian, the config directory is /etc/postgresql/16/main/ (separate from PGDATA).
+  local pgconf="/etc/postgresql/16/main"
   if [ -f "$PGDATA/PG_VERSION" ]; then
-    # Override configuration for embedded use
-    cat > "$PGDATA/pg_hba.conf" <<-HBA
+    # Override pg_hba.conf for trust auth (no password)
+    cat > "$pgconf/pg_hba.conf" <<-HBA
 local   all   all   trust
 host    all   all   127.0.0.1/32   trust
 host    all   all   ::1/128        trust
