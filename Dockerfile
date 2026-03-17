@@ -22,6 +22,9 @@ RUN apt-get update && \
     apt-get install -y postgresql-16 postgresql-16-pgvector && \
     rm -rf /var/lib/apt/lists/*
 
+# Add PostgreSQL binaries to PATH (installed in /usr/lib/postgresql/16/bin/)
+ENV PATH="/usr/lib/postgresql/16/bin:$PATH"
+
 WORKDIR /app
 
 # Install dependencies

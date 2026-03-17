@@ -16,6 +16,9 @@
 
 set -euo pipefail
 
+# Ensure PostgreSQL binaries are in PATH
+export PATH="/usr/lib/postgresql/16/bin:$PATH"
+
 PGDATA="/app/pgdata"
 PGRUN="/var/run/postgresql"
 PGLOG="/app/data/pg-startup.log"
