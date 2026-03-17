@@ -59,7 +59,7 @@ init_embedded_pg() {
     log "Initializing embedded PostgreSQL database cluster..."
     mkdir -p "$PGDATA"
     chown postgres:postgres "$PGDATA"
-    su - postgres -c "initdb -D '$PGDATA' --auth=trust --encoding=UTF8 --locale=C" > "$PGLOG" 2>&1
+    su postgres -c "PATH=$PATH initdb -D '$PGDATA' --auth=trust --encoding=UTF8 --locale=C" > "$PGLOG" 2>&1
 
     # Configure for local-only connections, no network password required
     cat >> "$PGDATA/postgresql.conf" <<-CONF
@@ -85,23 +85,23 @@ HBA
 start_embedded_pg() {
   log "Starting embedded PostgreSQL..."
   EMBEDDED_PG_STARTED=true
-  su - postgres -c "pg_ctl -D '$PGDATA' -l '$PGLOG' -w start" > /dev/null 2>&1
+  su postgres -c "PATH=$PATH pg_ctl -D '$PGDATA' -l '$PGLOG' -w start" > /dev/null 2>&1
 
   # Create the application user (idempotent)
-  su - postgres -c "psql -c \"SELECT 1 FROM pg_roles WHERE rolname='rick'\" | grep -q 1 || psql -c \"CREATE USER rick WITH SUPERUSER\"" > /dev/null 2>&1
+  su postgres -c "PATH=$PATH psql -c \"SELECT 1 FROM pg_roles WHERE rolname='rick'\" | grep -q 1 || PATH=$PATH psql -c \"CREATE USER rick WITH SUPERUSER\"" > /dev/null 2>&1
 
   # Create databases (idempotent)
-  su - postgres -c "psql -lqt | cut -d'|' -f1 | grep -qw '${EMBEDDED_DB}' || createdb -O rick '${EMBEDDED_DB}'" > /dev/null 2>&1
-  su - postgres -c "psql -lqt | cut -d'|' -f1 | grep -qw '${EMBEDDED_VECTOR_DB}' || createdb -O rick '${EMBEDDED_VECTOR_DB}'" > /dev/null 2>&1
+  su postgres -c "PATH=$PATH psql -lqt | cut -d'|' -f1 | grep -qw '${EMBEDDED_DB}' || PATH=$PATH createdb -O rick '${EMBEDDED_DB}'" > /dev/null 2>&1
+  su postgres -c "PATH=$PATH psql -lqt | cut -d'|' -f1 | grep -qw '${EMBEDDED_VECTOR_DB}' || PATH=$PATH createdb -O rick '${EMBEDDED_VECTOR_DB}'" > /dev/null 2>&1
 
   # Enable pgvector extension on the vector database
-  su - postgres -c "psql -d '${EMBEDDED_VECTOR_DB}' -c 'CREATE EXTENSION IF NOT EXISTS vector'" > /dev/null 2>&1
+  su postgres -c "PATH=$PATH psql -d '${EMBEDDED_VECTOR_DB}' -c 'CREATE EXTENSION IF NOT EXISTS vector'" > /dev/null 2>&1
 
   log "Embedded PostgreSQL is running"
 }
 
 stop_embedded_pg() {
-  su - postgres -c "pg_ctl -D '$PGDATA' -m fast stop" > /dev/null 2>&1 || true
+  su postgres -c "PATH=$PATH pg_ctl -D '$PGDATA' -m fast stop" > /dev/null 2>&1 || true
 }
 
 # ==================== SQLITE → POSTGRESQL MIGRATION ====================
