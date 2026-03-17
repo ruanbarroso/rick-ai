@@ -1,14 +1,25 @@
 FROM node:22-slim
 
-# Install git + Docker CLI + build tools for native modules (better-sqlite3)
+# Install system dependencies:
+#   - git, curl, ca-certificates, gnupg: for Docker CLI and general tooling
+#   - python3, make, g++: for native modules (better-sqlite3 — still needed for transition period)
+#   - postgresql, postgresql-*-pgvector: embedded PostgreSQL with vector support
+#   - sqlite3: for the one-time SQLite → PostgreSQL migration
+#   - procps: for entrypoint process management
 RUN apt-get update && \
-    apt-get install -y git curl ca-certificates gnupg python3 make g++ && \
+    apt-get install -y git curl ca-certificates gnupg python3 make g++ procps sqlite3 && \
+    # Docker CLI
     install -m 0755 -d /etc/apt/keyrings && \
     curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
     chmod a+r /etc/apt/keyrings/docker.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list && \
     apt-get update && \
     apt-get install -y docker-ce-cli && \
+    # PostgreSQL (from PGDG repo for latest version + pgvector)
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg && \
+    echo "deb http://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo "$VERSION_CODENAME")-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
+    apt-get update && \
+    apt-get install -y postgresql-16 postgresql-16-pgvector && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -34,8 +45,13 @@ RUN cp -r src/connectors/static dist/connectors/static
 # Cleanup dev deps
 RUN npm prune --production
 
-# Create auth dir + data dir (for SQLite DB when no PostgreSQL)
-RUN mkdir -p auth_info data
+# Create required directories
+RUN mkdir -p auth_info data pgdata && \
+    chown postgres:postgres pgdata
+
+# Copy entrypoint script
+COPY scripts/entrypoint.sh /app/scripts/entrypoint.sh
+RUN chmod +x /app/scripts/entrypoint.sh
 
 # Version info (injected at build time via --build-arg)
 ARG COMMIT_SHA=unknown
@@ -44,10 +60,9 @@ ENV RICK_COMMIT_SHA=$COMMIT_SHA
 ENV RICK_COMMIT_DATE=$COMMIT_DATE
 
 # Copy .rick-version into the image as a fallback version source.
-# When RICK_COMMIT_SHA is "unknown" (e.g. docker compose up --build without
-# explicit build-args), health.ts reads this file instead.
 COPY .rick-version* ./
 
 EXPOSE 80
 
-CMD ["node", "dist/index.js"]
+# Use the entrypoint script that manages embedded PostgreSQL
+CMD ["/app/scripts/entrypoint.sh"]

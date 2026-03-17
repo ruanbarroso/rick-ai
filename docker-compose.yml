@@ -15,6 +15,7 @@ services:
     volumes:
       - ./auth_info:/app/auth_info
       - ./data:/app/data
+      - pgdata:/app/pgdata
       - /var/run/docker.sock:/var/run/docker.sock
       - ./scripts:/app/scripts:ro
       - ./docker:/app/docker:ro
@@ -23,6 +24,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     stdin_open: true
     tty: true
+
+volumes:
+  pgdata:
+    driver: local

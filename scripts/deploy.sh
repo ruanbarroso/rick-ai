@@ -56,7 +56,7 @@ fi
 
 is_preserved_path() {
   case "$1" in
-    .|..|.git|node_modules|dist|auth_info|data|.deploy-backup|.env|.rick-latest-version.json)
+    .|..|.git|node_modules|dist|auth_info|data|pgdata|.deploy-backup|.env|.rick-latest-version.json)
       return 0
       ;;
     *)
@@ -98,6 +98,7 @@ tar -C "$PROJECT_DIR" \
   --exclude=dist \
   --exclude=auth_info \
   --exclude=data \
+  --exclude=pgdata \
   --exclude=.deploy-backup \
   --exclude=.env \
   --exclude=.rick-latest-version.json \
@@ -116,6 +117,7 @@ tar -C "$STAGING_DIR" \
   --exclude=dist \
   --exclude=auth_info \
   --exclude=data \
+  --exclude=pgdata \
   --exclude=.deploy-backup \
   --exclude=.env \
   --exclude=.rick-latest-version.json \
@@ -172,10 +174,13 @@ docker rm -f "$CANDIDATE_NAME" 2>/dev/null || true
 
 # Start candidate in HEALTH_ONLY mode: only health server + DB check, no WhatsApp.
 # This avoids conflicting with the running main container's WhatsApp session.
+# Mount the data volume so it can access the SQLite DB for migration check,
+# and a temporary pgdata volume for the embedded PostgreSQL.
 docker run -d \
   --name "$CANDIDATE_NAME" \
   --env-file "$PROJECT_DIR/.env" \
   -e HEALTH_ONLY=true \
+  -v "$PROJECT_DIR/data:/app/data" \
   -p "$HEALTH_PORT_CANDIDATE:80" \
   "$CANDIDATE_TAG"
 
@@ -185,7 +190,7 @@ log "Candidate container started in HEALTH_ONLY mode, waiting for health..."
 
 HEALTHY=false
 i=1
-while [ "$i" -le 20 ]; do
+while [ "$i" -le 30 ]; do
   sleep 3
   RESP=$(wget -qO- "http://localhost:$HEALTH_PORT_CANDIDATE/health" 2>/dev/null || echo "")
   if echo "$RESP" | grep -q '"status":"ok"'; then
@@ -193,7 +198,7 @@ while [ "$i" -le 20 ]; do
     log "Candidate is healthy after ${i}x3s"
     break
   fi
-  log "Health check attempt $i/20: $RESP"
+    log "Health check attempt $i/30: $RESP"
   i=$((i + 1))
 done
 
