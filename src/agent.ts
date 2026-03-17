@@ -443,6 +443,27 @@ export class Agent {
         logger.info({ userPhone }, "Sub-agent relay returned null — falling through to normal classification");
       }
 
+      // ==================== AUTOMATION LINKS ====================
+      // Intercept requests for webhooks/schedules management — respond with direct link
+      // instead of delegating to a sub-agent.
+      const lowerText = fullText.toLowerCase();
+      if (canInvokeSubAgent(userRole) && numericUserId && (
+        lowerText.includes("webhook") || lowerText.includes("agendamento") ||
+        lowerText.includes("schedule") || lowerText.includes("cron")
+      )) {
+        const wants = lowerText.includes("webhook") ? "webhooks" : "agendamentos";
+        const page = lowerText.includes("webhook") ? "webhooks" : "schedules";
+        const userToken = getUserSessionsToken(numericUserId);
+        const baseUrl = config.webBaseUrl;
+        if (baseUrl && userToken) {
+          const link = `${baseUrl}/${page}?t=${userToken}`;
+          const response = `Voce pode gerenciar ${wants} por aqui:\n${link}`;
+          await this.memory.saveMessageByUserId(user.id, "assistant", response);
+          this.notifyMainViewers(user.id, "assistant", response, "text");
+          return response;
+        }
+      }
+
       // Classify the task — does it need a sub-agent?
       // Skip classification for roles that cannot invoke sub-agents (business)
       const canDelegate = canInvokeSubAgent(userRole);
