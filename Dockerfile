@@ -49,9 +49,9 @@ RUN npm prune --production
 RUN mkdir -p auth_info data pgdata && \
     chown postgres:postgres pgdata
 
-# Copy entrypoint script
+# Copy entrypoint script and fix line endings (Windows → Unix)
 COPY scripts/entrypoint.sh /app/scripts/entrypoint.sh
-RUN chmod +x /app/scripts/entrypoint.sh
+RUN sed -i 's/\r$//' /app/scripts/entrypoint.sh && chmod +x /app/scripts/entrypoint.sh
 
 # Version info (injected at build time via --build-arg)
 ARG COMMIT_SHA=unknown
@@ -65,6 +65,6 @@ COPY .rick-version* ./
 EXPOSE 80
 
 # Use the entrypoint script that manages embedded PostgreSQL.
-# ENTRYPOINT overrides the base image's node entrypoint so bash runs directly.
-ENTRYPOINT ["/bin/bash"]
+# The base node image's docker-entrypoint.sh checks if the file is executable
+# and runs it directly (without prepending "node"). The chmod+sed above ensures this.
 CMD ["/app/scripts/entrypoint.sh"]
