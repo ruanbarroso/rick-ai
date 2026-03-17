@@ -444,15 +444,19 @@ export class Agent {
       }
 
       // ==================== AUTOMATION LINKS ====================
-      // Intercept requests for webhooks/schedules management — respond with direct link
-      // instead of delegating to a sub-agent.
+      // Intercept SHORT messages that explicitly ask to manage webhooks/schedules.
+      // Only trigger on direct management requests (e.g. "ver webhooks", "abrir agendamentos"),
+      // NOT on long messages that mention these words as part of a technical task.
       const lowerText = fullText.toLowerCase();
-      if (canInvokeSubAgent(userRole) && numericUserId && (
-        lowerText.includes("webhook") || lowerText.includes("agendamento") ||
-        lowerText.includes("schedule") || lowerText.includes("cron")
-      )) {
-        const wants = lowerText.includes("webhook") ? "webhooks" : "agendamentos";
-        const page = lowerText.includes("webhook") ? "webhooks" : "schedules";
+      const isShortManagementRequest = lowerText.length < 80 && (
+        /\b(ver|abrir|gerenciar|listar|mostrar|acessar|configurar|criar|editar|deixa eu ver|me mostr[ae]|quero ver)\b/.test(lowerText)
+      ) && (
+        /\bwebhooks?\b/.test(lowerText) || /\bagendamentos?\b/.test(lowerText) ||
+        /\bschedules?\b/.test(lowerText) || /\bcrons?\b/.test(lowerText)
+      );
+      if (isShortManagementRequest && canInvokeSubAgent(userRole) && numericUserId) {
+        const wants = /webhook/.test(lowerText) ? "webhooks" : "agendamentos";
+        const page = /webhook/.test(lowerText) ? "webhooks" : "schedules";
         const userToken = getUserSessionsToken(numericUserId);
         const baseUrl = config.webBaseUrl;
         if (baseUrl && userToken) {
