@@ -21,7 +21,7 @@ export PATH="/usr/lib/postgresql/16/bin:$PATH"
 
 PGDATA="/app/pgdata"
 PGRUN="/var/run/postgresql"
-PGLOG="/app/data/pg-startup.log"
+PGLOG="/tmp/pg-startup.log"
 EMBEDDED_DB="rick"
 EMBEDDED_VECTOR_DB="rick_vectors"
 EMBEDDED_URL="postgresql://rick@localhost:5432/${EMBEDDED_DB}"
