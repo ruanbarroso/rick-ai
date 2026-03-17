@@ -85,7 +85,10 @@ HBA
 start_embedded_pg() {
   log "Starting embedded PostgreSQL..."
   EMBEDDED_PG_STARTED=true
-  su postgres -c "PATH=$PATH pg_ctl -D '$PGDATA' -l '$PGLOG' -w start" > /dev/null 2>&1
+  if ! su postgres -c "PATH=$PATH pg_ctl -D '$PGDATA' -l '$PGLOG' -w start" 2>&1; then
+    err "Failed to start PostgreSQL! Log contents:"
+    cat "$PGLOG" 2>/dev/null || true
+  fi
 
   # Create the application user (idempotent)
   su postgres -c "PATH=$PATH psql -c \"SELECT 1 FROM pg_roles WHERE rolname='rick'\" | grep -q 1 || PATH=$PATH psql -c \"CREATE USER rick WITH SUPERUSER\"" > /dev/null 2>&1
