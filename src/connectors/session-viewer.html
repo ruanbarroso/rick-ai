@@ -2484,6 +2484,13 @@ function sendMessage() {
     appendMessage(text, 'user', 'text', pendingAudio ? pendingAudio.localUrl : null, localImageUrls.length > 0 ? localImageUrls : null, null);
   }
 
+  // Lock any pending question cards — user sent a new message, questions are no longer interactive
+  var qContainer = document.getElementById('messages');
+  if (qContainer) {
+    var pendingQs = qContainer.querySelectorAll('.message.question:not(.answered)');
+    for (var qi = 0; qi < pendingQs.length; qi++) lockQuestionCard(pendingQs[qi]);
+  }
+
   // Build files array (all file types — server handles routing)
   var filesPayload = [];
   for (var i = 0; i < pendingFiles.length; i++) {
