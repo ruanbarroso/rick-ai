@@ -347,18 +347,62 @@ const MIGRATIONS: Migration[] = [
   {
     name: "020_shared_oauth_tokens",
     statements: [
-      // Move admin (user_id=1) OAuth tokens to "shared" (user_id=NULL).
-      // Shared tokens are the fallback for users who haven't connected their own accounts.
-      // This decouples the admin's personal OAuth from the shared/default OAuth,
-      // allowing the admin to connect their own account separately via the session viewer.
-      //
-      // Step 1: Drop the old unique constraint/index that doesn't allow NULL user_id duplicates
       `DROP INDEX IF EXISTS oauth_tokens_user_id_provider_unique`,
       `DROP INDEX IF EXISTS idx_oauth_tokens_uid_provider`,
-      // Step 2: Move admin tokens to shared (NULL)
       `UPDATE oauth_tokens SET user_id = NULL WHERE user_id = 1`,
-      // Step 3: Create a unique index that treats NULL as a single value using COALESCE
       `CREATE UNIQUE INDEX IF NOT EXISTS oauth_tokens_user_provider_unique ON oauth_tokens(COALESCE(user_id, 0), provider)`,
+    ],
+  },
+  {
+    name: "021_webhooks_and_schedules",
+    statements: [
+      // Webhooks table — each webhook has a dedicated internal user for isolated context
+      `CREATE TABLE IF NOT EXISTS webhooks (
+        id VARCHAR(32) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        secret VARCHAR(64) NOT NULL,
+        template TEXT DEFAULT '',
+        execution_mode VARCHAR(10) DEFAULT 'build',
+        active BOOLEAN DEFAULT TRUE,
+        last_triggered_at TIMESTAMPTZ,
+        trigger_count INTEGER DEFAULT 0,
+        created_by INTEGER NOT NULL REFERENCES users(id),
+        updated_by INTEGER NOT NULL REFERENCES users(id),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+
+      // Schedules table — each schedule has a dedicated internal user for isolated context
+      `CREATE TABLE IF NOT EXISTS schedules (
+        id VARCHAR(32) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        cron VARCHAR(100) NOT NULL,
+        task_text TEXT NOT NULL,
+        execution_mode VARCHAR(10) DEFAULT 'build',
+        active BOOLEAN DEFAULT TRUE,
+        max_concurrent INTEGER DEFAULT 1,
+        last_run_at TIMESTAMPTZ,
+        next_run_at TIMESTAMPTZ,
+        run_count INTEGER DEFAULT 0,
+        created_by INTEGER NOT NULL REFERENCES users(id),
+        updated_by INTEGER NOT NULL REFERENCES users(id),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+
+      // Audit log for webhooks and schedules
+      `CREATE TABLE IF NOT EXISTS automation_audit_log (
+        id SERIAL PRIMARY KEY,
+        entity_type VARCHAR(20) NOT NULL,
+        entity_id VARCHAR(32) NOT NULL,
+        action VARCHAR(20) NOT NULL,
+        actor_id INTEGER NOT NULL REFERENCES users(id),
+        changes JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_audit_entity ON automation_audit_log(entity_type, entity_id)`,
     ],
   },
 ];

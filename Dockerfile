@@ -43,6 +43,8 @@ RUN cp src/connectors/web-ui.html dist/connectors/web-ui.html
 RUN cp src/connectors/session-viewer.html dist/connectors/session-viewer.html
 RUN cp src/connectors/sessions-list.html dist/connectors/sessions-list.html
 RUN cp src/connectors/main-session-viewer.html dist/connectors/main-session-viewer.html
+RUN cp src/connectors/webhooks.html dist/connectors/webhooks.html 2>/dev/null || true
+RUN cp src/connectors/schedules.html dist/connectors/schedules.html 2>/dev/null || true
 RUN cp -r src/connectors/static dist/connectors/static
 
 # Cleanup dev deps

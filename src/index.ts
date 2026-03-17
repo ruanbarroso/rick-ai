@@ -16,7 +16,9 @@ import { UserService } from "./auth/user-service.js";
 import { closeVectorPool } from "./memory/vector-db.js";
 
 
-import { startHealthServer, setHealthy, registerAgentApiServices, registerSessionKiller, registerSubagentMetrics, registerSessionStateGetter, registerBroadcast, startAutoUpdateTimer } from "./health.js";
+import { startHealthServer, setHealthy, registerAgentApiServices, registerSessionKiller, registerSubagentMetrics, registerSessionStateGetter, registerBroadcast, startAutoUpdateTimer, registerAutomationServices } from "./health.js";
+import { WebhookService } from "./automation/webhook-service.js";
+import { ScheduleService } from "./automation/schedule-service.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -120,6 +122,24 @@ async function main() {
   registerSubagentMetrics(() => agent.getSubagentMetrics());
   registerSessionStateGetter((sessionId) => agent.getSessionState(sessionId));
 
+  // Register automation services (webhooks + schedules)
+  const webhookService = new WebhookService();
+  const scheduleService = new ScheduleService();
+  const adminUser = await userService.getAdminUser();
+  const adminId = adminUser?.id || 1;
+
+  // Webhook trigger: delegates to sub-agent using the webhook's internal user
+  registerAutomationServices(webhookService, scheduleService, adminId, async (webhook, data) => {
+    const response = await agent.triggerAutomation(webhook.userId, data.text, webhook.executionMode);
+    return response;
+  });
+
+  // Schedule trigger: delegates to sub-agent using the schedule's internal user
+  scheduleService.setTriggerCallback(async (schedule) => {
+    await agent.triggerAutomation(schedule.userId, schedule.taskText, schedule.executionMode);
+  });
+  scheduleService.start();
+
   // Wire welcome message sender: UserService → ConnectorManager
   userService.setWelcomeSender(async (connector, externalId, text) => {
     const conn = connectorManager.get(connector);
@@ -204,6 +224,7 @@ async function main() {
     clearInterval(dockerCleanupTimer);
     clearInterval(staleSessionTimer);
     diskMonitor?.stop();
+    scheduleService.stop();
     // Persist sync state for all live sub-agent sessions so we can resume
     // from the correct event position after restart. Sub-agent containers
     // continue running independently — they are NOT killed here.

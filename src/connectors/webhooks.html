@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Webhooks</title>
+<style>
+  :root {
+    --bg: #0f1117; --bg-surface: #1a1d27; --border: #2a2d3a;
+    --text: #e4e6eb; --text-secondary: #9ca3af; --text-muted: #6b7280;
+    --accent: #6366f1; --accent-hover: #818cf8; --danger: #ef4444; --success: #22c55e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-height: 100vh; }
+
+  .header { padding: 20px 32px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 1.4rem; font-weight: 700; }
+  .btn { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: all 0.15s; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  .btn-danger:hover { background: rgba(239,68,68,0.1); }
+  .btn-sm { padding: 5px 10px; font-size: 0.78rem; }
+
+  .container { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
+
+  .webhook-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .webhook-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .webhook-name { font-size: 1.05rem; font-weight: 600; }
+  .webhook-status { display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem; padding: 3px 10px; border-radius: 12px; }
+  .webhook-status.active { background: rgba(34,197,94,0.15); color: var(--success); }
+  .webhook-status.inactive { background: rgba(107,114,128,0.15); color: var(--text-muted); }
+  .webhook-meta { display: flex; gap: 20px; flex-wrap: wrap; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 12px; }
+  .webhook-url { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-family: monospace; font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; word-break: break-all; }
+  .webhook-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+  .empty-state h2 { font-size: 1.1rem; margin-bottom: 8px; color: var(--text-secondary); }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; display: none; }
+  .modal-overlay.visible { display: flex; align-items: center; justify-content: center; }
+  .modal { background: var(--bg); border: 1px solid var(--border); border-radius: 14px; padding: 24px; width: 560px; max-width: calc(100% - 32px); max-height: 80vh; overflow-y: auto; }
+  .modal h2 { font-size: 1.1rem; margin-bottom: 16px; }
+  .form-group { margin-bottom: 14px; }
+  .form-label { display: block; font-size: 0.82rem; font-weight: 600; margin-bottom: 4px; color: var(--text-secondary); }
+  .form-input, .form-textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); color: var(--text); font-size: 0.88rem; outline: none; }
+  .form-input:focus, .form-textarea:focus { border-color: var(--accent); }
+  .form-textarea { min-height: 80px; resize: vertical; font-family: monospace; }
+  .form-hint { font-size: 0.75rem; color: var(--text-muted); margin-top: 3px; }
+  .form-row { display: flex; gap: 12px; }
+  .form-row > * { flex: 1; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(100px); padding: 10px 20px; border-radius: 10px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text); font-size: 0.88rem; z-index: 300; opacity: 0; transition: transform 0.3s, opacity 0.3s; pointer-events: none; }
+  .toast.visible { transform: translateX(-50%) translateY(0); opacity: 1; }
+  .toast.error { border-color: var(--danger); color: var(--danger); }
+
+  @media (max-width: 768px) {
+    .header, .container { padding: 16px; }
+    .webhook-meta { flex-direction: column; gap: 6px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Webhooks</h1>
+  <button class="btn btn-primary" onclick="openCreateModal()">+ Novo Webhook</button>
+</div>
+
+<div class="container" id="content">
+  <div class="empty-state"><h2>Carregando...</h2></div>
+</div>
+
+<!-- Create/Edit Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2 id="modal-title">Novo Webhook</h2>
+    <input type="hidden" id="edit-id">
+    <div class="form-group">
+      <label class="form-label">Nome</label>
+      <input class="form-input" id="field-name" placeholder="Ex: Datadog Alert">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Template da mensagem</label>
+      <textarea class="form-textarea" id="field-template" placeholder="Alerta {{alertType}}: {{message}}"></textarea>
+      <div class="form-hint">Use {{campo}} para substituir com valores do payload JSON. Deixe vazio para enviar o JSON completo.</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Modo de execucao</label>
+        <select class="form-input" id="field-mode">
+          <option value="build">Build (executa)</option>
+          <option value="plan">Plan (planeja)</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" style="background:var(--bg-surface);color:var(--text);" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveWebhook()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var params = new URLSearchParams(location.search);
+var authParam = params.get('token') ? 'token=' + encodeURIComponent(params.get('token')) : 't=' + encodeURIComponent(params.get('t') || '');
+var baseUrl = location.origin;
+
+function api(method, path, body) {
+  var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(path + (path.includes('?') ? '&' : '?') + authParam, opts)
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); });
+}
+
+function showToast(msg, isError) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast visible' + (isError ? ' error' : '');
+  setTimeout(function() { el.className = 'toast'; }, 3000);
+}
+
+function loadWebhooks() {
+  api('GET', '/api/webhooks').then(function(r) {
+    if (r.status !== 200) { document.getElementById('content').innerHTML = '<div class="empty-state"><h2>Erro ao carregar</h2><p>' + (r.data.error || '') + '</p></div>'; return; }
+    renderWebhooks(r.data.webhooks || []);
+  });
+}
+
+function renderWebhooks(webhooks) {
+  var el = document.getElementById('content');
+  if (webhooks.length === 0) {
+    el.innerHTML = '<div class="empty-state"><h2>Nenhum webhook cadastrado</h2><p>Crie um webhook para receber eventos externos e disparar sub-agentes automaticamente.</p></div>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < webhooks.length; i++) {
+    var w = webhooks[i];
+    var url = baseUrl + '/api/webhook/' + w.id;
+    var statusClass = w.active ? 'active' : 'inactive';
+    var statusText = w.active ? 'Ativo' : 'Inativo';
+    var lastTrigger = w.lastTriggeredAt ? new Date(w.lastTriggeredAt).toLocaleString('pt-BR') : 'Nunca';
+    html += '<div class="webhook-card">';
+    html += '<div class="webhook-card-header">';
+    html += '<span class="webhook-name">' + escHtml(w.name) + '</span>';
+    html += '<span class="webhook-status ' + statusClass + '">' + statusText + '</span>';
+    html += '</div>';
+    html += '<div class="webhook-meta">';
+    html += '<span>Disparos: ' + w.triggerCount + '</span>';
+    html += '<span>Ultimo: ' + lastTrigger + '</span>';
+    html += '<span>Modo: ' + w.executionMode + '</span>';
+    html += '</div>';
+    html += '<div class="webhook-url"><span>' + escHtml(url) + '</span><button class="btn btn-sm" onclick="copyText(\'' + url + '\')">Copiar URL</button></div>';
+    html += '<div class="webhook-url"><span>Bearer ' + w.secret.substring(0, 12) + '...</span><button class="btn btn-sm" onclick="copyText(\'' + w.secret + '\')">Copiar Secret</button></div>';
+    html += '<div class="webhook-actions">';
+    html += '<button class="btn btn-sm btn-primary" onclick="openEditModal(\'' + w.id + '\')">Editar</button>';
+    html += '<button class="btn btn-sm" onclick="toggleActive(\'' + w.id + '\',' + !w.active + ')">' + (w.active ? 'Desativar' : 'Ativar') + '</button>';
+    html += '<button class="btn btn-sm btn-danger" onclick="deleteWebhook(\'' + w.id + '\')">Excluir</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(function() { showToast('Copiado!'); }).catch(function() { showToast('Erro ao copiar', true); });
+}
+
+function openCreateModal() {
+  document.getElementById('modal-title').textContent = 'Novo Webhook';
+  document.getElementById('edit-id').value = '';
+  document.getElementById('field-name').value = '';
+  document.getElementById('field-template').value = '';
+  document.getElementById('field-mode').value = 'build';
+  document.getElementById('modal-overlay').classList.add('visible');
+}
+
+function openEditModal(id) {
+  api('GET', '/api/webhooks').then(function(r) {
+    var w = (r.data.webhooks || []).find(function(x) { return x.id === id; });
+    if (!w) return;
+    document.getElementById('modal-title').textContent = 'Editar Webhook';
+    document.getElementById('edit-id').value = id;
+    document.getElementById('field-name').value = w.name;
+    document.getElementById('field-template').value = w.template;
+    document.getElementById('field-mode').value = w.executionMode;
+    document.getElementById('modal-overlay').classList.add('visible');
+  });
+}
+
+function closeModal() { document.getElementById('modal-overlay').classList.remove('visible'); }
+
+function saveWebhook() {
+  var id = document.getElementById('edit-id').value;
+  var body = {
+    name: document.getElementById('field-name').value.trim(),
+    template: document.getElementById('field-template').value,
+    executionMode: document.getElementById('field-mode').value,
+  };
+  if (!body.name) { showToast('Nome obrigatorio', true); return; }
+
+  var method = id ? 'PUT' : 'POST';
+  var path = id ? '/api/webhooks/' + id : '/api/webhooks';
+  api(method, path, body).then(function(r) {
+    if (r.status >= 400) { showToast(r.data.error || 'Erro', true); return; }
+    closeModal();
+    showToast(id ? 'Webhook atualizado' : 'Webhook criado');
+    loadWebhooks();
+  });
+}
+
+function toggleActive(id, active) {
+  api('PUT', '/api/webhooks/' + id, { active: active }).then(function(r) {
+    if (r.status >= 400) { showToast(r.data.error || 'Erro', true); return; }
+    showToast(active ? 'Webhook ativado' : 'Webhook desativado');
+    loadWebhooks();
+  });
+}
+
+function deleteWebhook(id) {
+  if (!confirm('Tem certeza que deseja excluir este webhook?')) return;
+  api('DELETE', '/api/webhooks/' + id).then(function(r) {
+    if (r.status >= 400) { showToast(r.data.error || 'Erro', true); return; }
+    showToast('Webhook excluido');
+    loadWebhooks();
+  });
+}
+
+loadWebhooks();
+</script>
+</body>
+</html>

@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agendamentos</title>
+<style>
+  :root {
+    --bg: #0f1117; --bg-surface: #1a1d27; --border: #2a2d3a;
+    --text: #e4e6eb; --text-secondary: #9ca3af; --text-muted: #6b7280;
+    --accent: #6366f1; --accent-hover: #818cf8; --danger: #ef4444; --success: #22c55e; --warning: #f59e0b;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-height: 100vh; }
+
+  .header { padding: 20px 32px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 1.4rem; font-weight: 700; }
+  .btn { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: all 0.15s; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  .btn-danger:hover { background: rgba(239,68,68,0.1); }
+  .btn-warning { background: transparent; color: var(--warning); border: 1px solid var(--warning); }
+  .btn-warning:hover { background: rgba(245,158,11,0.1); }
+  .btn-sm { padding: 5px 10px; font-size: 0.78rem; }
+
+  .container { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
+
+  .schedule-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .schedule-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .schedule-name { font-size: 1.05rem; font-weight: 600; }
+  .schedule-status { display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem; padding: 3px 10px; border-radius: 12px; }
+  .schedule-status.active { background: rgba(34,197,94,0.15); color: var(--success); }
+  .schedule-status.inactive { background: rgba(107,114,128,0.15); color: var(--text-muted); }
+  .schedule-cron { font-family: monospace; font-size: 0.85rem; color: var(--accent); margin-bottom: 8px; }
+  .schedule-task { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px; white-space: pre-wrap; word-break: break-word; max-height: 100px; overflow-y: auto; }
+  .schedule-meta { display: flex; gap: 20px; flex-wrap: wrap; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 12px; }
+  .schedule-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+  .empty-state h2 { font-size: 1.1rem; margin-bottom: 8px; color: var(--text-secondary); }
+
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; display: none; }
+  .modal-overlay.visible { display: flex; align-items: center; justify-content: center; }
+  .modal { background: var(--bg); border: 1px solid var(--border); border-radius: 14px; padding: 24px; width: 620px; max-width: calc(100% - 32px); max-height: 80vh; overflow-y: auto; }
+  .modal h2 { font-size: 1.1rem; margin-bottom: 16px; }
+  .form-group { margin-bottom: 14px; }
+  .form-label { display: block; font-size: 0.82rem; font-weight: 600; margin-bottom: 4px; color: var(--text-secondary); }
+  .form-input, .form-textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); color: var(--text); font-size: 0.88rem; outline: none; }
+  .form-input:focus, .form-textarea:focus { border-color: var(--accent); }
+  .form-textarea { min-height: 100px; resize: vertical; }
+  .form-hint { font-size: 0.75rem; color: var(--text-muted); margin-top: 3px; }
+  .form-row { display: flex; gap: 12px; }
+  .form-row > * { flex: 1; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(100px); padding: 10px 20px; border-radius: 10px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text); font-size: 0.88rem; z-index: 300; opacity: 0; transition: transform 0.3s, opacity 0.3s; pointer-events: none; }
+  .toast.visible { transform: translateX(-50%) translateY(0); opacity: 1; }
+  .toast.error { border-color: var(--danger); color: var(--danger); }
+
+  @media (max-width: 768px) {
+    .header, .container { padding: 16px; }
+    .schedule-meta { flex-direction: column; gap: 6px; }
+    .form-row { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Agendamentos</h1>
+  <button class="btn btn-primary" onclick="openCreateModal()">+ Novo Agendamento</button>
+</div>
+
+<div class="container" id="content">
+  <div class="empty-state"><h2>Carregando...</h2></div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2 id="modal-title">Novo Agendamento</h2>
+    <input type="hidden" id="edit-id">
+    <div class="form-group">
+      <label class="form-label">Nome</label>
+      <input class="form-input" id="field-name" placeholder="Ex: Migracao noturna de micros">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Expressao Cron</label>
+      <input class="form-input" id="field-cron" placeholder="0 2 * * *" oninput="previewCron()">
+      <div class="form-hint" id="cron-preview">Formato: minuto hora dia-do-mes mes dia-da-semana (ex: 0 2 * * * = diariamente as 2h)</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Tarefa</label>
+      <textarea class="form-textarea" id="field-task" placeholder="Descreva a tarefa que o agente deve executar..."></textarea>
+      <div class="form-hint">Este texto sera enviado como mensagem para o sub-agente.</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Modo de execucao</label>
+        <select class="form-input" id="field-mode">
+          <option value="build">Build (executa)</option>
+          <option value="plan">Plan (planeja)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Max sessoes simultaneas</label>
+        <input class="form-input" type="number" id="field-max-concurrent" value="1" min="1" max="5">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" style="background:var(--bg-surface);color:var(--text);" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveSchedule()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var params = new URLSearchParams(location.search);
+var authParam = params.get('token') ? 'token=' + encodeURIComponent(params.get('token')) : 't=' + encodeURIComponent(params.get('t') || '');
+
+function api(method, path, body) {
+  var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(path + (path.includes('?') ? '&' : '?') + authParam, opts)
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); });
+}
+
+function showToast(msg, isError) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast visible' + (isError ? ' error' : '');
+  setTimeout(function() { el.className = 'toast'; }, 3000);
+}
+
+function loadSchedules() {
+  api('GET', '/api/schedules').then(function(r) {
+    if (r.status !== 200) { document.getElementById('content').innerHTML = '<div class="empty-state"><h2>Erro ao carregar</h2><p>' + (r.data.error || '') + '</p></div>'; return; }
+    renderSchedules(r.data.schedules || []);
+  });
+}
+
+function renderSchedules(schedules) {
+  var el = document.getElementById('content');
+  if (schedules.length === 0) {
+    el.innerHTML = '<div class="empty-state"><h2>Nenhum agendamento cadastrado</h2><p>Crie um agendamento para executar tarefas automaticamente em horarios programados.</p></div>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < schedules.length; i++) {
+    var s = schedules[i];
+    var statusClass = s.active ? 'active' : 'inactive';
+    var statusText = s.active ? 'Ativo' : 'Inativo';
+    var lastRun = s.lastRunAt ? new Date(s.lastRunAt).toLocaleString('pt-BR') : 'Nunca';
+    var nextRun = s.nextRunAt ? new Date(s.nextRunAt).toLocaleString('pt-BR') : '-';
+    html += '<div class="schedule-card">';
+    html += '<div class="schedule-card-header">';
+    html += '<span class="schedule-name">' + escHtml(s.name) + '</span>';
+    html += '<span class="schedule-status ' + statusClass + '">' + statusText + '</span>';
+    html += '</div>';
+    html += '<div class="schedule-cron">' + escHtml(s.cron) + '</div>';
+    html += '<div class="schedule-task">' + escHtml(s.taskText) + '</div>';
+    html += '<div class="schedule-meta">';
+    html += '<span>Execucoes: ' + s.runCount + '</span>';
+    html += '<span>Ultima: ' + lastRun + '</span>';
+    html += '<span>Proxima: ' + nextRun + '</span>';
+    html += '<span>Modo: ' + s.executionMode + '</span>';
+    html += '<span>Max sessoes: ' + s.maxConcurrent + '</span>';
+    html += '</div>';
+    html += '<div class="schedule-actions">';
+    html += '<button class="btn btn-sm btn-warning" onclick="triggerNow(\'' + s.id + '\')">Executar agora</button>';
+    html += '<button class="btn btn-sm btn-primary" onclick="openEditModal(\'' + s.id + '\')">Editar</button>';
+    html += '<button class="btn btn-sm" onclick="toggleActive(\'' + s.id + '\',' + !s.active + ')">' + (s.active ? 'Desativar' : 'Ativar') + '</button>';
+    html += '<button class="btn btn-sm btn-danger" onclick="deleteSchedule(\'' + s.id + '\')">Excluir</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function previewCron() {
+  var val = document.getElementById('field-cron').value.trim();
+  var el = document.getElementById('cron-preview');
+  if (!val || val.split(/\s+/).length !== 5) {
+    el.textContent = 'Formato: minuto hora dia-do-mes mes dia-da-semana (ex: 0 2 * * * = diariamente as 2h)';
+    return;
+  }
+  // Simple human-readable descriptions for common patterns
+  var parts = val.split(/\s+/);
+  var desc = val;
+  if (parts[0] === '0' && parts[1] !== '*' && parts[2] === '*' && parts[3] === '*' && parts[4] === '*') desc = 'Diariamente as ' + parts[1] + ':00';
+  else if (parts[0].startsWith('*/')) desc = 'A cada ' + parts[0].replace('*/', '') + ' minutos';
+  else if (parts[1].startsWith('*/')) desc = 'A cada ' + parts[1].replace('*/', '') + ' horas';
+  el.textContent = desc;
+}
+
+function openCreateModal() {
+  document.getElementById('modal-title').textContent = 'Novo Agendamento';
+  document.getElementById('edit-id').value = '';
+  document.getElementById('field-name').value = '';
+  document.getElementById('field-cron').value = '';
+  document.getElementById('field-task').value = '';
+  document.getElementById('field-mode').value = 'build';
+  document.getElementById('field-max-concurrent').value = '1';
+  document.getElementById('modal-overlay').classList.add('visible');
+}
+
+function openEditModal(id) {
+  api('GET', '/api/schedules').then(function(r) {
+    var s = (r.data.schedules || []).find(function(x) { return x.id === id; });
+    if (!s) return;
+    document.getElementById('modal-title').textContent = 'Editar Agendamento';
+    document.getElementById('edit-id').value = id;
+    document.getElementById('field-name').value = s.name;
+    document.getElementById('field-cron').value = s.cron;
+    document.getElementById('field-task').value = s.taskText;
+    document.getElementById('field-mode').value = s.executionMode;
+    document.getElementById('field-max-concurrent').value = s.maxConcurrent;
+    document.getElementById('modal-overlay').classList.add('visible');
+    previewCron();
+  });
+}
+
+function closeModal() { document.getElementById('modal-overlay').classList.remove('visible'); }
+
+function saveSchedule() {
+  var id = document.getElementById('edit-id').value;
+  var body = {
+    name: document.getElementById('field-name').value.trim(),
+    cron: document.getElementById('field-cron').value.trim(),
+    taskText: document.getElementById('field-task').value.trim(),
+    executionMode: document.getElementById('field-mode').value,
+    maxConcurrent: parseInt(document.getElementById('field-max-concurrent').value) || 1,
+  };
+  if (!body.name) { showToast('Nome obrigatorio', true); return; }
+  if (!body.cron) { showToast('Expressao cron obrigatoria', true); return; }
+  if (!body.taskText) { showToast('Tarefa obrigatoria', true); return; }
+
+  var method = id ? 'PUT' : 'POST';
+  var path = id ? '/api/schedules/' + id : '/api/schedules';
+  api(method, path, body).then(function(r) {
+    if (r.status >= 400) { showToast(r.data.error || 'Erro', true); return; }
+    closeModal();
+    showToast(id ? 'Agendamento atualizado' : 'Agendamento criado');
+    loadSchedules();
+  });
+}
+
+function toggleActive(id, active) {
+  api('PUT', '/api/schedules/' + id, { active: active }).then(function(r) {
+    if (r.status >= 400) { showToast(r.data.error || 'Erro', true); return; }
+    showToast(active ? 'Agendamento ativado' : 'Agendamento desativado');
+    loadSchedules();
+  });
+}
+
+function triggerNow(id) {
+  if (!confirm('Executar este agendamento agora?')) return;
+  api('POST', '/api/schedules/' + id + '/trigger').then(function(r) {
+    if (r.status >= 400) { showToast(r.data.error || 'Erro', true); return; }
+    showToast('Agendamento disparado');
+    loadSchedules();
+  });
+}
+
+function deleteSchedule(id) {
+  if (!confirm('Tem certeza que deseja excluir este agendamento?')) return;
+  api('DELETE', '/api/schedules/' + id).then(function(r) {
+    if (r.status >= 400) { showToast(r.data.error || 'Erro', true); return; }
+    showToast('Agendamento excluido');
+    loadSchedules();
+  });
+}
+
+loadSchedules();
+</script>
+</body>
+</html>

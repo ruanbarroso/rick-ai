@@ -14,6 +14,8 @@ import type { MemoryService } from "./memory/memory-service.js";
 import type { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
 import type { UserRole } from "./auth/permissions.js";
+import { WebhookService, renderTemplate } from "./automation/webhook-service.js";
+import { ScheduleService } from "./automation/schedule-service.js";
 
 /**
  * HTTP server that serves:
@@ -134,6 +136,10 @@ let registeredKillSession: ((sessionId: string) => Promise<void>) | null = null;
 let registeredSubagentMetrics: (() => SubAgentMetricsSnapshot) | null = null;
 let registeredSessionStateGetter: ((sessionId: string) => string | null) | null = null;
 let registeredBroadcast: ((data: object) => void) | null = null;
+let registeredWebhookService: WebhookService | null = null;
+let registeredScheduleService: ScheduleService | null = null;
+let registeredAdminUserId: number | null = null;
+let registeredWebhookTrigger: ((webhook: any, payload: any) => Promise<string>) | null = null;
 
 /**
  * Register services for the sub-agent Agent API (read + write).
@@ -161,6 +167,19 @@ export function registerSessionKiller(killFn: (sessionId: string) => Promise<voi
 
 export function registerSubagentMetrics(getter: () => SubAgentMetricsSnapshot): void {
   registeredSubagentMetrics = getter;
+}
+
+export function registerAutomationServices(
+  webhookService: WebhookService,
+  scheduleService: ScheduleService,
+  adminUserId: number,
+  webhookTrigger: (webhook: any, payload: any) => Promise<string>,
+): void {
+  registeredWebhookService = webhookService;
+  registeredScheduleService = scheduleService;
+  registeredAdminUserId = adminUserId;
+  registeredWebhookTrigger = webhookTrigger;
+  logger.info("Automation services registered (webhooks + schedules)");
 }
 
 /**
@@ -390,6 +409,199 @@ export function startHealthServer(port: number): void {
       return;
     }
 
+    // ==================== WEBHOOK TRIGGER (Bearer secret) ====================
+    const webhookTriggerMatch = req.url?.match(/^\/api\/webhook\/([a-f0-9]+)$/);
+    if (webhookTriggerMatch && req.method === "POST") {
+      const webhookId = webhookTriggerMatch[1];
+      const authHeader = req.headers["authorization"] || "";
+      const secretMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+      if (!secretMatch) {
+        jsonResponse(res, 401, { error: "Bearer token obrigatorio" });
+        return;
+      }
+      if (!registeredWebhookService || !registeredWebhookTrigger) {
+        jsonResponse(res, 503, { error: "Servico de webhooks indisponivel" });
+        return;
+      }
+      const webhook = await registeredWebhookService.getBySecret(webhookId, secretMatch[1]);
+      if (!webhook) {
+        jsonResponse(res, 404, { error: "Webhook nao encontrado ou secret invalido" });
+        return;
+      }
+      if (!webhook.active) {
+        jsonResponse(res, 409, { error: "Webhook desativado" });
+        return;
+      }
+      try {
+        const body = (await readRequestBody(req)).toString("utf-8");
+        const payload = body ? JSON.parse(body) : {};
+        const renderedText = renderTemplate(webhook.template, payload);
+        const sessionId = await registeredWebhookTrigger(webhook, { text: renderedText, payload });
+        await registeredWebhookService.recordTrigger(webhook.id);
+        jsonResponse(res, 200, { ok: true, sessionId, text: renderedText.substring(0, 200) });
+      } catch (err: any) {
+        logger.error({ err, webhookId }, "Webhook trigger failed");
+        jsonResponse(res, 500, { error: err.message || "Erro ao disparar webhook" });
+      }
+      return;
+    }
+
+    // ==================== WEBHOOKS MANAGEMENT API ====================
+    if (req.url?.startsWith("/api/webhooks") && (req.method === "GET" || req.method === "POST" || req.method === "PUT" || req.method === "DELETE")) {
+      const actor = await authenticateAutomationRequest(req, res);
+      if (!actor) return;
+      if (!registeredWebhookService) {
+        jsonResponse(res, 503, { error: "Servico de webhooks indisponivel" });
+        return;
+      }
+      const actorId = actor.userId;
+      const actorRole = actor.role;
+
+      try {
+        // GET /api/webhooks — list all
+        if (req.method === "GET" && req.url?.match(/^\/api\/webhooks(\?|$)/)) {
+          const webhooks = await registeredWebhookService.list();
+          jsonResponse(res, 200, { webhooks });
+          return;
+        }
+
+        // GET /api/webhooks/:id/audit — audit log
+        const auditMatch = req.url?.match(/^\/api\/webhooks\/([a-f0-9]+)\/audit/);
+        if (req.method === "GET" && auditMatch) {
+          const log = await registeredWebhookService.getAuditLog("webhook", auditMatch[1]);
+          jsonResponse(res, 200, { log });
+          return;
+        }
+
+        // POST /api/webhooks — create
+        if (req.method === "POST" && req.url?.match(/^\/api\/webhooks(\?|$)/)) {
+          const body = JSON.parse((await readRequestBody(req)).toString("utf-8") || "{}");
+          const webhook = await registeredWebhookService.create(body, actorId);
+          jsonResponse(res, 201, { webhook });
+          return;
+        }
+
+        // PUT /api/webhooks/:id — update
+        const putMatch = req.url?.match(/^\/api\/webhooks\/([a-f0-9]+)/);
+        if (req.method === "PUT" && putMatch) {
+          const body = JSON.parse((await readRequestBody(req)).toString("utf-8") || "{}");
+          const webhook = await registeredWebhookService.update(putMatch[1], body, actorId, actorRole);
+          if (!webhook) { jsonResponse(res, 404, { error: "Webhook nao encontrado" }); return; }
+          jsonResponse(res, 200, { webhook });
+          return;
+        }
+
+        // DELETE /api/webhooks/:id — delete
+        const delMatch = req.url?.match(/^\/api\/webhooks\/([a-f0-9]+)/);
+        if (req.method === "DELETE" && delMatch) {
+          const ok = await registeredWebhookService.delete(delMatch[1], actorId, actorRole);
+          if (!ok) { jsonResponse(res, 404, { error: "Webhook nao encontrado" }); return; }
+          jsonResponse(res, 200, { ok: true });
+          return;
+        }
+      } catch (err: any) {
+        jsonResponse(res, 400, { error: err.message });
+        return;
+      }
+      jsonResponse(res, 404, { error: "Endpoint nao encontrado" });
+      return;
+    }
+
+    // ==================== SCHEDULES MANAGEMENT API ====================
+    if (req.url?.startsWith("/api/schedules") && (req.method === "GET" || req.method === "POST" || req.method === "PUT" || req.method === "DELETE")) {
+      const actor = await authenticateAutomationRequest(req, res);
+      if (!actor) return;
+      if (!registeredScheduleService) {
+        jsonResponse(res, 503, { error: "Servico de agendamentos indisponivel" });
+        return;
+      }
+      const actorId = actor.userId;
+      const actorRole = actor.role;
+
+      try {
+        // GET /api/schedules — list all
+        if (req.method === "GET" && req.url?.match(/^\/api\/schedules(\?|$)/)) {
+          const schedules = await registeredScheduleService.list();
+          jsonResponse(res, 200, { schedules });
+          return;
+        }
+
+        // GET /api/schedules/:id/audit — audit log
+        const auditMatch = req.url?.match(/^\/api\/schedules\/([a-f0-9]+)\/audit/);
+        if (req.method === "GET" && auditMatch) {
+          const log = await registeredScheduleService.getAuditLog("schedule", auditMatch[1]);
+          jsonResponse(res, 200, { log });
+          return;
+        }
+
+        // POST /api/schedules — create
+        if (req.method === "POST" && req.url?.match(/^\/api\/schedules(\?|$)/)) {
+          const body = JSON.parse((await readRequestBody(req)).toString("utf-8") || "{}");
+          const schedule = await registeredScheduleService.create(body, actorId);
+          jsonResponse(res, 201, { schedule });
+          return;
+        }
+
+        // POST /api/schedules/:id/trigger — manual trigger
+        const triggerMatch = req.url?.match(/^\/api\/schedules\/([a-f0-9]+)\/trigger/);
+        if (req.method === "POST" && triggerMatch) {
+          await registeredScheduleService.triggerManual(triggerMatch[1], actorId);
+          jsonResponse(res, 200, { ok: true });
+          return;
+        }
+
+        // PUT /api/schedules/:id — update
+        const putMatch = req.url?.match(/^\/api\/schedules\/([a-f0-9]+)/);
+        if (req.method === "PUT" && putMatch) {
+          const body = JSON.parse((await readRequestBody(req)).toString("utf-8") || "{}");
+          const schedule = await registeredScheduleService.update(putMatch[1], body, actorId, actorRole);
+          if (!schedule) { jsonResponse(res, 404, { error: "Agendamento nao encontrado" }); return; }
+          jsonResponse(res, 200, { schedule });
+          return;
+        }
+
+        // DELETE /api/schedules/:id — delete
+        const delMatch = req.url?.match(/^\/api\/schedules\/([a-f0-9]+)/);
+        if (req.method === "DELETE" && delMatch) {
+          const ok = await registeredScheduleService.delete(delMatch[1], actorId, actorRole);
+          if (!ok) { jsonResponse(res, 404, { error: "Agendamento nao encontrado" }); return; }
+          jsonResponse(res, 200, { ok: true });
+          return;
+        }
+      } catch (err: any) {
+        jsonResponse(res, 400, { error: err.message });
+        return;
+      }
+      jsonResponse(res, 404, { error: "Endpoint nao encontrado" });
+      return;
+    }
+
+    // ==================== WEBHOOKS / SCHEDULES HTML PAGES ====================
+    if (req.url?.startsWith("/webhooks") && req.method === "GET") {
+      const filePath = join(import.meta.dirname, "connectors", "webhooks.html");
+      try {
+        const html = await readFile(filePath, "utf-8");
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(html);
+      } catch {
+        res.writeHead(404);
+        res.end("Not found");
+      }
+      return;
+    }
+    if (req.url?.startsWith("/schedules") && req.method === "GET") {
+      const filePath = join(import.meta.dirname, "connectors", "schedules.html");
+      try {
+        const html = await readFile(filePath, "utf-8");
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(html);
+      } catch {
+        res.writeHead(404);
+        res.end("Not found");
+      }
+      return;
+    }
+
     // ==================== AGENT API (JWT-authenticated) ====================
     // Endpoints for sub-agents to query/write
     // memories, credentials, config, conversations, semantic search, and LLM tokens.
@@ -443,6 +655,45 @@ export function startHealthServer(port: number): void {
 }
 
 // ==================== AUTH HELPER ====================
+
+/**
+ * Authenticate automation management requests (webhooks, schedules).
+ * Accepts either:
+ *   - Admin password via ?token=<password> (admin role)
+ *   - Sessions token via ?t=<sessionsToken> (resolves to user, checks canManageAutomations)
+ * Returns { userId, role } or null (401 already sent).
+ */
+async function authenticateAutomationRequest(
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<{ userId: number; role: UserRole } | null> {
+  const url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+
+  // Try admin password first
+  const passwordToken = url.searchParams.get("token");
+  if (passwordToken && passwordToken === config.webAuthPassword) {
+    return { userId: registeredAdminUserId || 1, role: "admin" };
+  }
+
+  // Try sessions token (for dev users)
+  const sessionsToken = url.searchParams.get("t");
+  if (sessionsToken) {
+    const userId = await resolveSessionsToken(sessionsToken);
+    if (userId != null) {
+      // Look up user role
+      const userResult = await query(`SELECT role FROM users WHERE id = $1`, [userId]);
+      if (userResult.rows.length > 0) {
+        const role = userResult.rows[0].role as UserRole;
+        if (role === "admin" || role === "dev") {
+          return { userId, role };
+        }
+      }
+    }
+  }
+
+  jsonResponse(res, 401, { error: "Nao autorizado" });
+  return null;
+}
 
 function authenticateRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);

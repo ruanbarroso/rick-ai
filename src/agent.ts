@@ -159,6 +159,36 @@ export class Agent {
     return this.sessionManager.getMetricsSnapshot();
   }
 
+  /**
+   * Trigger an automation (webhook/schedule) by delegating to a sub-agent
+   * using the internal user's context.
+   */
+  async triggerAutomation(internalUserId: number, taskText: string, executionMode: string = "build"): Promise<string> {
+    const env = await this.buildSubAgentEnv(internalUserId);
+    try {
+      const session = await this.sessionManager.createSession(
+        taskText,
+        "automation",         // connectorName
+        `internal:${internalUserId}`,  // userPhone (synthetic)
+        {},                   // credentials (use shared)
+        env,
+        undefined,            // imageMedias
+        internalUserId,       // userId
+        undefined,            // imageUrls
+        undefined,            // fileInfos
+      );
+      // Set execution mode if not default
+      if (executionMode === "plan") {
+        await this.sessionManager.setSessionExecutionMode(session.id, "plan");
+      }
+      logger.info({ sessionId: session.id, internalUserId, executionMode }, "Automation triggered sub-agent");
+      return session.id;
+    } catch (err) {
+      logger.error({ err, internalUserId }, "Automation trigger failed");
+      throw err;
+    }
+  }
+
   /** Return the live in-memory state of a session (running, waiting_user, etc.), or null if not in memory. */
   getSessionState(sessionId: string): string | null {
     const session = this.sessionManager.getSession(sessionId);

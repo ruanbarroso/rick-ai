@@ -5,6 +5,7 @@
  *   - admin: full access (web UI, chat, learn, secrets, sub-agents)
  *   - dev: chat + learn + sub-agents, no secrets visibility, no web UI
  *   - business: chat only, no learning, no sub-agents, no secrets
+ *   - internal: system user for webhooks/schedules — chat + learn + sub-agents, no UI
  *   - null: pending user, no access
  *
  * Permissions are checked at multiple layers:
@@ -15,7 +16,7 @@
 
 // ==================== Types ====================
 
-export type UserRole = "admin" | "dev" | "business" | null;
+export type UserRole = "admin" | "dev" | "business" | "internal" | null;
 export type UserStatus = "pending" | "active" | "blocked";
 
 // ==================== Permission Matrix ====================
@@ -41,6 +42,13 @@ const PERMISSIONS = {
     learn: false,
     secrets: false,
     subAgents: false,
+  },
+  internal: {
+    webUI: false,
+    chat: true,
+    learn: true,
+    secrets: false,
+    subAgents: true,
   },
 } as const;
 
@@ -78,6 +86,11 @@ export function canInvokeSubAgent(role: UserRole): boolean {
   return role !== null && PERMISSIONS[role]?.subAgents === true;
 }
 
+/** Whether the user can manage automations (webhooks, schedules). Admin and dev only. */
+export function canManageAutomations(role: UserRole): boolean {
+  return role === "admin" || role === "dev";
+}
+
 // ==================== Hierarchy ====================
 
 /**
@@ -88,6 +101,7 @@ export function canInvokeSubAgent(role: UserRole): boolean {
 const ROLE_AUTHORITY: Record<string, number> = {
   admin: 100,
   dev: 50,
+  internal: 40,
   business: 10,
 };
 
