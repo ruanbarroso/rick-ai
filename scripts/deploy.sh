@@ -56,7 +56,7 @@ fi
 
 is_preserved_path() {
   case "$1" in
-    .|..|.git|node_modules|dist|auth_info|data|pgdata|.deploy-backup|.env|.rick-latest-version.json)
+    .|..|.git|node_modules|dist|auth_info|data|.deploy-backup|.env|.rick-latest-version.json)
       return 0
       ;;
     *)
@@ -98,7 +98,6 @@ tar -C "$PROJECT_DIR" \
   --exclude=dist \
   --exclude=auth_info \
   --exclude=data \
-  --exclude=pgdata \
   --exclude=.deploy-backup \
   --exclude=.env \
   --exclude=.rick-latest-version.json \
@@ -117,7 +116,6 @@ tar -C "$STAGING_DIR" \
   --exclude=dist \
   --exclude=auth_info \
   --exclude=data \
-  --exclude=pgdata \
   --exclude=.deploy-backup \
   --exclude=.env \
   --exclude=.rick-latest-version.json \

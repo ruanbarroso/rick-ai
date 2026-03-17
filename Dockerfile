@@ -49,8 +49,7 @@ RUN cp -r src/connectors/static dist/connectors/static
 RUN npm prune --production
 
 # Create required directories
-RUN mkdir -p auth_info data pgdata && \
-    chown postgres:postgres pgdata
+RUN mkdir -p auth_info data
 
 # Copy entrypoint script and fix line endings (Windows → Unix)
 COPY scripts/entrypoint.sh /app/scripts/entrypoint.sh

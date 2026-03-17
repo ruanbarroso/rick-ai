@@ -19,9 +19,9 @@ set -euo pipefail
 # Ensure PostgreSQL binaries are in PATH
 export PATH="/usr/lib/postgresql/16/bin:$PATH"
 
-PGDATA="/app/pgdata"
+PGDATA="/var/lib/postgresql/16/main"
 PGRUN="/var/run/postgresql"
-PGLOG="/tmp/pg-startup.log"
+PGLOG="/var/log/postgresql/pg-startup.log"
 EMBEDDED_DB="rick"
 EMBEDDED_VECTOR_DB="rick_vectors"
 EMBEDDED_URL="postgresql://rick@localhost:5432/${EMBEDDED_DB}"
@@ -51,62 +51,48 @@ run_node() {
 # ==================== EMBEDDED POSTGRESQL ====================
 
 init_embedded_pg() {
-  # Ensure the run directory exists (required by PostgreSQL)
-  mkdir -p "$PGRUN"
-  chown postgres:postgres "$PGRUN"
+  # The PostgreSQL 16 cluster is created by apt-get install at /var/lib/postgresql/16/main.
+  # We just need to ensure directories exist and configure for our use case.
+  mkdir -p "$PGRUN" /var/log/postgresql
+  chown postgres:postgres "$PGRUN" /var/log/postgresql
 
-  if [ ! -f "$PGDATA/PG_VERSION" ]; then
-    log "Initializing embedded PostgreSQL database cluster..."
-    mkdir -p "$PGDATA"
-    chown postgres:postgres "$PGDATA"
-    su postgres -c "PATH=$PATH initdb -D '$PGDATA' --auth=trust --encoding=UTF8 --locale=C" > "$PGLOG" 2>&1
-
-    # Configure for local-only connections, no network password required
-    cat >> "$PGDATA/postgresql.conf" <<-CONF
-listen_addresses = 'localhost'
-max_connections = 20
-shared_buffers = 64MB
-work_mem = 4MB
-maintenance_work_mem = 32MB
-logging_collector = off
-log_destination = 'stderr'
-CONF
-
-    # Allow local connections without password for all users
+  # Configure for local-only, trust auth (no password needed inside the container)
+  if [ -f "$PGDATA/PG_VERSION" ]; then
+    # Override configuration for embedded use
     cat > "$PGDATA/pg_hba.conf" <<-HBA
 local   all   all   trust
 host    all   all   127.0.0.1/32   trust
 host    all   all   ::1/128        trust
 HBA
-    log "PostgreSQL cluster initialized"
+    log "PostgreSQL cluster found at $PGDATA"
+  else
+    log "ERROR: PostgreSQL cluster not found at $PGDATA — was postgresql-16 installed?"
   fi
 }
 
 start_embedded_pg() {
   log "Starting embedded PostgreSQL..."
   EMBEDDED_PG_STARTED=true
-  # Create log file owned by postgres (pg_ctl writes to it as the postgres user)
-  touch "$PGLOG" && chown postgres:postgres "$PGLOG"
-  if ! su postgres -c "PATH=$PATH pg_ctl -D '$PGDATA' -l '$PGLOG' -w start" 2>&1; then
+  if ! pg_ctlcluster 16 main start 2>&1; then
     err "Failed to start PostgreSQL! Log contents:"
-    cat "$PGLOG" 2>/dev/null || true
+    cat /var/log/postgresql/postgresql-16-main.log 2>/dev/null | tail -20 || true
   fi
 
   # Create the application user (idempotent)
-  su postgres -c "PATH=$PATH psql -c \"SELECT 1 FROM pg_roles WHERE rolname='rick'\" | grep -q 1 || PATH=$PATH psql -c \"CREATE USER rick WITH SUPERUSER\"" > /dev/null 2>&1
+  su postgres -c "psql -c \"SELECT 1 FROM pg_roles WHERE rolname='rick'\" | grep -q 1 || psql -c \"CREATE USER rick WITH SUPERUSER\"" > /dev/null 2>&1
 
   # Create databases (idempotent)
-  su postgres -c "PATH=$PATH psql -lqt | cut -d'|' -f1 | grep -qw '${EMBEDDED_DB}' || PATH=$PATH createdb -O rick '${EMBEDDED_DB}'" > /dev/null 2>&1
-  su postgres -c "PATH=$PATH psql -lqt | cut -d'|' -f1 | grep -qw '${EMBEDDED_VECTOR_DB}' || PATH=$PATH createdb -O rick '${EMBEDDED_VECTOR_DB}'" > /dev/null 2>&1
+  su postgres -c "psql -lqt | cut -d'|' -f1 | grep -qw '${EMBEDDED_DB}' || createdb -O rick '${EMBEDDED_DB}'" > /dev/null 2>&1
+  su postgres -c "psql -lqt | cut -d'|' -f1 | grep -qw '${EMBEDDED_VECTOR_DB}' || createdb -O rick '${EMBEDDED_VECTOR_DB}'" > /dev/null 2>&1
 
   # Enable pgvector extension on the vector database
-  su postgres -c "PATH=$PATH psql -d '${EMBEDDED_VECTOR_DB}' -c 'CREATE EXTENSION IF NOT EXISTS vector'" > /dev/null 2>&1
+  su postgres -c "psql -d '${EMBEDDED_VECTOR_DB}' -c 'CREATE EXTENSION IF NOT EXISTS vector'" > /dev/null 2>&1
 
   log "Embedded PostgreSQL is running"
 }
 
 stop_embedded_pg() {
-  su postgres -c "PATH=$PATH pg_ctl -D '$PGDATA' -m fast stop" > /dev/null 2>&1 || true
+  pg_ctlcluster 16 main stop -- -m fast > /dev/null 2>&1 || true
 }
 
 # ==================== SQLITE → POSTGRESQL MIGRATION ====================
