@@ -64,5 +64,7 @@ COPY .rick-version* ./
 
 EXPOSE 80
 
-# Use the entrypoint script that manages embedded PostgreSQL
+# Use the entrypoint script that manages embedded PostgreSQL.
+# ENTRYPOINT overrides the base image's node entrypoint so bash runs directly.
+ENTRYPOINT ["/bin/bash"]
 CMD ["/app/scripts/entrypoint.sh"]
