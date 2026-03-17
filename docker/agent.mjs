@@ -997,7 +997,28 @@ function runOpencodeTurn({ text, model, mode, images }) {
   return withSafetyTimeout(innerPromise, RUN_SAFETY_TIMEOUT_MS, "runOpencodeTurn");
 }
 
+// Overall handleTurn timeout: if the entire turn (auth resolution + cascade + execution)
+// doesn't complete within this period, emit error and return to waiting_user.
+// This catches hangs in syncOpenCodeAuth, resolveModel, or any pre-spawn logic
+// that the runOpencodeTurn safety timeout doesn't cover.
+const HANDLE_TURN_TIMEOUT_MS = 35 * 60_000; // 35 minutes
+
 async function handleTurn(payload) {
+  const turnTimer = setTimeout(() => {
+    process.stderr.write(`[handle-turn-timeout] handleTurn did not complete within ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutes — forcing error\n`);
+    emitError(`Timeout geral do turno — nenhuma resposta em ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutos`);
+    emitWaitingUser("");
+    processingGeneration = 0;
+  }, HANDLE_TURN_TIMEOUT_MS);
+
+  try {
+    await handleTurnInner(payload);
+  } finally {
+    clearTimeout(turnTimer);
+  }
+}
+
+async function handleTurnInner(payload) {
   const generation = Number.isFinite(payload.generation) ? payload.generation : currentGeneration + 1;
   currentGeneration = Math.max(currentGeneration, generation);
   processingGeneration = generation;
