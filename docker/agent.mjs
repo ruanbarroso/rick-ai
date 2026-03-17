@@ -717,6 +717,18 @@ function runOpencodeTurn({ text, model, mode, images }) {
     }, 1000);
 
     // ── Inactivity watchdog ────────────────────────────────────────────
+    // STARTUP WATCHDOG: if no stdout/stderr data arrives within 60s of spawn,
+    // the process likely died during initialization (auth error, DB lock, etc.)
+    // without producing any output. Kill and finish immediately.
+    // This is separate from the main watchdog (which is for mid-run stalls).
+    const STARTUP_WATCHDOG_MS = 60_000;
+    let startupWatchdogTimer = setTimeout(() => {
+      if (finished || gotMeaningfulOutput) return;
+      process.stderr.write(`[startup-watchdog] No output for ${STARTUP_WATCHDOG_MS / 1000}s after spawn — killing\n`);
+      killTree();
+      finish(new Error(`OpenCode nao iniciou — nenhum output em ${STARTUP_WATCHDOG_MS / 1000}s`));
+    }, STARTUP_WATCHDOG_MS);
+
     // If the OpenCode process emits zero stdout/stderr for WATCHDOG_MS,
     // it is likely stuck (hung API call, dead TCP connection, etc.).
     // Kill and let the caller handle the error / cascade.
@@ -730,6 +742,8 @@ function runOpencodeTurn({ text, model, mode, images }) {
       finish(new Error(`OpenCode travou — nenhum output por ${WATCHDOG_MS / 60_000} minutos`));
     }, WATCHDOG_MS);
     function resetWatchdog() {
+      // Clear the startup watchdog on first output
+      if (startupWatchdogTimer) { clearTimeout(startupWatchdogTimer); startupWatchdogTimer = null; }
       if (watchdogTimer) clearTimeout(watchdogTimer);
       if (finished) return;
       watchdogTimer = setTimeout(() => {
@@ -826,11 +840,18 @@ function runOpencodeTurn({ text, model, mode, images }) {
           // OpenCode --format json emits: { type: "error", error: { name, data: { message, statusCode, isRetryable, ... } } }
           const err = event.error;
           let message;
+          let msgLower = "";
           if (err && typeof err === "object") {
             message = (err.data && err.data.message) ? String(err.data.message) : String(err.name || JSON.stringify(err));
-            // Detect auth errors so handleTurn can retry with refreshed tokens
-            if (String(err.name || "").includes("Auth") || String(message).includes("401") || String(message).includes("auth")) {
+            msgLower = String(message).toLowerCase();
+            // Detect auth errors so handleTurn can retry with refreshed tokens.
+            // Covers: "401", "auth", "Auth", "Token refresh failed", "OAuth token has been revoked"
+            if (String(err.name || "").includes("Auth") ||
+                msgLower.includes("401") || msgLower.includes("auth") ||
+                msgLower.includes("token refresh failed") || msgLower.includes("oauth") ||
+                msgLower.includes("token") && msgLower.includes("revoked")) {
               lastRunHadAuthError = true;
+              process.stderr.write(`[auth-error] Detected: ${String(message).substring(0, 200)}\n`);
             }
             // Detect rate limit using the structured error object (statusCode, isRetryable, message)
             // This is the most reliable path — OpenCode already exhausted its internal retries.
@@ -846,6 +867,16 @@ function runOpencodeTurn({ text, model, mode, images }) {
             message = "erro do opencode";
           }
           emitProviderError(message);
+
+          // Fatal errors (auth, model not found) — kill immediately and finish.
+          // Without this, the process exits with code 0 and the Promise may hang
+          // because child.on("close") has edge cases where finish() isn't called.
+          if (lastRunHadAuthError || msgLower.includes("model not found") || msgLower.includes("providermodelnotfound")) {
+            process.stderr.write(`[error] Fatal OpenCode error — killing immediately: ${String(message).substring(0, 200)}\n`);
+            killTree();
+            finish(new Error(message));
+            return;
+          }
         }
       }
     });
@@ -889,6 +920,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
       if (finished) return;
       finished = true;
       clearInterval(questionPollTimer);
+      if (startupWatchdogTimer) clearTimeout(startupWatchdogTimer);
       if (watchdogTimer) clearTimeout(watchdogTimer);
       if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
       if (activeResolve) {
