@@ -3136,14 +3136,9 @@ function handleServerMessage(msg) {
       }
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('app-screen').style.display = 'block';
-      document.getElementById('msg-input').focus();
       updateStatus('Online');
       requestSessions();
       startSessionPolling();
-      // Fetch settings to know provider connection status
-      ws.send(JSON.stringify({ type: 'get_settings' }));
-      // Load conversation history
-      ws.send(JSON.stringify({ type: 'get_history' }));
       // Update pending user badge
       if (msg.pendingCount !== undefined) {
         updatePendingBadge(msg.pendingCount);
