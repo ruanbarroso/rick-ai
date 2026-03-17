@@ -172,14 +172,21 @@ docker rm -f "$CANDIDATE_NAME" 2>/dev/null || true
 
 # Start candidate in HEALTH_ONLY mode: only health server + DB check, no WhatsApp.
 # This avoids conflicting with the running main container's WhatsApp session.
-# Mount the data volume so it can access the SQLite DB for migration check,
-# and a temporary pgdata volume for the embedded PostgreSQL.
+# Mount the data volume so it can access the SQLite DB for migration check.
+# Join the same Docker network as the main container so it can reach external
+# services (e.g. pgvector-rick) that may be referenced in the config store.
+COMPOSE_NETWORK=$(docker inspect rick-ai-agent-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null || echo "")
+NETWORK_FLAG=""
+if [ -n "$COMPOSE_NETWORK" ]; then
+  NETWORK_FLAG="--network $COMPOSE_NETWORK"
+fi
 docker run -d \
   --name "$CANDIDATE_NAME" \
   --env-file "$PROJECT_DIR/.env" \
   -e HEALTH_ONLY=true \
   -v "$PROJECT_DIR/data:/app/data" \
   -p "$HEALTH_PORT_CANDIDATE:80" \
+  $NETWORK_FLAG \
   "$CANDIDATE_TAG"
 
 log "Candidate container started in HEALTH_ONLY mode, waiting for health..."
