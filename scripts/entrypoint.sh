@@ -85,6 +85,8 @@ HBA
 start_embedded_pg() {
   log "Starting embedded PostgreSQL..."
   EMBEDDED_PG_STARTED=true
+  # Create log file owned by postgres (pg_ctl writes to it as the postgres user)
+  touch "$PGLOG" && chown postgres:postgres "$PGLOG"
   if ! su postgres -c "PATH=$PATH pg_ctl -D '$PGDATA' -l '$PGLOG' -w start" 2>&1; then
     err "Failed to start PostgreSQL! Log contents:"
     cat "$PGLOG" 2>/dev/null || true
