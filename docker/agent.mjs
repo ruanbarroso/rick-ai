@@ -90,6 +90,9 @@ let lastRunHadAuthError = false;
  * and will be retrieved via the HTTP /events endpoint when the main reconnects.
  */
 function emit(obj) {
+  // Reset the handleTurn inactivity timer on every emitted event
+  if (handleTurnInactivityTimer) resetHandleTurnTimer();
+
   // Persist to local outbox BEFORE stdout
   try {
     stmtInsertEvent.run(obj.type || "unknown", JSON.stringify(obj), Date.now());
@@ -999,22 +1002,32 @@ function runOpencodeTurn({ text, model, mode, images }) {
 
 // Overall handleTurn timeout: if the entire turn (auth resolution + cascade + execution)
 // doesn't complete within this period, emit error and return to waiting_user.
-// This catches hangs in syncOpenCodeAuth, resolveModel, or any pre-spawn logic
-// that the runOpencodeTurn safety timeout doesn't cover.
-const HANDLE_TURN_TIMEOUT_MS = 35 * 60_000; // 35 minutes
+// This catches hangs in syncOpenCodeAuth, resolveModel, provider overloaded retries,
+// or any pre-spawn logic that the runOpencodeTurn safety timeout doesn't cover.
+// 3 minutes: if nothing meaningful happened, the turn is stuck — don't make the user wait.
+const HANDLE_TURN_TIMEOUT_MS = 3 * 60_000; // 3 minutes
 
-async function handleTurn(payload) {
-  const turnTimer = setTimeout(() => {
-    process.stderr.write(`[handle-turn-timeout] handleTurn did not complete within ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutes — forcing error\n`);
-    emitError(`Timeout geral do turno — nenhuma resposta em ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutos`);
+// The handle-turn inactivity timer: resets every time an event is emitted.
+// If no event is emitted for HANDLE_TURN_TIMEOUT_MS, the turn is considered stuck.
+let handleTurnInactivityTimer = null;
+
+function resetHandleTurnTimer() {
+  if (handleTurnInactivityTimer) clearTimeout(handleTurnInactivityTimer);
+  handleTurnInactivityTimer = setTimeout(() => {
+    process.stderr.write(`[handle-turn-timeout] No activity for ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutes — forcing error\n`);
+    emitError(`Timeout — nenhuma atividade por ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutos. Tente novamente.`);
     emitWaitingUser("");
     processingGeneration = 0;
+    handleTurnInactivityTimer = null;
   }, HANDLE_TURN_TIMEOUT_MS);
+}
 
+async function handleTurn(payload) {
+  resetHandleTurnTimer();
   try {
     await handleTurnInner(payload);
   } finally {
-    clearTimeout(turnTimer);
+    if (handleTurnInactivityTimer) { clearTimeout(handleTurnInactivityTimer); handleTurnInactivityTimer = null; }
   }
 }
 
