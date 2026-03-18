@@ -1177,13 +1177,23 @@ export class SessionManager {
    */
   private async querySubagentHttp(containerName: string, path: string, method: string = "GET", body?: string): Promise<string> {
     const url = `http://localhost:${SessionManager.SUBAGENT_HTTP_PORT}${path}`;
-    const args = ["exec", containerName, "curl", "-sf", "--max-time", "5", "-X", method];
+    const args = ["exec"];
     if (body) {
-      args.push("-H", "Content-Type: application/json", "-d", body);
+      // Use -i (interactive) so we can pipe the body via stdin.
+      // This avoids E2BIG errors when the body exceeds the OS argument size limit (~128KB).
+      args.push("-i");
+    }
+    args.push(containerName, "curl", "-sf", "--max-time", "5", "-X", method);
+    if (body) {
+      args.push("-H", "Content-Type: application/json", "-d", "@-");
     }
     args.push(url);
-    const { stdout } = await execFileAsync("docker", args, { timeout: 10_000 });
-    return stdout.trim();
+    const options: any = { timeout: 10_000 };
+    if (body) {
+      options.input = body;
+    }
+    const { stdout } = await execFileAsync("docker", args, options);
+    return String(stdout).trim();
   }
 
   /**
