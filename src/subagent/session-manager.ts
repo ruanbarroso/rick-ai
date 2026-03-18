@@ -1177,22 +1177,34 @@ export class SessionManager {
    */
   private async querySubagentHttp(containerName: string, path: string, method: string = "GET", body?: string): Promise<string> {
     const url = `http://localhost:${SessionManager.SUBAGENT_HTTP_PORT}${path}`;
-    const args = ["exec"];
+
     if (body) {
-      // Use -i (interactive) so we can pipe the body via stdin.
-      // This avoids E2BIG errors when the body exceeds the OS argument size limit (~128KB).
-      args.push("-i");
+      // Use spawn + stdin pipe instead of execFile to avoid E2BIG errors
+      // when the body exceeds the OS argument size limit (~128KB).
+      // Note: execFileAsync does NOT support the `input` option (only sync variants do).
+      return new Promise<string>((resolve, reject) => {
+        const args = ["exec", "-i", containerName, "curl", "-sf", "--max-time", "5", "-X", method,
+          "-H", "Content-Type: application/json", "-d", "@-", url];
+        const proc = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
+        let stdout = "";
+        let stderr = "";
+        proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+        proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+        proc.on("close", (code) => {
+          if (code === 0) resolve(stdout.trim());
+          else reject(new Error(`docker exec curl failed (code ${code}): ${stderr.trim()}`));
+        });
+        proc.on("error", reject);
+        proc.stdin.write(body);
+        proc.stdin.end();
+        // Safety timeout
+        setTimeout(() => { try { proc.kill(); } catch {} reject(new Error("querySubagentHttp timeout")); }, 10_000);
+      });
     }
-    args.push(containerName, "curl", "-sf", "--max-time", "5", "-X", method);
-    if (body) {
-      args.push("-H", "Content-Type: application/json", "-d", "@-");
-    }
-    args.push(url);
-    const options: any = { timeout: 10_000 };
-    if (body) {
-      options.input = body;
-    }
-    const { stdout } = await execFileAsync("docker", args, options);
+
+    // GET requests (no body) — use execFileAsync as before
+    const args = ["exec", containerName, "curl", "-sf", "--max-time", "5", "-X", method, url];
+    const { stdout } = await execFileAsync("docker", args, { timeout: 10_000 });
     return String(stdout).trim();
   }
 
