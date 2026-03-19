@@ -728,12 +728,14 @@ function runOpencodeTurn({ text, model, mode, images }) {
       childEnv.GOOGLE_GENERATIVE_AI_API_KEY = process.env.GEMINI_API_KEY;
     }
 
+    process.stderr.write(`[opencode-spawn] Spawning: npx opencode-ai run --model ${selectedModel} (textLen=${text.length}, sessionId=${openCodeSessionId || "new"})\n`);
     const child = spawn("npx", args, {
       cwd: "/workspace",
       env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
       detached: true, // Create a new process group so we can kill the entire tree
     });
+    process.stderr.write(`[opencode-spawn] Spawned pid=${child.pid}\n`);
 
     // Kill the entire process group (npx → opencode → MCP servers → Chrome).
     // With detached: true, child.pid is the process group leader.
@@ -1073,7 +1075,12 @@ async function handleTurnInner(payload) {
   emit({ type: "model_active", modelId: requestedModel, modelName: requestedModel });
 
   try {
-    const availableProviders = await syncOpenCodeAuth();
+    process.stderr.write(`[handle-turn] Step 1: syncOpenCodeAuth starting\n`);
+    const availableProviders = await Promise.race([
+      syncOpenCodeAuth(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("syncOpenCodeAuth timeout (30s)")), 30_000)),
+    ]);
+    process.stderr.write(`[handle-turn] Step 2: syncOpenCodeAuth done, providers: ${[...availableProviders].join(",")}\n`);
     lastRunHadAuthError = false;
 
     // Resolve model: if requested provider's auth is missing, fall back to an available one
@@ -1087,6 +1094,7 @@ async function handleTurnInner(payload) {
     }
 
     const { modelId: effectiveModelId, opencodeModel } = resolved;
+    process.stderr.write(`[handle-turn] Step 2b: model resolved to ${effectiveModelId}, modelsToTry will be built\n`);
     if (effectiveModelId !== requestedModel) {
       emitStatus(`Modelo '${requestedModel}' indisponivel, usando '${effectiveModelId}' como fallback.`);
       emit({ type: "model_active", modelId: effectiveModelId, modelName: effectiveModelId });
@@ -1146,7 +1154,9 @@ async function handleTurnInner(payload) {
       if (isSuperseded() || interrupted) break;
 
       try {
+        process.stderr.write(`[handle-turn] Step 3: runOpencodeTurn starting (model=${tryModelId}, sessionId=${openCodeSessionId || "new"}, textLen=${runArgs.text.length})\n`);
         result = await runOpencodeTurn(runArgs);
+        process.stderr.write(`[handle-turn] Step 4: runOpencodeTurn completed (resultLen=${String(result || "").length})\n`);
 
         // If the run succeeded but reported auth errors, refresh tokens and retry once
         if (lastRunHadAuthError && !isSuperseded() && !interrupted) {
