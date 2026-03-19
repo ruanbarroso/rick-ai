@@ -1014,7 +1014,12 @@ let handleTurnInactivityTimer = null;
 function resetHandleTurnTimer() {
   if (handleTurnInactivityTimer) clearTimeout(handleTurnInactivityTimer);
   handleTurnInactivityTimer = setTimeout(() => {
-    process.stderr.write(`[handle-turn-timeout] No activity for ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutes — forcing error\n`);
+    process.stderr.write(`[handle-turn-timeout] No activity for ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutes — killing process and forcing error\n`);
+    // Kill any active OpenCode process to prevent zombie processes
+    if (activeProcess) {
+      try { process.kill(-activeProcess.pid, "SIGKILL"); } catch {}
+      activeProcess = null;
+    }
     emitError(`Timeout — nenhuma atividade por ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutos. Tente novamente.`);
     emitWaitingUser("");
     processingGeneration = 0;
