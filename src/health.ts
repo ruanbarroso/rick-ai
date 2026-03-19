@@ -1142,8 +1142,7 @@ async function handlePublicSessionsApi(token: string, res: ServerResponse): Prom
        LEFT JOIN session_messages m ON m.session_id = s.id
        WHERE s.user_id = $1
        GROUP BY s.id, s.task, s.status, s.started_at, s.ended_at, s.connector_name, s.variant_name
-       ORDER BY COALESCE(MAX(m.created_at), s.started_at) DESC
-       LIMIT 100`,
+       ORDER BY COALESCE(MAX(m.created_at), s.started_at) DESC`,
       [userId],
     );
 
