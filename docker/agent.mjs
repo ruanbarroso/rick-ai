@@ -90,9 +90,6 @@ let lastRunHadAuthError = false;
  * and will be retrieved via the HTTP /events endpoint when the main reconnects.
  */
 function emit(obj) {
-  // Reset the handleTurn inactivity timer on every emitted event
-  if (handleTurnInactivityTimer) resetHandleTurnTimer();
-
   // Persist to local outbox BEFORE stdout
   try {
     stmtInsertEvent.run(obj.type || "unknown", JSON.stringify(obj), Date.now());
@@ -1000,40 +997,8 @@ function runOpencodeTurn({ text, model, mode, images }) {
   return withSafetyTimeout(innerPromise, RUN_SAFETY_TIMEOUT_MS, "runOpencodeTurn");
 }
 
-// Overall handleTurn timeout: if the entire turn (auth resolution + cascade + execution)
-// doesn't complete within this period, emit error and return to waiting_user.
-// This catches hangs in syncOpenCodeAuth, resolveModel, provider overloaded retries,
-// or any pre-spawn logic that the runOpencodeTurn safety timeout doesn't cover.
-// 3 minutes: if nothing meaningful happened, the turn is stuck — don't make the user wait.
-const HANDLE_TURN_TIMEOUT_MS = 3 * 60_000; // 3 minutes
-
-// The handle-turn inactivity timer: resets every time an event is emitted.
-// If no event is emitted for HANDLE_TURN_TIMEOUT_MS, the turn is considered stuck.
-let handleTurnInactivityTimer = null;
-
-function resetHandleTurnTimer() {
-  if (handleTurnInactivityTimer) clearTimeout(handleTurnInactivityTimer);
-  handleTurnInactivityTimer = setTimeout(() => {
-    process.stderr.write(`[handle-turn-timeout] No activity for ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutes — killing process and forcing error\n`);
-    // Kill any active OpenCode process to prevent zombie processes
-    if (activeProcess) {
-      try { process.kill(-activeProcess.pid, "SIGKILL"); } catch {}
-      activeProcess = null;
-    }
-    emitError(`Timeout — nenhuma atividade por ${HANDLE_TURN_TIMEOUT_MS / 60_000} minutos. Tente novamente.`);
-    emitWaitingUser("");
-    processingGeneration = 0;
-    handleTurnInactivityTimer = null;
-  }, HANDLE_TURN_TIMEOUT_MS);
-}
-
 async function handleTurn(payload) {
-  resetHandleTurnTimer();
-  try {
-    await handleTurnInner(payload);
-  } finally {
-    if (handleTurnInactivityTimer) { clearTimeout(handleTurnInactivityTimer); handleTurnInactivityTimer = null; }
-  }
+  await handleTurnInner(payload);
 }
 
 async function handleTurnInner(payload) {
