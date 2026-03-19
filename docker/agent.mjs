@@ -1045,7 +1045,10 @@ function runOpencodeTurn({ text, model, mode, images }) {
   });
   // Wrap with a safety timeout to prevent the Promise from hanging forever
   // if child.on("close") never fires or finish() has a race condition.
-  return withSafetyTimeout(innerPromise, RUN_SAFETY_TIMEOUT_MS, "runOpencodeTurn");
+  // No fixed safety timeout — rely on the watchdog (10min inactivity),
+  // startup watchdog (60s), and turn completion timer (5min after last step_finish).
+  // A fixed timeout kills legitimate long-running turns (Gradle builds, large refactors).
+  return innerPromise;
 }
 
 async function handleTurn(payload) {
