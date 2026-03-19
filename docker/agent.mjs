@@ -667,6 +667,12 @@ function withSafetyTimeout(promise, timeoutMs, label) {
   let timer;
   const timeoutPromise = new Promise((_, reject) => {
     timer = setTimeout(() => {
+      // Kill the active OpenCode process to prevent zombie processes consuming resources
+      if (activeProcess) {
+        process.stderr.write(`[safety-timeout] Killing active process (pid ${activeProcess.pid})\n`);
+        try { process.kill(-activeProcess.pid, "SIGKILL"); } catch {}
+        activeProcess = null;
+      }
       reject(new Error(`${label}: safety timeout after ${timeoutMs / 60_000} minutes — Promise never resolved`));
     }, timeoutMs);
   });
