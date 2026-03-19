@@ -649,12 +649,14 @@ export class SessionManager {
             if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
               const crashed = code !== 0 && code !== null;
               // Detect false positive: if the second agent.mjs exits with code 1 because
-              // port 3000 is already in use (EADDRINUSE), the container actually has the
-              // new architecture — this is NOT a real crash. Try to recover via stream bridge.
-              if (crashed && legacyStderr.includes("EADDRINUSE")) {
-                logger.info({ sessionId: id, exitCode: code }, "Legacy fallback: EADDRINUSE detected — container has new architecture, switching to stream bridge");
+              // port 3000 is already in use (EADDRINUSE) or the SQLite state.db is locked
+              // by the running agent, the container actually has the new architecture —
+              // this is NOT a real crash. Try to recover via stream bridge.
+              if (crashed && (legacyStderr.includes("EADDRINUSE") || legacyStderr.includes("database is locked"))) {
+                const reason = legacyStderr.includes("EADDRINUSE") ? "EADDRINUSE" : "database is locked";
+                logger.info({ sessionId: id, exitCode: code, reason }, "Legacy fallback: container has new architecture, switching to stream bridge");
                 this.startAgentProcess(session, (session as any)._lastSyncedEventId ?? 0).catch((err) => {
-                  logger.error({ err, sessionId: id }, "Failed to start stream bridge after EADDRINUSE detection");
+                  logger.error({ err, sessionId: id }, "Failed to start stream bridge after legacy fallback detection");
                 });
                 return;
               }
