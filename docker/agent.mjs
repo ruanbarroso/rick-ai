@@ -602,6 +602,51 @@ async function nukeOpenCodeDb() {
   process.stderr.write(`[opencode-db] Deleted OpenCode DB and WAL/SHM files\n`);
 }
 
+/**
+ * Extract conversation context from the local event store before nuking the DB.
+ * Returns an array of { role, content } objects suitable for historyMessages.
+ * This preserves context so the agent doesn't start from zero after a DB reset.
+ */
+function extractConversationContext() {
+  try {
+    const rows = stateDb.prepare(
+      "SELECT data FROM events WHERE type IN ('message', 'waiting_user') ORDER BY id DESC LIMIT 30"
+    ).all();
+
+    const messages = [];
+    for (const row of rows) {
+      try {
+        const evt = JSON.parse(row.data);
+        if (evt.type === "message" && evt.text) {
+          messages.push({ role: "agent", content: evt.text });
+        } else if (evt.type === "waiting_user" && evt.result) {
+          // waiting_user.result contains the full turn text — skip if we already have individual messages
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    // Also extract the last user messages from the command handler
+    // (these are stored separately — look for model_active events which follow user messages)
+
+    // Reverse to chronological order (we queried DESC)
+    messages.reverse();
+
+    // Deduplicate consecutive messages with same content
+    const deduped = [];
+    for (const m of messages) {
+      if (deduped.length === 0 || deduped[deduped.length - 1].content !== m.content) {
+        deduped.push(m);
+      }
+    }
+
+    process.stderr.write(`[opencode-db] Extracted ${deduped.length} messages from event store for context preservation\n`);
+    return deduped;
+  } catch (err) {
+    process.stderr.write(`[opencode-db] Failed to extract context: ${err?.message}\n`);
+    return [];
+  }
+}
+
 /** Small delay to let OS release file locks after killing a process tree */
 function sleepMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1108,35 +1153,71 @@ async function handleTurnInner(payload) {
       } catch (runErr) {
         lastError = runErr;
 
-        // SQLite DB error: delete the DB, clear session ID, and retry the SAME model.
-        // This handles "database is locked", "database is malformed", dangling session IDs, etc.
-        // We retry only once to avoid infinite loops if the DB keeps getting corrupted.
+        // SQLite DB error: progressive recovery with context preservation.
+        // Level 1: Just clear session ID and retry (keeps DB, keeps context)
+        // Level 2: Nuke DB but preserve conversation context via historyMessages
+        // Level 3: Fall through to cascade
         if (lastRunHadDbError && !isSuperseded() && !interrupted) {
-          process.stderr.write(`[opencode-db] DB error detected — nuking DB, clearing session, retrying same model\n`);
-          emitStatus("Erro no banco de dados do OpenCode — limpando e tentando novamente...");
-          await nukeOpenCodeDb();
-          // Clear ALL in-memory session continuity so the retry starts fully fresh.
-          // This is more aggressive than before because dangling session IDs can
-          // survive DB nukes in edge cases and cause another silent exit.
+          // --- Level 1: Retry without session ID (keep DB intact) ---
+          const savedSessionId = openCodeSessionId;
+          process.stderr.write(`[opencode-db] DB error detected — Level 1: clearing session ID and retrying (DB preserved)\n`);
+          emitStatus("Recuperando sessao do OpenCode...");
           openCodeSessionId = "";
-          await sleepMs(1500);     // Let the OS fully release file locks
+          await sleepMs(1000);
           lastRunHadDbError = false;
           toolStarted.clear();
           try {
             result = await runOpencodeTurn(runArgs);
             lastError = null;
             break;
-          } catch (retryErr) {
-            lastError = retryErr;
-            // If it fails again with a DB/session issue, fall through to cascade.
+          } catch (retryErr1) {
+            lastError = retryErr1;
+            if (!lastRunHadDbError) {
+              // Non-DB error on retry — handle normally
+              if (lastRunHadRateLimitError) continue;
+              break;
+            }
+          }
+
+          // --- Level 2: Nuke DB but preserve conversation context ---
+          process.stderr.write(`[opencode-db] Level 1 failed — Level 2: extracting context, nuking DB, retrying with history\n`);
+          emitStatus("Recriando sessao do OpenCode com historico preservado...");
+
+          // Extract conversation context BEFORE nuking
+          const preservedContext = extractConversationContext();
+
+          await nukeOpenCodeDb();
+          openCodeSessionId = "";
+          await sleepMs(1500);
+
+          // Inject preserved context into historyMessages so buildHistoryPrelude() includes it
+          if (preservedContext.length > 0) {
+            historyMessages = preservedContext;
+            process.stderr.write(`[opencode-db] Injected ${preservedContext.length} messages as history context\n`);
+          }
+
+          // Rebuild the prompt with history context included (since openCodeSessionId is now empty)
+          const retryArgs = { ...runArgs };
+          if (historyMessages.length > 0) {
+            retryArgs.text = `${buildHistoryPrelude()}${userText}`;
+            historyMessages = [];
+          }
+
+          lastRunHadDbError = false;
+          toolStarted.clear();
+          try {
+            result = await runOpencodeTurn(retryArgs);
+            lastError = null;
+            break;
+          } catch (retryErr2) {
+            lastError = retryErr2;
+            // --- Level 3: cascade to next model ---
             if (lastRunHadDbError) {
-              process.stderr.write(`[opencode-db] DB/session error persisted after nuke — cascading to next model\n`);
+              process.stderr.write(`[opencode-db] Level 2 failed — cascading to next model\n`);
               emitStatus(`Erro persistente na sessao do OpenCode com '${tryModelId}' — tentando o proximo modelo...`);
               continue;
             }
-            // If it was a rate limit on the retry, continue cascading
             if (lastRunHadRateLimitError) continue;
-            // Auth error after DB recovery — let the auth branch below refresh and retry/cascade
             if (lastRunHadAuthError) {
               process.stderr.write(`[opencode-db] Retry after DB reset hit auth error — handing off to auth recovery\n`);
             }
