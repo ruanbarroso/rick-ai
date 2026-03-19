@@ -815,7 +815,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     // (e.g. session 99f81e0553e713a5 was killed mid-implementation).
     // The stderr reset mechanism (line ~826) mitigates this when OpenCode emits
     // logs, but API calls to Claude can be silent for 60+ seconds.
-    const TURN_COMPLETION_GRACE_MS = 120_000; // 2 minutes after last step_finish
+    const TURN_COMPLETION_GRACE_MS = 300_000; // 5 minutes after last step_finish
     let turnCompletionTimer = null;
     function startTurnCompletionTimer() {
       if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
