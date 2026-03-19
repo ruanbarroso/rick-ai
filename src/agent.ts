@@ -221,22 +221,9 @@ export class Agent {
       prevState.controller.abort();
     }
 
-    // Kill recently-created sub-agent sessions from superseded messages.
-    // If the previous message already completed delegateToSubAgent (created a session),
-    // but the user sent a new message within 30 seconds, the old session is stale —
-    // the user clearly intended the new message to replace the old one.
-    const lastSession = this.userLastCreatedSession.get(userId);
-    if (lastSession && lastSession.generation < generation) {
-      const ageMs = Date.now() - lastSession.createdAt;
-      if (ageMs < 30_000) {
-        logger.info({ userId, sessionId: lastSession.sessionId, ageMs, prevGen: lastSession.generation, newGen: generation },
-          "Killing recently-created sub-agent from superseded message");
-        this.sessionManager.killSession(lastSession.sessionId).catch((err) => {
-          logger.warn({ err, sessionId: lastSession.sessionId }, "Failed to kill superseded session");
-        });
-        this.userLastCreatedSession.delete(userId);
-      }
-    }
+    // Note: we intentionally do NOT kill recently-created sub-agent sessions here.
+    // Users should be able to create multiple concurrent sessions by sending
+    // multiple messages in quick succession. Each message creates its own session.
 
     // Create AbortController for this request (used to cancel LLM calls)
     const abortController = new AbortController();
