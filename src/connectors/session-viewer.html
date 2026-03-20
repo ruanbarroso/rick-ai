@@ -1355,15 +1355,20 @@ function submitOAuthInput() {
     var hashIdx = value.indexOf('#');
     var code = hashIdx >= 0 ? value.substring(0, hashIdx) : value;
     var verifier = pendingOAuthState;
-    var body = new URLSearchParams({
+    var body = JSON.stringify({
       grant_type: 'authorization_code', code: code, code_verifier: verifier,
       client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
       redirect_uri: 'https://console.anthropic.com/oauth/code/callback', state: verifier,
     });
     fetch('https://console.anthropic.com/v1/oauth/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'anthropic' },
-      body: body.toString(),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'anthropic-beta': 'oauth-2025-04-20',
+        'user-agent': 'claude-cli/2.1.80 (external, cli)',
+      },
+      body: body,
     }).then(function(resp) {
       if (!resp.ok) return resp.text().then(function(t) { throw new Error('HTTP ' + resp.status); });
       return resp.json();

@@ -18,8 +18,10 @@ const SCOPES = [
 ].join(" ");
 
 const TOKEN_EXCHANGE_HEADERS = {
-  "Content-Type": "application/x-www-form-urlencoded",
-  "User-Agent": "anthropic",
+  "Content-Type": "application/json",
+  "Accept": "application/json",
+  "anthropic-beta": "oauth-2025-04-20",
+  "user-agent": "claude-cli/2.1.80 (external, cli)",
 };
 
 /** Buffer before expiry to trigger proactive refresh (5 minutes) */
@@ -184,20 +186,23 @@ export class ClaudeOAuthService {
       };
     }
 
-    // Exchange code for tokens (URL-encoded body, matching opencode plugin format)
+    // Exchange code for tokens.
+    // This follows the working flow mirrored from the portal-renderer OAuth fix:
+    // - JSON body
+    // - anthropic-beta header
+    // - claude-cli style user-agent
     try {
-      const body = new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        code_verifier: pending.codeVerifier,
-        client_id: CLIENT_ID,
-        redirect_uri: REDIRECT_URI,
-        state,
-      });
       const response = await fetch(TOKEN_URL, {
         method: "POST",
         headers: TOKEN_EXCHANGE_HEADERS,
-        body: body.toString(),
+        body: JSON.stringify({
+          grant_type: "authorization_code",
+          code,
+          code_verifier: pending.codeVerifier,
+          client_id: CLIENT_ID,
+          redirect_uri: REDIRECT_URI,
+          state,
+        }),
       });
 
       if (!response.ok) {
@@ -405,15 +410,14 @@ export class ClaudeOAuthService {
   // ==================== PRIVATE METHODS ====================
 
   private async refreshTokens(refreshToken: string): Promise<TokenResponse> {
-    const body = new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: CLIENT_ID,
-    });
     const response = await fetch(TOKEN_URL, {
       method: "POST",
       headers: TOKEN_EXCHANGE_HEADERS,
-      body: body.toString(),
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: CLIENT_ID,
+      }),
     });
 
     if (!response.ok) {

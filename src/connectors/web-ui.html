@@ -5544,7 +5544,7 @@ function submitOAuthInput() {
     var code = hashIdx >= 0 ? input.substring(0, hashIdx) : input;
     var verifier = pendingOAuth.state; // state = codeVerifier (set by startAuth)
 
-    var body = new URLSearchParams({
+    var body = JSON.stringify({
       grant_type: 'authorization_code',
       code: code,
       code_verifier: verifier,
@@ -5557,10 +5557,12 @@ function submitOAuthInput() {
     fetch('https://console.anthropic.com/v1/oauth/token', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'anthropic',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'anthropic-beta': 'oauth-2025-04-20',
+        'user-agent': 'claude-cli/2.1.80 (external, cli)',
       },
-      body: body.toString(),
+      body: body,
     })
     .then(function(resp) {
       if (!resp.ok) return resp.text().then(function(t) { throw new Error('HTTP ' + resp.status + ': ' + t); });
