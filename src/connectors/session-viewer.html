@@ -1229,6 +1229,7 @@ var availableModels = [
 ];
 var canManageProviders = false;
 var pendingOAuthProvider = null;
+var pendingOAuthState = '';
 var providerStatus = {
   anthropic: { connected: false, source: 'none', email: null },
   openai: { connected: false, source: 'none', email: null }
@@ -1348,6 +1349,36 @@ function submitOAuthInput() {
   var input = document.getElementById('oauth-input');
   var value = (input && input.value ? input.value : '').trim();
   if (!value) return;
+
+  // For Anthropic: client-side token exchange to avoid Cloudflare blocking
+  if (pendingOAuthProvider === 'anthropic' && pendingOAuthState) {
+    var hashIdx = value.indexOf('#');
+    var code = hashIdx >= 0 ? value.substring(0, hashIdx) : value;
+    var verifier = pendingOAuthState;
+    var body = new URLSearchParams({
+      grant_type: 'authorization_code', code: code, code_verifier: verifier,
+      client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
+      redirect_uri: 'https://console.anthropic.com/oauth/code/callback', state: verifier,
+    });
+    fetch('https://console.anthropic.com/v1/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'anthropic' },
+      body: body.toString(),
+    }).then(function(resp) {
+      if (!resp.ok) return resp.text().then(function(t) { throw new Error('HTTP ' + resp.status); });
+      return resp.json();
+    }).then(function(data) {
+      ws.send(JSON.stringify({
+        type: 'session_oauth_tokens', provider: 'anthropic',
+        accessToken: data.access_token, refreshToken: data.refresh_token,
+        expiresIn: data.expires_in, scope: data.scope || '',
+        email: data.account ? data.account.email_address : null,
+        orgName: data.organization ? data.organization.name : null,
+      }));
+    }).catch(function(err) { showErrorModal('Erro na troca de tokens: ' + err.message); });
+    return;
+  }
+
   ws.send(JSON.stringify({ type: 'session_oauth_exchange', provider: pendingOAuthProvider, input: value }));
 }
 
@@ -2200,6 +2231,7 @@ function connect() {
 
       case 'session_oauth_start':
         if (msg.provider && msg.authUrl) {
+          pendingOAuthState = msg.state || '';
           openOAuthInputModal(msg.provider, msg.authUrl);
         }
         break;
