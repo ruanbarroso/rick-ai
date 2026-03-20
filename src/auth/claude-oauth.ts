@@ -18,12 +18,8 @@ const SCOPES = [
 ].join(" ");
 
 const TOKEN_EXCHANGE_HEADERS = {
-  "Content-Type": "application/json",
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-  Accept: "application/json",
-  Referer: "https://claude.ai/",
-  Origin: "https://claude.ai",
+  "Content-Type": "application/x-www-form-urlencoded",
+  "User-Agent": "anthropic",
 };
 
 /** Buffer before expiry to trigger proactive refresh (5 minutes) */
@@ -66,13 +62,12 @@ function base64url(buffer: Buffer): string {
     .replace(/=+$/, "");
 }
 
-function generatePKCE(): { codeVerifier: string; codeChallenge: string; state: string } {
+function generatePKCE(): { codeVerifier: string; codeChallenge: string } {
   const codeVerifier = base64url(randomBytes(32));
   const codeChallenge = base64url(
     createHash("sha256").update(codeVerifier).digest()
   );
-  const state = randomBytes(32).toString("hex");
-  return { codeVerifier, codeChallenge, state };
+  return { codeVerifier, codeChallenge };
 }
 
 // ==================== CLAUDE OAUTH SERVICE ====================
@@ -122,7 +117,9 @@ export class ClaudeOAuthService {
    * Returns the URL that the user must open in their browser.
    */
   startAuth(): { authUrl: string; state: string } {
-    const { codeVerifier, codeChallenge, state } = generatePKCE();
+    const { codeVerifier, codeChallenge } = generatePKCE();
+    // Use the codeVerifier as the state parameter (matches opencode plugin behavior)
+    const state = codeVerifier;
 
     // Store PKCE verifier for later exchange
     this.pendingAuths.set(state, {
@@ -132,14 +129,14 @@ export class ClaudeOAuthService {
     });
 
     const params = new URLSearchParams({
+      code: "true", // Shows the code on screen for user to copy
       response_type: "code",
       client_id: CLIENT_ID,
       redirect_uri: REDIRECT_URI,
       scope: SCOPES,
-      state,
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
-      code: "true", // Shows the code on screen for user to copy
+      state,
     });
 
     const authUrl = `${AUTH_URL}?${params.toString()}`;
@@ -187,19 +184,20 @@ export class ClaudeOAuthService {
       };
     }
 
-    // Exchange code for tokens
+    // Exchange code for tokens (URL-encoded body, matching opencode plugin format)
     try {
+      const body = new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        code_verifier: pending.codeVerifier,
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        state,
+      });
       const response = await fetch(TOKEN_URL, {
         method: "POST",
         headers: TOKEN_EXCHANGE_HEADERS,
-        body: JSON.stringify({
-          grant_type: "authorization_code",
-          client_id: CLIENT_ID,
-          code,
-          code_verifier: pending.codeVerifier,
-          redirect_uri: REDIRECT_URI,
-          state,
-        }),
+        body: body.toString(),
       });
 
       if (!response.ok) {
@@ -407,14 +405,15 @@ export class ClaudeOAuthService {
   // ==================== PRIVATE METHODS ====================
 
   private async refreshTokens(refreshToken: string): Promise<TokenResponse> {
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: CLIENT_ID,
+    });
     const response = await fetch(TOKEN_URL, {
       method: "POST",
       headers: TOKEN_EXCHANGE_HEADERS,
-      body: JSON.stringify({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: CLIENT_ID,
-      }),
+      body: body.toString(),
     });
 
     if (!response.ok) {
