@@ -355,9 +355,6 @@ export class WebConnector implements Connector {
             case "oauth_exchange":
               await this.handleOAuthExchange(ws, msg.provider, msg.input || "");
               break;
-            case "oauth_tokens":
-              await this.handleOAuthTokensDirect(ws, msg);
-              break;
             case "oauth_disconnect":
               await this.handleOAuthDisconnect(ws, msg.provider);
               break;
@@ -552,7 +549,6 @@ export class WebConnector implements Connector {
             msg.type === "set_mode" ||
             msg.type === "session_oauth_start" ||
             msg.type === "session_oauth_exchange" ||
-            msg.type === "session_oauth_tokens" ||
             msg.type === "session_oauth_disconnect" ||
             msg.type === "message";
           if (isWriteAction && !canWrite) {
@@ -658,44 +654,6 @@ export class WebConnector implements Connector {
             } catch (err) {
               logger.error({ err, sessionId, provider: msg.provider }, "Failed to exchange session OAuth callback/code");
               ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Falha ao concluir OAuth." }));
-            }
-            return;
-          }
-
-          // Client-side token exchange for session viewer (same as web-ui oauth_tokens)
-          if (msg.type === "session_oauth_tokens" && typeof msg.provider === "string") {
-            try {
-              const resolved = await this.resolveSessionOAuthUser(sessionId);
-              if (!resolved.canManageProviders || resolved.userId == null) {
-                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Este usuario nao pode configurar provedores aqui." }));
-                return;
-              }
-              const { accessToken, refreshToken, expiresIn, scope, email, orgName } = msg;
-              if (!accessToken || !refreshToken) {
-                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Tokens incompletos." }));
-                return;
-              }
-              if (msg.provider === "anthropic") {
-                const expiresAt = Date.now() + (expiresIn || 3600) * 1000;
-                const scopes = typeof scope === "string" ? scope.split(" ") : ["org:create_api_key", "user:profile", "user:inference"];
-                await query(
-                  `INSERT INTO oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, is_active, created_at, updated_at)
-                   VALUES ($1, 'claude', $2, $3, $4, $5, $6, $7, TRUE, NOW(), NOW())
-                   ON CONFLICT (COALESCE(user_id, 0), provider)
-                   DO UPDATE SET access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token,
-                                 expires_at = EXCLUDED.expires_at, is_active = TRUE, updated_at = NOW()`,
-                  [resolved.userId, accessToken, refreshToken, expiresAt, JSON.stringify(scopes), email || null, orgName || null]
-                );
-                this.claudeOAuth.invalidateCache(resolved.userId);
-                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: true, email: email || null }));
-              } else {
-                ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Provider nao suportado." }));
-              }
-              const status = await this.getSessionOAuthStatus(sessionId);
-              ws.send(JSON.stringify({ type: "session_oauth_status", sessionId, status }));
-            } catch (err) {
-              logger.error({ err, sessionId }, "Failed to save session OAuth tokens");
-              ws.send(JSON.stringify({ type: "session_oauth_result", provider: msg.provider, success: false, error: "Falha ao salvar tokens." }));
             }
             return;
           }
@@ -1865,50 +1823,6 @@ export class WebConnector implements Connector {
     } catch (err) {
       logger.error({ err, provider }, "Failed to disconnect OAuth");
       this.send(ws, { type: "oauth_result", provider, success: false, error: "Falha ao desconectar OAuth." });
-    }
-  }
-
-  /**
-   * Handle OAuth tokens received directly from the browser (client-side exchange).
-   * The browser did the token exchange with the provider and sends the tokens here to save.
-   * This avoids Cloudflare TLS fingerprint blocking server-side requests.
-   */
-  private async handleOAuthTokensDirect(ws: WebSocket, msg: any): Promise<void> {
-    try {
-      const { provider, accessToken, refreshToken, expiresIn, scope, email, orgName } = msg;
-      if (!provider || !accessToken || !refreshToken) {
-        this.send(ws, { type: "oauth_result", provider, success: false, error: "Tokens incompletos." });
-        return;
-      }
-
-      if (provider === "anthropic") {
-        // Build a token response compatible with ClaudeOAuthService.saveTokens
-        const expiresAt = Date.now() + (expiresIn || 3600) * 1000;
-        const scopes = typeof scope === "string" ? scope.split(" ") : ["org:create_api_key", "user:profile", "user:inference"];
-
-        await query(
-          `INSERT INTO oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, is_active, created_at, updated_at)
-           VALUES (NULL, 'claude', $1, $2, $3, $4, $5, $6, TRUE, NOW(), NOW())
-           ON CONFLICT (COALESCE(user_id, 0), provider)
-           DO UPDATE SET access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token,
-                         expires_at = EXCLUDED.expires_at, scopes = EXCLUDED.scopes,
-                         account_email = COALESCE(EXCLUDED.account_email, oauth_tokens.account_email),
-                         org_name = COALESCE(EXCLUDED.org_name, oauth_tokens.org_name),
-                         is_active = TRUE, updated_at = NOW()`,
-          [accessToken, refreshToken, expiresAt, JSON.stringify(scopes), email || null, orgName || null]
-        );
-
-        // Invalidate in-memory cache
-        this.claudeOAuth.invalidateCache(null);
-
-        logger.info({ provider, email }, "OAuth tokens saved (client-side exchange)");
-        this.send(ws, { type: "oauth_result", provider, success: true, email: email || null });
-      } else {
-        this.send(ws, { type: "oauth_result", provider, success: false, error: "Provider nao suportado para troca client-side." });
-      }
-    } catch (err) {
-      logger.error({ err }, "Failed to save OAuth tokens from client-side exchange");
-      this.send(ws, { type: "oauth_result", provider: msg?.provider, success: false, error: "Falha ao salvar tokens." });
     }
   }
 

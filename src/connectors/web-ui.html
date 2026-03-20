@@ -2935,7 +2935,7 @@ var blockedSectionCollapsed = true;
 var avatarClickCount = 0;
 var avatarClickTimer = null;
 var providerModes = { anthropic: 'oauth', openai: 'oauth' };
-var pendingOAuth = { provider: null, authUrl: '', state: '' };
+var pendingOAuth = { provider: null, authUrl: '' };
 var oauthPopup = null;
 var oauthPopupTimer = null;
 var sendInFlight = false;
@@ -3280,7 +3280,6 @@ function handleServerMessage(msg) {
 
     case 'oauth_start':
       if (msg.authUrl && msg.provider) {
-        pendingOAuth.state = msg.state || '';
         if (msg.provider === 'openai') {
           startOpenAIPopupFlow(msg.authUrl);
         } else {
@@ -5536,58 +5535,6 @@ function submitOAuthInput() {
     showToast('Conexao offline');
     return;
   }
-
-  // For Anthropic: exchange tokens client-side to avoid Cloudflare TLS fingerprint
-  // blocking server-side requests with 429.
-  if (pendingOAuth.provider === 'anthropic' && pendingOAuth.state) {
-    var hashIdx = input.indexOf('#');
-    var code = hashIdx >= 0 ? input.substring(0, hashIdx) : input;
-    var verifier = pendingOAuth.state; // state = codeVerifier (set by startAuth)
-
-    var body = JSON.stringify({
-      grant_type: 'authorization_code',
-      code: code,
-      code_verifier: verifier,
-      client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
-      redirect_uri: 'https://console.anthropic.com/oauth/code/callback',
-      state: verifier,
-    });
-
-    showToast('Trocando tokens...');
-    fetch('https://console.anthropic.com/v1/oauth/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'anthropic-beta': 'oauth-2025-04-20',
-        'user-agent': 'claude-cli/2.1.80 (external, cli)',
-      },
-      body: body,
-    })
-    .then(function(resp) {
-      if (!resp.ok) return resp.text().then(function(t) { throw new Error('HTTP ' + resp.status + ': ' + t); });
-      return resp.json();
-    })
-    .then(function(data) {
-      // Send tokens to server to save in DB
-      ws.send(JSON.stringify({
-        type: 'oauth_tokens',
-        provider: 'anthropic',
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-        expiresIn: data.expires_in,
-        scope: data.scope || '',
-        email: data.account ? data.account.email_address : null,
-        orgName: data.organization ? data.organization.name : null,
-      }));
-    })
-    .catch(function(err) {
-      showToast('Erro: ' + err.message, true);
-    });
-    return;
-  }
-
-  // For other providers (OpenAI): server-side exchange as before
   ws.send(JSON.stringify({ type: 'oauth_exchange', provider: pendingOAuth.provider, input: input }));
 }
 
