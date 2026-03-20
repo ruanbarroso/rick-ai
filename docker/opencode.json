@@ -6,6 +6,7 @@
     }
   },
   "permission": "allow",
+  "plugin": ["opencode-anthropic-oauth"],
   "instructions": ["/app/AGENTS.md"],
   "mcp": {
     "playwright": {
