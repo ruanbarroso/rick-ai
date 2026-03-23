@@ -1114,6 +1114,8 @@ async function handleTurnInner(payload) {
       images: Array.isArray(payload.images) ? payload.images : [],
     };
 
+    process.stderr.write(`[handle-turn] Step 2c: building modelsToTry (prompt length=${prompt.length}, sessionId=${openCodeSessionId || "new"})\n`);
+
     // Build the ordered list of models to try: primary first, then global fallback order
     const modelsToTry = [effectiveModelId];
     for (const altModelId of GLOBAL_FALLBACK_ORDER) {
@@ -1152,6 +1154,7 @@ async function handleTurnInner(payload) {
         emit({ type: "model_active", modelId: tryModelId, modelName: tryModelId });
       }
 
+      process.stderr.write(`[handle-turn] Step 2d: cascade loop i=${i}, model=${tryModelId}, superseded=${isSuperseded()}, interrupted=${interrupted}\n`);
       if (isSuperseded() || interrupted) break;
 
       try {
