@@ -1116,6 +1116,14 @@ async function handleTurnInner(payload) {
 
     process.stderr.write(`[handle-turn] Step 2c: building modelsToTry (prompt length=${prompt.length}, sessionId=${openCodeSessionId || "new"})\n`);
 
+    // When resuming an existing OpenCode session, --print-logs replays the entire
+    // previous session's logs to stderr. This can contain text like "rate limit"
+    // from LLM responses or code comments, causing false-positive rate-limit
+    // detection. Set a grace period to ignore stderr rate-limit patterns during replay.
+    if (openCodeSessionId) {
+      ignoreStderrRateLimitUntil = Date.now() + 30_000;
+    }
+
     // Build the ordered list of models to try: primary first, then global fallback order
     const modelsToTry = [effectiveModelId];
     for (const altModelId of GLOBAL_FALLBACK_ORDER) {
