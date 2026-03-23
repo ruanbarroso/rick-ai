@@ -1178,16 +1178,29 @@ async function handleTurnInner(payload) {
         // Level 2: Nuke DB but preserve conversation context via historyMessages
         // Level 3: Fall through to cascade
         if (lastRunHadDbError && !isSuperseded() && !interrupted) {
-          // --- Level 1: Retry without session ID (keep DB intact) ---
+          // --- Level 1: Retry without session ID but WITH context ---
           const savedSessionId = openCodeSessionId;
-          process.stderr.write(`[opencode-db] DB error detected — Level 1: clearing session ID and retrying (DB preserved)\n`);
-          emitStatus("Recuperando sessao do OpenCode...");
+          process.stderr.write(`[opencode-db] DB error detected — Level 1: clearing session ID, injecting history context, retrying\n`);
+          emitStatus("Recuperando sessao do OpenCode com contexto...");
           openCodeSessionId = "";
+
+          // Extract and inject conversation context so the new session isn't blank
+          const level1Context = extractConversationContext();
+          if (level1Context.length > 0) {
+            historyMessages = level1Context;
+            process.stderr.write(`[opencode-db] Level 1: injected ${level1Context.length} messages as history context\n`);
+          }
+          const level1Args = { ...runArgs };
+          if (historyMessages.length > 0) {
+            level1Args.text = `${buildHistoryPrelude()}${userText}`;
+            historyMessages = [];
+          }
+
           await sleepMs(1000);
           lastRunHadDbError = false;
           toolStarted.clear();
           try {
-            result = await runOpencodeTurn(runArgs);
+            result = await runOpencodeTurn(level1Args);
             lastError = null;
             break;
           } catch (retryErr1) {
