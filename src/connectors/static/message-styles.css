@@ -6,96 +6,108 @@
  *   <link rel="stylesheet" href="/static/message-styles.css">
  *
  * Expects CSS variables from host page (with fallbacks):
- *   --text-muted / --text2   (secondary/muted text color)
- *   --bg-input / --surface2  (input/card background)
- *   --bg-hover               (hover background)
- *   --text-primary / --text  (primary text color)
- *   --border                 (border color)
+ *   --text2           (secondary/muted text color)
+ *   --surface / --surface2   (elevated backgrounds)
+ *   --text            (primary text color)
+ *   --border          (border color)
+ *   --accent          (accent color)
  */
 
 /* ==================== INLINE CODE & CODE BLOCKS ==================== */
 
 .message code {
-  background: rgba(0,0,0,0.3);
-  padding: 1px 5px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
   border-radius: 4px;
-  font-family: 'SF Mono', Consolas, monospace;
-  font-size: 0.88em;
+  font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 0.86em;
+  color: #e2e8f0;
 }
 
 .message pre {
-  background: rgba(0,0,0,0.4);
-  padding: 10px 12px;
-  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border, #1e293b);
+  padding: 12px 14px;
+  border-radius: 6px;
   overflow-x: auto;
-  margin: 6px 0;
-  font-family: 'SF Mono', Consolas, monospace;
-  font-size: 0.85em;
-  line-height: 1.4;
+  margin: 8px 0;
+  font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 0.83em;
+  line-height: 1.5;
 }
 
 .message pre code {
   background: none;
   padding: 0;
+  color: inherit;
 }
 
 /* ==================== HEADINGS ==================== */
 
 .message h1, .message h2, .message h3 {
-  margin: 10px 0 4px;
-  font-weight: 700;
+  margin: 12px 0 6px;
+  font-weight: 600;
   line-height: 1.3;
   white-space: normal;
+  color: var(--text, #e2e8f0);
 }
 
 .message h1 { font-size: 1.1em; }
-.message h2 { font-size: 1.0em; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 3px; }
-.message h3 { font-size: 0.95em; color: var(--text-muted, var(--text2, #8899a6)); }
+.message h2 {
+  font-size: 1.0em;
+  border-bottom: 1px solid var(--border, #1e293b);
+  padding-bottom: 4px;
+}
+.message h3 {
+  font-size: 0.95em;
+  color: var(--text2, #64748b);
+}
 
 /* ==================== HORIZONTAL RULE ==================== */
 
 .message hr {
   border: none;
-  border-top: 1px solid rgba(255,255,255,0.12);
-  margin: 10px 0;
+  border-top: 1px solid var(--border, #1e293b);
+  margin: 12px 0;
 }
 
 /* ==================== LISTS ==================== */
 
 .message ul, .message ol {
-  margin: 4px 0;
+  margin: 6px 0;
   padding-left: 22px;
   white-space: normal;
 }
 
 .message li {
-  margin: 2px 0;
-  line-height: 1.5;
+  margin: 3px 0;
+  line-height: 1.6;
 }
 
 /* ==================== LINKS ==================== */
 
 .message a {
-  color: #93c5fd;
+  color: #60a5fa;
   text-decoration: underline;
-  text-decoration-color: rgba(147, 197, 253, 0.45);
+  text-decoration-color: rgba(96, 165, 250, 0.35);
   text-underline-offset: 2px;
 }
 
 .message a:hover {
-  color: #bfdbfe;
-  text-decoration-color: rgba(191, 219, 254, 0.75);
+  color: #93bbfc;
+  text-decoration-color: rgba(147, 187, 252, 0.6);
 }
 
 /* ==================== CODE LANGUAGE LABEL ==================== */
 
 .message pre .code-lang {
   display: block;
-  font-size: 0.75em;
-  color: #8b949e;
-  margin-bottom: 4px;
+  font-size: 0.72em;
+  color: var(--text2, #64748b);
+  margin-bottom: 6px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
+  font-weight: 500;
 }
 
 /* ==================== TABLES ==================== */
@@ -103,38 +115,38 @@
 .message .table-wrapper {
   overflow-x: auto;
   margin: 8px 0;
-  border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  border: 1px solid var(--border, #1e293b);
 }
 
 .message table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85em;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .message table th,
 .message table td {
   padding: 6px 10px;
   text-align: left;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid var(--border, #1e293b);
   white-space: nowrap;
 }
 
 .message table th {
-  background: rgba(255,255,255,0.06);
+  background: rgba(255, 255, 255, 0.04);
   font-weight: 600;
   font-size: 0.82em;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--text-muted, var(--text2, #8899a6));
+  letter-spacing: 0.04em;
+  color: var(--text2, #64748b);
   position: sticky;
   top: 0;
 }
 
 .message table tbody tr:hover {
-  background: rgba(255,255,255,0.03);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .message table tbody tr:last-child td {
@@ -143,7 +155,7 @@
 
 /* Alternating row colors for readability */
 .message table tbody tr:nth-child(even) {
-  background: rgba(255,255,255,0.02);
+  background: rgba(255, 255, 255, 0.015);
 }
 
 /* Responsive: allow horizontal scroll on small screens */
@@ -171,14 +183,14 @@
 /* ==================== IMAGE MESSAGES ==================== */
 
 .image-message {
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .image-message img {
   display: block;
   max-width: 100%;
   max-height: 300px;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   object-fit: contain;
 }
@@ -189,7 +201,7 @@
   display: none;
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.9);
+  background: rgba(0, 0, 0, 0.92);
   z-index: 9999;
   justify-content: center;
   align-items: center;
@@ -220,29 +232,29 @@
   width: 100%;
   min-width: 240px;
   height: 40px;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .audio-transcription {
   margin: 4px 0 0 0;
   padding: 6px 10px;
-  border-left: 3px solid var(--text-muted, var(--text2, #8899a6));
-  color: var(--text-primary, var(--text, #e1e8ed));
+  border-left: 2px solid var(--text2, #64748b);
+  color: var(--text, #e2e8f0);
   font-size: 0.85em;
   font-style: italic;
-  line-height: 1.4;
+  line-height: 1.5;
   white-space: pre-wrap;
 }
 
 .audio-transcription.processing {
-  opacity: 0.7;
+  opacity: 0.6;
   animation: msg-pulse 1.5s infinite;
 }
 
 @keyframes msg-pulse {
-  0% { opacity: 0.4; }
-  50% { opacity: 0.8; }
-  100% { opacity: 0.4; }
+  0% { opacity: 0.3; }
+  50% { opacity: 0.7; }
+  100% { opacity: 0.3; }
 }
 
 /* ==================== FILE ATTACHMENTS ==================== */
@@ -256,9 +268,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--bg-input, var(--surface2, #243447));
-  border: 1px solid var(--border, #2d3f50);
-  border-radius: 8px;
+  background: var(--surface, #111a2b);
+  border: 1px solid var(--border, #1e293b);
+  border-radius: 6px;
   padding: 8px 10px;
   max-width: 280px;
   margin-bottom: 4px;
@@ -268,11 +280,11 @@
 }
 
 .file-attachment:hover {
-  background: var(--bg-hover, rgba(255,255,255,0.06));
+  background: var(--surface2, #172036);
 }
 
 .file-attachment .file-icon {
-  font-size: 1.5rem;
+  font-size: 1.4rem;
   flex-shrink: 0;
   line-height: 1;
 }
@@ -287,7 +299,7 @@
 .file-attachment .file-name {
   font-size: 0.82rem;
   font-weight: 600;
-  color: var(--text-primary, var(--text, #e1e8ed));
+  color: var(--text, #e2e8f0);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -295,8 +307,15 @@
 
 .file-attachment .file-type {
   font-size: 0.72rem;
-  color: var(--text-muted, var(--text2, #8899a6));
+  color: var(--text2, #64748b);
   margin-top: 2px;
+}
+
+/* ==================== STRONG / BOLD in messages ==================== */
+
+.message strong {
+  font-weight: 600;
+  color: var(--text, #e2e8f0);
 }
 
 /* ==================== MOBILE RESPONSIVE ==================== */

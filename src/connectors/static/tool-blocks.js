@@ -1,22 +1,82 @@
 /**
- * Shared tool-use terminal block logic.
+ * Shared tool-use block logic — OpenCode-inspired design.
  * Used by both web-ui.html and session-viewer.html.
  *
  * Exports (global functions):
- *   - formatToolLine(text, timeStr) → HTML string for a single terminal line
- *   - makeToolUseBlock()            → DOM element (collapsible terminal block)
+ *   - formatToolLine(text, timeStr) → HTML string for a single tool line
+ *   - makeToolUseBlock()            → DOM element (collapsible tool block)
  */
 
 /* eslint-disable no-unused-vars */
 
 /**
+ * Map tool names to icons (OpenCode-inspired single-char icons).
+ */
+var TOOL_ICONS = {
+  'bash': '$',
+  'read': '\u2192',      // →
+  'write': '\u25CB',     // ○
+  'edit': '\u25CB',      // ○
+  'glob': '\u2731',      // ✱
+  'grep': '\u2731',      // ✱
+  'task': '\u2502',      // │
+  'webfetch': '%',
+  'playwright': '\u25C7', // ◇
+  'todowrite': '\u2611',  // ☑
+  'question': '?'
+};
+
+/**
+ * Detect if a tool call line represents a completed action (has status suffix).
+ */
+function isToolCompleted(text) {
+  return /\b(ok|completed|done)\b/i.test(text) || /\d+ms\b/.test(text);
+}
+
+/**
+ * Extract tool name from text for icon lookup.
+ * Looks for backtick-delimited first segment or common prefixes.
+ */
+function extractToolName(text) {
+  // Match [tool_name:status] pattern
+  var bracketMatch = text.match(/\[([a-z_]+)/i);
+  if (bracketMatch) {
+    var name = bracketMatch[1].replace(/^rick_/, '');
+    return name.toLowerCase();
+  }
+  // Match first backtick segment
+  var btMatch = text.match(/`([^`]+)`/);
+  if (btMatch) return btMatch[1].toLowerCase();
+  return '';
+}
+
+/**
+ * Get icon for a tool name.
+ */
+function getToolIcon(toolName) {
+  if (!toolName) return '\u25B8'; // ▸
+  var lower = toolName.toLowerCase();
+  for (var key in TOOL_ICONS) {
+    if (lower.indexOf(key) !== -1) return TOOL_ICONS[key];
+  }
+  return '\u25B8'; // ▸ default
+}
+
+/**
  * Format a tool execution line with syntax-highlighted segments.
- * Backtick-delimited segments: first = tool name (blue), rest = args (green).
- * Plain text segments shown in green.
+ * Backtick-delimited segments: first = tool name (blue), rest = args (cyan).
+ * Plain text segments shown in muted color.
+ *
+ * Enhanced: detects completed vs in-progress, applies muting, adds icons.
  */
 function formatToolLine(text, timeStr) {
+  var completed = isToolCompleted(text);
+  var toolName = extractToolName(text);
+  var icon = getToolIcon(toolName);
+
   var timeEl = '<span class="tl-time">' + timeStr + '</span>';
-  var arrowEl = '<span class="tl-arrow">\u25B8</span>';
+  var iconEl = '<span class="tl-arrow">' + icon + '</span>';
+
   var segments = [];
   var regex = /`([^`]*)`/g;
   var match;
@@ -48,16 +108,19 @@ function formatToolLine(text, timeStr) {
 
   var contentHtml = segments.map(function(s) {
     var escaped = s.val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    if (s.type === 'tool') return '<span class="tl-tool">' + escaped + '</span>';
+    if (s.type === 'tool') {
+      var cls = completed ? 'tl-tool-done' : 'tl-tool';
+      return '<span class="' + cls + '">' + escaped + '</span>';
+    }
     if (s.type === 'arg')  return '<span class="tl-arg">' + escaped + '</span>';
     return '<span class="tl-plain">' + escaped + '</span>';
   }).join(' ');
 
-  return timeEl + arrowEl + contentHtml;
+  return timeEl + iconEl + contentHtml;
 }
 
 /**
- * Create a new collapsible terminal block element.
+ * Create a new collapsible tool block element.
  * Minimizes all existing blocks and returns the new (expanded) block.
  */
 function makeToolUseBlock() {
