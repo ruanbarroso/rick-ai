@@ -328,10 +328,28 @@ export class ClaudeOAuthService {
 
       logger.info({ userId }, "Claude OAuth: token refreshed (deduped in-process)");
       return refreshed.access_token;
-    } catch (err) {
+    } catch (err: any) {
+      const errMsg = String(err?.message || "");
       logger.error({ err, userId }, "Claude OAuth: refresh failed");
       this.tokenCache.delete(ck);
-      await this.markDisconnected(userId);
+
+      // Only permanently disable the token for definitive errors.
+      // Temporary errors (429, timeout, network) should NOT disable the token —
+      // it may still be refreshable later. The shared token (user_id=NULL) is
+      // especially critical and must not be killed by a transient failure.
+      const isDefinitive =
+        errMsg.includes("invalid_grant") ||
+        errMsg.includes("unauthorized_client") ||
+        errMsg.includes("revoked") ||
+        errMsg.includes("HTTP 400") ||
+        errMsg.includes("HTTP 401");
+
+      if (isDefinitive) {
+        logger.warn({ userId, errMsg }, "Claude OAuth: definitive refresh failure — marking disconnected");
+        await this.markDisconnected(userId);
+      } else {
+        logger.info({ userId, errMsg }, "Claude OAuth: transient refresh failure — keeping token active for retry");
+      }
       return null;
     }
   }
