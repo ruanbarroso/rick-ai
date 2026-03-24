@@ -2004,10 +2004,14 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) 
   var container = document.getElementById('messages');
   var typing = document.getElementById('typing-indicator');
 
-  // Remove lingering "Pensando..." status line
+  // Remove lingering "Pensando..." status line and minimize previous tool block
   var prevStatus = typing.previousElementSibling;
   if (prevStatus && prevStatus.classList.contains('tool-status-line')) {
     prevStatus.parentNode.removeChild(prevStatus);
+  }
+  var prevBlock = typing.previousElementSibling;
+  if (prevBlock && prevBlock.classList.contains('tool-use-block') && !prevBlock.classList.contains('minimized')) {
+    _minimizeBlock(prevBlock);
   }
 
   var div = document.createElement('div');
@@ -2072,8 +2076,9 @@ function appendHistoryMessage(msg) {
   var timeStr = (timestamp ? new Date(timestamp) : new Date())
     .toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-  // Tool use → terminal block
+  // Tool use → terminal block (skip status lines like "Pensando ..." in history)
   if (messageType === 'tool_use') {
+    if (isStatusLine(text)) return; // transient — don't render in history
     appendToolLine(text, timeStr);
     return;
   }
@@ -2087,6 +2092,17 @@ function appendHistoryMessage(msg) {
 
   var container = document.getElementById('messages');
   var typing = document.getElementById('typing-indicator');
+
+  // When a real message arrives during history replay, minimize any open tool block
+  // and remove any lingering "Pensando..." status line
+  var prev = typing.previousElementSibling;
+  if (prev && prev.classList.contains('tool-status-line')) {
+    prev.parentNode.removeChild(prev);
+  }
+  prev = typing.previousElementSibling;
+  if (prev && prev.classList.contains('tool-use-block') && !prev.classList.contains('minimized')) {
+    _minimizeBlock(prev);
+  }
 
   var div = document.createElement('div');
   var cssClass = (messageType === 'error' || isExecutionFailureText(text)) ? 'error' : (role === 'user' ? 'user' : 'agent');
