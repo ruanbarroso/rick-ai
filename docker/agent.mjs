@@ -1059,9 +1059,16 @@ async function handleTurn(payload) {
 }
 
 async function handleTurnInner(payload) {
-  const generation = Number.isFinite(payload.generation) ? payload.generation : currentGeneration + 1;
-  currentGeneration = Math.max(currentGeneration, generation);
-  processingGeneration = generation;
+  // Always claim the highest generation seen so far.
+  // If payload carries a generation from the main container, incorporate it,
+  // but always set processingGeneration = currentGeneration so that THIS turn
+  // is never stale relative to interrupts that arrived while it was queued.
+  if (Number.isFinite(payload.generation)) {
+    currentGeneration = Math.max(currentGeneration, payload.generation);
+  } else {
+    currentGeneration += 1;
+  }
+  processingGeneration = currentGeneration;
   interrupted = false;
   toolStarted.clear();
 
@@ -1162,7 +1169,7 @@ async function handleTurnInner(payload) {
         emit({ type: "model_active", modelId: tryModelId, modelName: tryModelId });
       }
 
-      process.stderr.write(`[handle-turn] Step 2d: cascade loop i=${i}, model=${tryModelId}, superseded=${isSuperseded()}, interrupted=${interrupted}\n`);
+      process.stderr.write(`[handle-turn] Step 2d: cascade loop i=${i}, model=${tryModelId}, superseded=${isSuperseded()}, interrupted=${interrupted}, gen=${processingGeneration}/${currentGeneration}\n`);
       if (isSuperseded() || interrupted) break;
 
       try {
@@ -1310,7 +1317,22 @@ async function handleTurnInner(payload) {
     emitError(errorMsg);
     emitWaitingUser("");
   } finally {
+    // If this turn exits without emitting waiting_user (e.g. superseded at Step 2d),
+    // and no subsequent turn is queued (processingGeneration is still ours),
+    // emit waiting_user to prevent the session from being stuck in "running" forever.
+    const wasOurGeneration = processingGeneration === currentGeneration;
     processingGeneration = 0;
+    if (wasOurGeneration && !isSuperseded()) {
+      // Check if the last emitted event was NOT waiting_user/done/error.
+      // This avoids duplicate waiting_user if the turn already emitted one.
+      try {
+        const lastState = getState("session_state");
+        if (lastState === "running") {
+          process.stderr.write(`[handle-turn] Safety net: turn exited without emitting waiting_user (state was 'running'), emitting now\n`);
+          emitWaitingUser("");
+        }
+      } catch { /* ignore */ }
+    }
   }
 }
 
