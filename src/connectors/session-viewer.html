@@ -1607,11 +1607,12 @@ function appendToolLine(text, timeStr) {
   // and update it in-place (like OpenCode does) instead of adding a new line
   if (isToolCompleted(text)) {
     var completedName = extractToolName(text);
-    // Find the last running line for this tool name
+    // Find the last running line for this tool name and update in-place
     var lines = body.querySelectorAll('.terminal-line[data-tool-state="running"]');
     for (var li = lines.length - 1; li >= 0; li--) {
-      if (lines[li].getAttribute('data-tool-name') === completedName) {
-        // Update in-place: re-render as completed
+      var lineName = lines[li].getAttribute('data-tool-name') || '';
+      // Match by exact name OR by case-insensitive comparison (legacy format)
+      if (lineName === completedName || lineName.toLowerCase() === completedName.toLowerCase()) {
         lines[li].innerHTML = formatToolLine(text, timeStr);
         lines[li].setAttribute('data-tool-state', isToolError(text) ? 'error' : 'done');
         body.scrollTop = body.scrollHeight;
@@ -1619,7 +1620,17 @@ function appendToolLine(text, timeStr) {
         return;
       }
     }
-    // No matching start found — render as standalone completed line
+    // No running match found — try to hide the last start line with same name
+    // (prevents duplicate lines when merge fails due to name mismatch)
+    var allLines = body.querySelectorAll('.terminal-line');
+    for (var al = allLines.length - 1; al >= 0; al--) {
+      var alName = allLines[al].getAttribute('data-tool-name') || '';
+      if ((alName === completedName || alName.toLowerCase() === completedName.toLowerCase())
+          && allLines[al].getAttribute('data-tool-state') === 'running') {
+        allLines[al].style.display = 'none';
+        break;
+      }
+    }
   }
 
   var line = document.createElement('div');

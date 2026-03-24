@@ -154,6 +154,9 @@ function extractArg(inp: Record<string, unknown>): string {
     }
   }
   if (primitives.length > 0) return `[${primitives.join(", ")}]`;
+
+  // For tools called with no arguments or only complex args, return empty
+  // (the tool name alone is sufficient — e.g. "Memory", "Snapshot")
   return "";
 }
 

@@ -719,12 +719,23 @@ function appendToolLine(text, timeStr) {
     var completedName = extractToolName(text);
     var lines = body.querySelectorAll('.terminal-line[data-tool-state="running"]');
     for (var li = lines.length - 1; li >= 0; li--) {
-      if (lines[li].getAttribute('data-tool-name') === completedName) {
+      var lineName = lines[li].getAttribute('data-tool-name') || '';
+      if (lineName === completedName || lineName.toLowerCase() === completedName.toLowerCase()) {
         lines[li].innerHTML = formatToolLine(text, timeStr);
         lines[li].setAttribute('data-tool-state', isToolError(text) ? 'error' : 'done');
         body.scrollTop = body.scrollHeight;
         scrollToBottom();
         return;
+      }
+    }
+    // Hide orphaned start line if merge failed
+    var allLines = body.querySelectorAll('.terminal-line');
+    for (var al = allLines.length - 1; al >= 0; al--) {
+      var alName = allLines[al].getAttribute('data-tool-name') || '';
+      if ((alName === completedName || alName.toLowerCase() === completedName.toLowerCase())
+          && allLines[al].getAttribute('data-tool-state') === 'running') {
+        allLines[al].style.display = 'none';
+        break;
       }
     }
   }
