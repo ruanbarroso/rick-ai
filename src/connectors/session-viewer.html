@@ -1520,6 +1520,17 @@ function isAtBottom() {
   return container.scrollHeight - container.scrollTop - container.clientHeight < 80;
 }
 
+function formatTimestamp(date) {
+  if (!date) date = new Date();
+  var y = date.getFullYear();
+  var m = String(date.getMonth() + 1).padStart(2, '0');
+  var d = String(date.getDate()).padStart(2, '0');
+  var h = String(date.getHours()).padStart(2, '0');
+  var min = String(date.getMinutes()).padStart(2, '0');
+  var s = String(date.getSeconds()).padStart(2, '0');
+  return y + '-' + m + '-' + d + ' ' + h + ':' + min + ':' + s;
+}
+
 function scrollToBottom(force) {
   var container = document.getElementById('messages');
   if (force || isAtBottom()) {
@@ -1993,13 +2004,13 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) 
 
   // Tool use → terminal block
   if (messageType === 'tool_use') {
-    var ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    var ts = formatTimestamp();
     appendToolLine(text, ts);
     return;
   }
 
   if (messageType === 'question') {
-    if (appendQuestionMessage(text, new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))) {
+    if (appendQuestionMessage(text, formatTimestamp())) {
       return;
     }
   }
@@ -2035,7 +2046,7 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) 
 
   var time = document.createElement('div');
   time.className = 'time';
-  time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  time.textContent = formatTimestamp();
   div.appendChild(time);
 
   if (cssClass !== 'error') addCopyButton(div, text);
@@ -2079,8 +2090,7 @@ function appendHistoryMessage(msg) {
     return;
   }
 
-  var timeStr = (timestamp ? new Date(timestamp) : new Date())
-    .toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  var timeStr = formatTimestamp(timestamp ? new Date(timestamp) : new Date());
 
   // Tool use → terminal block (skip status lines like "Pensando ..." in history)
   if (messageType === 'tool_use') {
@@ -2386,7 +2396,7 @@ function connect() {
             selectedExecutionMode = msg.session.executionMode === 'plan' ? 'plan' : 'build';
           }
           if (msg.session.pendingQuestion) {
-            appendQuestionMessage(JSON.stringify(msg.session.pendingQuestion), new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            appendQuestionMessage(JSON.stringify(msg.session.pendingQuestion), formatTimestamp());
           }
           canManageProviders = !!msg.session.canManageProviders;
           updateModelButton();
