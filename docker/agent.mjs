@@ -67,6 +67,17 @@ function getLastEventId() {
   return row?.last_id ?? 0;
 }
 
+/** Pending long-poll waiters — resolved when new events are emitted. */
+const eventWaiters = new Set();
+
+/** Wake all long-poll waiters (called from emit). */
+function notifyEventWaiters() {
+  for (const resolve of eventWaiters) {
+    resolve();
+  }
+  eventWaiters.clear();
+}
+
 /** Flag: true when stdin pipe is broken (main container restarted). */
 let stdinClosed = false;
 /** Flag: true when stdout pipe is broken. */
@@ -108,6 +119,9 @@ function emit(obj) {
     }
     setState("last_activity", String(Date.now()));
   } catch { /* ignore state update failures */ }
+
+  // Wake any long-poll waiters so they can fetch the new event immediately
+  notifyEventWaiters();
 
   // Try stdout — tolerate EPIPE if main container is gone
   if (!stdoutBroken) {
@@ -1537,19 +1551,60 @@ const httpServer = createServer((req, res) => {
     return;
   }
 
-  // GET /events?after=N — fetch events with id > N
+  // GET /events?after=N[&wait=S] — fetch events with id > N
+  // If wait=S is specified and there are no new events, the request blocks
+  // for up to S seconds (long-poll) until new events arrive. This eliminates
+  // the 500ms polling delay and gives the stream-bridge instant notification.
   if (req.method === "GET" && url.pathname === "/events") {
     const after = parseInt(url.searchParams.get("after") || "0", 10) || 0;
+    const waitSec = Math.min(parseInt(url.searchParams.get("wait") || "0", 10) || 0, 60);
+
+    const sendEvents = () => {
+      try {
+        const rows = stmtGetEvents.all(after);
+        const events = rows.map((r) => ({ id: r.id, type: r.type, data: JSON.parse(r.data), created_at: r.created_at }));
+        const state = getState("session_state") || "unknown";
+        res.writeHead(200);
+        res.end(JSON.stringify({ events, lastEventId: getLastEventId(), state }));
+      } catch (err) {
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: err?.message || "Failed to query events" }));
+      }
+    };
+
+    // Check if there are already events to return
     try {
       const rows = stmtGetEvents.all(after);
-      const events = rows.map((r) => ({ id: r.id, type: r.type, data: JSON.parse(r.data), created_at: r.created_at }));
-      const state = getState("session_state") || "unknown";
-      res.writeHead(200);
-      res.end(JSON.stringify({ events, lastEventId: getLastEventId(), state }));
-    } catch (err) {
-      res.writeHead(500);
-      res.end(JSON.stringify({ error: err?.message || "Failed to query events" }));
+      if (rows.length > 0 || waitSec <= 0) {
+        sendEvents();
+        return;
+      }
+    } catch {
+      sendEvents();
+      return;
     }
+
+    // No events yet — wait for notification or timeout
+    let resolved = false;
+    const resolve = () => {
+      if (resolved) return;
+      resolved = true;
+      eventWaiters.delete(resolve);
+      sendEvents();
+    };
+    eventWaiters.add(resolve);
+
+    // Timeout fallback
+    const timer = setTimeout(resolve, waitSec * 1000);
+
+    // Clean up if client disconnects
+    req.on("close", () => {
+      if (!resolved) {
+        resolved = true;
+        eventWaiters.delete(resolve);
+        clearTimeout(timer);
+      }
+    });
     return;
   }
 

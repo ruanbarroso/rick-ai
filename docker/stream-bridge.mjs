@@ -4,10 +4,10 @@
  * Stream bridge: connects docker exec stdin/stdout to the agent's HTTP control server.
  *
  * - Reads NDJSON lines from stdin → POST /command on localhost:3000
- * - Polls GET /events?after=N on localhost:3000 → writes NDJSON to stdout
+ * - Long-polls GET /events?after=N&wait=30 on localhost:3000 → writes NDJSON to stdout
  *
- * This allows the main container to maintain the existing NDJSON protocol
- * over docker exec, while the agent runs as a resident process (PID 1).
+ * Uses long-poll instead of interval-based polling for instant event delivery.
+ * The agent's /events endpoint blocks until new events arrive or the wait timeout expires.
  */
 
 import { createInterface } from "node:readline";
@@ -16,23 +16,20 @@ import { writeSync } from "node:fs";
 /**
  * Write a line to stdout using synchronous fs.writeSync(fd=1).
  * This bypasses Node.js stream buffering which can stall inside
- * `docker exec -i` pipes, causing events to never reach the main container.
+ * `docker exec` pipes, causing events to never reach the main container.
  */
 function writeLine(line) {
   writeSync(1, line + "\n");
 }
 
 const AGENT_URL = "http://localhost:3000";
-const POLL_INTERVAL_MS = 500;  // 500ms polling — good balance between latency and load
-const POLL_INTERVAL_IDLE_MS = 2000; // Slow down when agent is idle (waiting_user/done)
+const LONG_POLL_WAIT = 30; // seconds — agent holds the request until events arrive or timeout
+const RETRY_DELAY_MS = 1000; // retry delay when agent is not reachable
 
 let lastEventId = 0;
 let polling = true;
-let idleState = false;
 
 // ==================== STDIN → POST /command ====================
-// Stdin may not be connected (when launched without -i flag).
-// Commands are sent via HTTP fallback from the main container.
 
 if (process.stdin.readable && !process.stdin.destroyed) {
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -52,33 +49,30 @@ if (process.stdin.readable && !process.stdin.destroyed) {
   });
 
   rl.on("close", () => {
-    // When launched without `docker exec -i`, stdin is closed immediately.
-    // Do NOT exit here — the bridge must keep polling /events and streaming
-    // stdout even when command input is unavailable.
+    // Stdin may close immediately when launched without -i.
+    // Keep polling — the bridge must stream events even without command input.
   });
 }
 
-// ==================== GET /events → stdout ====================
+// ==================== GET /events (long-poll) → stdout ====================
 
-// On startup, get the initial lastEventId passed as CLI arg (if any).
-// This lets the main container resume from where it left off.
 const startAfter = parseInt(process.argv[2] || "0", 10) || 0;
 lastEventId = startAfter;
 
 async function pollEvents() {
   while (polling) {
     try {
-      const res = await fetch(`${AGENT_URL}/events?after=${lastEventId}`, {
-        signal: AbortSignal.timeout(5000),
-      });
+      // Long-poll: the agent holds this request until new events arrive
+      // or the wait timeout expires (30s). No more 500ms delay.
+      const res = await fetch(
+        `${AGENT_URL}/events?after=${lastEventId}&wait=${LONG_POLL_WAIT}`,
+        { signal: AbortSignal.timeout((LONG_POLL_WAIT + 5) * 1000) }
+      );
       if (res.ok) {
-        const { events, lastEventId: serverLastId, state } = await res.json();
+        const { events, lastEventId: serverLastId } = await res.json();
         if (Array.isArray(events)) {
           for (const evt of events) {
             if (evt.data) {
-              // Include the event ID so the main container can track sync progress.
-              // Injected as _eventId — handleAgentOutput extracts it and updates
-              // _lastSyncedEventId without re-fetching events after a bridge reconnect.
               const payload = typeof evt.id === "number"
                 ? { ...evt.data, _eventId: evt.id }
                 : evt.data;
@@ -90,17 +84,13 @@ async function pollEvents() {
           }
         }
         if (typeof serverLastId === "number") lastEventId = Math.max(lastEventId, serverLastId);
-        // Use agent state from /events response for adaptive polling (no separate /health call needed)
-        if (typeof state === "string") {
-          idleState = state === "waiting_user" || state === "done" || state === "ready";
-        }
+        // No delay needed — immediately long-poll again
+        continue;
       }
     } catch {
-      // Agent not reachable — it may have exited or still starting up.
+      // Agent not reachable — retry after short delay
     }
-
-    const interval = idleState ? POLL_INTERVAL_IDLE_MS : POLL_INTERVAL_MS;
-    await new Promise((r) => setTimeout(r, interval));
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
   }
 }
 
