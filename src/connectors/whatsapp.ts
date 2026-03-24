@@ -441,12 +441,16 @@ export class WhatsAppConnector implements Connector {
       // Skip messages from self (fromMe) — admin uses Web UI only
       if (fromMe) return;
 
-      // Extract sender identifier from JID.
-      // WhatsApp can send messages with phone-based JIDs (@s.whatsapp.net)
-      // or LID-based JIDs (@lid). We store the bare identifier and remember
-      // the domain so we can send replies to the correct JID later.
-      const jidParts = chatJid.split("@");
-      const senderId = jidParts[0].split(":")[0];
+      // Resolve the best identifier for this user.
+      // Baileys v7 may use LID-based JIDs (@lid) instead of phone-based ones.
+      // We always prefer the phone number because LIDs are opaque and create
+      // duplicate users when the same person sends from both JID types.
+      //
+      // Priority:
+      // 1. remoteJidAlt (Baileys v7 field — phone JID when primary is LID)
+      // 2. signalRepository.lidMapping.getPNForLID() (internal Baileys mapping)
+      // 3. remoteJid itself (fallback)
+      const senderId = this.resolvePhoneNumber(chatJid, msg.key.remoteJidAlt);
       const pushName = msg.pushName || undefined;
 
       // Track message in message_log for dedup
@@ -801,8 +805,8 @@ export class WhatsAppConnector implements Connector {
 
       logger.info({ selectedNames, pollQuestion: pollContent.name }, "Poll vote received");
 
-      // Resolve voter from JID
-      const voterPhone = chatJid.split("@")[0].split(":")[0];
+      // Resolve voter — prefer phone number over LID
+      const voterPhone = this.resolvePhoneNumber(chatJid, msg.key.remoteJidAlt);
       await this.manager.handlePollVote(voterPhone, selectedNames);
     } catch (err) {
       logger.error({ err }, "Error handling poll update");
@@ -930,6 +934,47 @@ export class WhatsAppConnector implements Connector {
       return `${phone}@s.whatsapp.net`;
     }
     return null;
+  }
+
+  /**
+   * Resolve the best phone-based identifier for a user.
+   * Prefers phone number over LID to avoid duplicate users.
+   *
+   * Baileys v7 can use LID-based JIDs (@lid) as remoteJid. When that happens,
+   * `remoteJidAlt` contains the phone-based JID (@s.whatsapp.net).
+   * We can also query the internal signal mapping as a fallback.
+   */
+  private resolvePhoneNumber(primaryJid: string, altJid?: string): string {
+    // Helper: extract bare number from a JID
+    const bare = (jid: string) => jid.split("@")[0].split(":")[0];
+
+    // 1. If altJid is a phone-based JID, use it
+    if (altJid && altJid.includes("@s.whatsapp.net")) {
+      return bare(altJid);
+    }
+
+    // 2. If primary is already phone-based, use it
+    if (primaryJid.includes("@s.whatsapp.net")) {
+      return bare(primaryJid);
+    }
+
+    // 3. If primary is LID, try the Baileys signal mapping
+    if (primaryJid.includes("@lid") && this.sock) {
+      try {
+        const mapping = (this.sock as any).signalRepository?.lidMapping;
+        if (mapping) {
+          const pn = mapping.getPNForLID(primaryJid);
+          if (pn && pn.includes("@s.whatsapp.net")) {
+            return bare(pn);
+          }
+        }
+      } catch {
+        // Mapping not available — fall through
+      }
+    }
+
+    // 4. Fallback: use the bare identifier (may be LID)
+    return bare(primaryJid);
   }
 
   private extractText(msg: any): string | null {
