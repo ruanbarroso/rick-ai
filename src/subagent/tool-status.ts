@@ -108,6 +108,56 @@ function compactToolError(name: string, message: string): string {
   return raw.replace(/\s+/g, " ").trim() || "erro";
 }
 
+/** Extract a human-readable argument string from tool input. */
+function extractArg(inp: Record<string, unknown>): string {
+  const shell = formatShellCommand(inp);
+  if (shell) return `$ ${shell}`;
+
+  // Playwright click/hover — show element description
+  if (typeof inp.element === "string" && inp.element.trim()) return inp.element.trim();
+  // Playwright type — show text being typed
+  if (typeof inp.text === "string" && typeof inp.ref === "string") {
+    const t = inp.text as string;
+    return t.length > 60 ? t.slice(0, 57) + "..." : t;
+  }
+  // Playwright fill_form — show field names
+  if (Array.isArray(inp.fields)) {
+    const names = (inp.fields as Array<{name?: string}>).map(f => f.name).filter(Boolean);
+    return names.length > 0 ? names.join(", ") : `${inp.fields.length} fields`;
+  }
+  // Playwright wait_for — show duration
+  if (typeof inp.time === "number") return `${inp.time}s`;
+  // Playwright key press
+  if (typeof inp.key === "string") return inp.key;
+
+  // File paths
+  if (typeof inp.filePath === "string" || typeof inp.file_path === "string") {
+    return relativePath(String(inp.filePath ?? inp.file_path));
+  }
+  if (typeof inp.notebook_path === "string") return relativePath(String(inp.notebook_path));
+  // Search patterns
+  if (typeof inp.pattern === "string") {
+    const location = (inp.path ?? inp.glob ?? inp.include) as string | undefined;
+    const locRel = location ? relativePath(location) : "";
+    return locRel ? `"${inp.pattern}" in ${locRel}` : `"${inp.pattern}"`;
+  }
+  // URLs
+  if (typeof inp.url === "string") return String(inp.url);
+  // TodoWrite
+  if (Array.isArray(inp.todos)) return `${inp.todos.length} ${inp.todos.length === 1 ? "item" : "itens"}`;
+  // Task description
+  if (typeof inp.description === "string") return String(inp.description);
+  // Task prompt
+  if (typeof inp.prompt === "string") {
+    return inp.prompt.length > 80 ? inp.prompt.slice(0, 77) + "..." : String(inp.prompt);
+  }
+  // Fallback
+  const first = firstStringValue(inp);
+  if (first && first.length <= 120) return first;
+  if (first) return first.slice(0, 117) + "...";
+  return "";
+}
+
 /**
  * Build a tool start line.
  *
@@ -115,42 +165,13 @@ function compactToolError(name: string, message: string): string {
  *   `Read` `src/index.ts`
  *   `Bash` `$ git status`
  *   `Glob` `**\/*.ts` `src/`
- *   `TodoWrite` `4 itens`
- *   `Task` `Explore the codebase`
+ *   `Navigate` `https://example.com`
+ *   `Click` `Sign in button`
+ *   `FillForm` `Username, Password`
  */
 export function buildToolUseLine(toolName: string, input?: Record<string, unknown>): string {
-  const inp = input ?? {};
   const name = displayName(toolName);
-  let arg = "";
-
-  const shell = formatShellCommand(inp);
-  if (shell) {
-    arg = `$ ${shell}`;
-  } else if (typeof inp.filePath === "string" || typeof inp.file_path === "string") {
-    arg = relativePath(String(inp.filePath ?? inp.file_path));
-  } else if (typeof inp.notebook_path === "string") {
-    arg = relativePath(String(inp.notebook_path));
-  } else if (typeof inp.pattern === "string") {
-    const location = (inp.path ?? inp.glob ?? inp.include) as string | undefined;
-    const locRel = location ? relativePath(location) : "";
-    arg = locRel ? `"${inp.pattern}" in ${locRel}` : `"${inp.pattern}"`;
-  } else if (typeof inp.url === "string") {
-    arg = String(inp.url);
-  } else if (Array.isArray(inp.todos)) {
-    arg = `${inp.todos.length} ${inp.todos.length === 1 ? "item" : "itens"}`;
-  } else if (typeof inp.description === "string") {
-    arg = String(inp.description);
-  } else if (typeof inp.prompt === "string") {
-    arg = inp.prompt.length > 80 ? inp.prompt.slice(0, 77) + "..." : String(inp.prompt);
-  } else {
-    const first = firstStringValue(inp);
-    if (first && first.length <= 120) {
-      arg = first;
-    } else if (first) {
-      arg = first.slice(0, 117) + "...";
-    }
-  }
-
+  const arg = extractArg(input ?? {});
   return arg ? `\n\`${name}\` \`${arg}\`\n` : `\n\`${name}\`\n`;
 }
 
@@ -199,37 +220,7 @@ export function formatToolLifecycleLine(input: {
       ? `${Math.round(input.durationMs)}ms`
       : "";
 
-    // Re-build the arg string from the original input for the completed line
-    // This way the completed line has the SAME content as the start line + duration
-    const inp = input.args ?? {};
-    let arg = "";
-    const shell = formatShellCommand(inp);
-    if (shell) {
-      arg = `$ ${shell}`;
-    } else if (typeof inp.filePath === "string" || typeof inp.file_path === "string") {
-      arg = relativePath(String(inp.filePath ?? inp.file_path));
-    } else if (typeof inp.notebook_path === "string") {
-      arg = relativePath(String(inp.notebook_path));
-    } else if (typeof inp.pattern === "string") {
-      const location = (inp.path ?? inp.glob ?? inp.include) as string | undefined;
-      const locRel = location ? relativePath(location) : "";
-      arg = locRel ? `"${inp.pattern}" in ${locRel}` : `"${inp.pattern}"`;
-    } else if (typeof inp.url === "string") {
-      arg = String(inp.url);
-    } else if (Array.isArray(inp.todos)) {
-      arg = `${inp.todos.length} ${inp.todos.length === 1 ? "item" : "itens"}`;
-    } else if (typeof inp.description === "string") {
-      arg = String(inp.description);
-    } else if (typeof inp.prompt === "string") {
-      arg = inp.prompt.length > 80 ? inp.prompt.slice(0, 77) + "..." : String(inp.prompt);
-    } else {
-      const first = firstStringValue(inp);
-      if (first && first.length <= 120) {
-        arg = first;
-      } else if (first) {
-        arg = first.slice(0, 117) + "...";
-      }
-    }
+    const arg = extractArg(input.args ?? {});
 
     const parts = [`\`${name}:ok\``];
     if (arg) parts.push(`\`${arg}\``);
