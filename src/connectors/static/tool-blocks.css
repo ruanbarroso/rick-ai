@@ -9,6 +9,7 @@
   flex-shrink: 0;
   align-self: stretch;
   max-width: 100%;
+  width: 100%;
   background: transparent;
   border-left: 2px solid var(--border, #1e293b);
   border-radius: 0;
@@ -17,6 +18,7 @@
   font-size: 0.78rem;
   margin: 4px 0;
   padding-left: 0;
+  box-sizing: border-box;
 }
 
 /* ==================== HEADER ==================== */
@@ -75,9 +77,11 @@
   flex-direction: column;
   gap: 0;
   min-width: 0;
+  max-width: 100%;
   max-height: 400px;
   overflow-y: auto;
   overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 .tool-use-block .terminal-body::-webkit-scrollbar { width: 3px; }
@@ -88,13 +92,17 @@
 
 .tool-use-block .terminal-line {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 2px 6px;
   align-items: baseline;
   line-height: 1.65;
-  white-space: pre-wrap;
+  white-space: normal;
   word-break: break-all;
+  overflow-wrap: anywhere;
   padding: 1px 0;
   min-height: 22px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* ==================== STATUS LINE (Pensando...) ==================== */
@@ -196,7 +204,9 @@
   color: var(--tool-arg, #22d3ee);
   opacity: 0.85;
   word-break: break-all;
+  overflow-wrap: anywhere;
   min-width: 0;
+  max-width: 100%;
 }
 
 .tool-use-block .tl-arg.done {
@@ -209,6 +219,8 @@
 .tool-use-block .tl-plain {
   color: var(--tool-text, #94a3b8);
   word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 /* ==================== LEGACY (compat with old arrow) ==================== */
@@ -248,4 +260,30 @@
 
 .tool-use-block .terminal-footer {
   display: none;
+}
+
+/* ==================== MOBILE ==================== */
+
+@media (max-width: 640px) {
+  .tool-use-block {
+    font-size: 0.7rem;
+  }
+  .tool-use-block .terminal-body {
+    padding: 0 8px 4px;
+    max-height: 260px;
+  }
+  .tool-use-block .terminal-header {
+    padding: 3px 8px;
+  }
+  .tool-use-block .tl-time {
+    display: none;
+  }
+  .tool-use-block .tl-icon {
+    width: 12px;
+    font-size: 0.65rem;
+  }
+  .tool-use-block .tl-arg,
+  .tool-use-block .tl-arg.done {
+    max-width: calc(100vw - 80px);
+  }
 }
