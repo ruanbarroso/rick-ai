@@ -1302,11 +1302,22 @@ async function handleTurnInner(payload) {
             break;
           } catch (retryErr) {
             lastError = retryErr;
+            // Auth retry failed — cascade to next model instead of dying
+            process.stderr.write(`[handle-turn] Auth retry failed: ${String(retryErr?.message).substring(0, 200)} — cascading to next model\n`);
+            emitStatus(`Falha na autenticacao com '${tryModelId}' — tentando o proximo modelo...`);
+            continue;
           }
         }
 
         // Rate limit / timeout: cascade to next model
         if (lastRunHadRateLimitError) {
+          continue;
+        }
+
+        // Auth error not yet handled (no refresh attempted): cascade
+        if (lastRunHadAuthError) {
+          process.stderr.write(`[handle-turn] Auth error not recovered — cascading to next model\n`);
+          emitStatus(`Erro de autenticacao com '${tryModelId}' — tentando o proximo modelo...`);
           continue;
         }
 
