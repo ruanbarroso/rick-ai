@@ -1596,7 +1596,6 @@ function appendToolLine(text, timeStr) {
   // and update it in-place (like OpenCode does) instead of adding a new line
   if (isToolCompleted(text)) {
     var completedName = extractToolName(text);
-    var info = formatToolCompletedSuffix(text);
     // Find the last running line for this tool name
     var lines = body.querySelectorAll('.terminal-line[data-tool-state="running"]');
     for (var li = lines.length - 1; li >= 0; li--) {
