@@ -863,11 +863,19 @@ function appendHistoryMessage(msg) {
 
   var timeStr = formatTimestamp(timestamp ? new Date(timestamp) : new Date());
 
-  // Tool use → terminal block (skip status lines like "Pensando ..." in history)
+  // Tool use → terminal block (skip transient/empty lines in history)
   if (messageType === 'tool_use') {
     if (isStatusLine(text)) return;
+    if (text && text.indexOf('`') === -1) return;
+    if (!text || !text.trim()) return;
     appendToolLine(text, timeStr);
     return;
+  }
+
+  // Skip empty/trivial agent messages
+  if (role !== 'user' && messageType !== 'error' && !audioUrl && (!imageUrls || imageUrls.length === 0)) {
+    var stripped = (text || '').replace(/[-–—\s]/g, '').trim();
+    if (!stripped) return;
   }
 
   var empty = document.getElementById('empty-state');

@@ -2103,15 +2103,25 @@ function appendHistoryMessage(msg) {
 
   var timeStr = formatTimestamp(timestamp ? new Date(timestamp) : new Date());
 
-  // Tool use → terminal block (skip status lines like "Pensando ..." in history)
+  // Tool use → terminal block (skip transient/empty lines in history)
   if (messageType === 'tool_use') {
-    if (isStatusLine(text)) return; // transient — don't render in history
+    if (isStatusLine(text)) return;
+    // Skip lines that are not real tool calls (no backticks = status/error noise)
+    if (text && text.indexOf('`') === -1) return;
+    // Skip empty or whitespace-only
+    if (!text || !text.trim()) return;
     appendToolLine(text, timeStr);
     return;
   }
 
   if (messageType === 'question') {
     if (appendQuestionMessage(text, timeStr)) return;
+  }
+
+  // Skip empty/trivial agent messages (e.g. empty waiting_user result "")
+  if (role !== 'user' && messageType !== 'error' && !audioUrl && (!imageUrls || imageUrls.length === 0)) {
+    var stripped = (text || '').replace(/[-–—\s]/g, '').trim();
+    if (!stripped) return;
   }
 
   var empty = document.getElementById('empty-state');
