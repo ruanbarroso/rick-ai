@@ -2,120 +2,119 @@
  * Shared tool-use rendering — OpenCode-inspired inline tool calls.
  * Used by both web-ui.html and session-viewer.html.
  *
- * Tool calls render as individual inline elements in the message flow,
- * NOT as a grouped terminal block. Each tool call is a compact line
- * with status icon, name, args, and optional output preview.
+ * Each tool call renders as a SINGLE line that morphs:
+ *   Running:   ⠋ [bash] $ echo hello        (blue, spinner)
+ *   Completed: $ [bash] $ echo hello  53ms   (muted, icon)
+ *   Error:     $ [bash] $ echo hello  erro   (red)
  *
- * Exports (global functions):
- *   - formatToolLine(text, timeStr) → HTML string for a single tool line
- *   - makeToolUseBlock()            → DOM element (collapsible group)
- *   - isStatusLine(text)            → boolean — detect "Pensando..." lines
+ * The "completed" event UPDATES the existing start line instead of
+ * creating a new line, matching OpenCode's behavior.
+ *
+ * Exports (global):
+ *   - isStatusLine(text)
+ *   - isToolCompleted(text), isToolError(text), isToolStart(text)
+ *   - extractToolName(text)
+ *   - formatToolLine(text, timeStr) → HTML
+ *   - formatToolCompletedSuffix(text) → { name, duration, preview }
+ *   - makeToolUseBlock() → DOM element
+ *   - _minimizeBlock(block), _trackToolCall(block, text)
  */
 
 /* eslint-disable no-unused-vars */
 
-/**
- * Detect if a tool line is a "Pensando..." / status indicator.
- */
 function isStatusLine(text) {
   if (!text) return false;
   var t = text.trim();
   return t === 'Pensando ...' || t === 'Pensando...' || /^Pensando\s*\.{2,}$/.test(t);
 }
 
-/**
- * Detect if line is a tool completion (has :ok or duration).
- */
 function isToolCompleted(text) {
   return /\[[\w_]+:ok\]/.test(text) || /\[[\w_]+:erro\]/.test(text);
 }
 
-/**
- * Detect if line is a tool error.
- */
 function isToolError(text) {
   return /\[[\w_]+:erro\]/.test(text);
 }
 
-/**
- * Detect if line is a tool start.
- */
 function isToolStart(text) {
   return /\[[\w_]+\]/.test(text) && !isToolCompleted(text);
 }
 
-/**
- * Extract tool name from text.
- */
 function extractToolName(text) {
   var m = text.match(/\[([a-z_]+?)(?::(?:ok|erro))?\]/i);
   return m ? m[1].replace(/^rick_/, '') : '';
 }
 
-/**
- * Map tool names to compact icons.
- */
 var TOOL_ICONS = {
-  'bash': '$',
-  'run_command': '$',
-  'read': '\u2192',
-  'write': '\u25CB',
-  'edit': '\u270E',
-  'glob': '\u2731',
-  'grep': '\u2731',
-  'task': '\u25A1',
-  'webfetch': '%',
-  'playwright': '\u25C7',
-  'todowrite': '\u2611',
-  'question': '?',
-  'rick_search': '\u26B2',
-  'rick_memory': '\u2605',
-  'rick_save_memory': '\u2605'
+  'bash': '$', 'run_command': '$',
+  'read': '\u2192', 'write': '\u2190', 'edit': '\u2190',
+  'glob': '\u2731', 'grep': '\u2731',
+  'task': '\u2502', 'webfetch': '%', 'playwright': '\u25C7',
+  'todowrite': '\u2611', 'question': '?',
+  'rick_search': '\u2731', 'rick_memory': '\u2605',
+  'rick_save_memory': '\u2605', 'rick_delete_memory': '\u2605'
 };
 
 function getToolIcon(name) {
-  if (!name) return '\u25B8';
+  if (!name) return '\u2699';
   var lower = name.toLowerCase();
   if (TOOL_ICONS[lower]) return TOOL_ICONS[lower];
   for (var key in TOOL_ICONS) {
     if (lower.indexOf(key) !== -1) return TOOL_ICONS[key];
   }
-  return '\u25B8';
+  return '\u2699';
 }
 
 /**
- * Format a tool line into HTML.
- *
- * Input format examples:
- *   Start:     `[bash]` `$ echo hello`
- *   Completed: `[bash:ok]` `53ms · output preview text`
- *   Error:     `[bash:erro]` `error message`
- *   Status:    Pensando ...
+ * Parse a completed line to extract duration and preview.
+ * Input: `[bash:ok]` `53ms · Hello world`
+ * Returns: { name: "bash", duration: "53ms", preview: "Hello world" }
+ */
+function formatToolCompletedSuffix(text) {
+  var name = extractToolName(text);
+  var duration = '';
+  var preview = '';
+  // Extract the arg segment (second backtick pair)
+  var m = text.match(/`\[[^\]]+\]`\s*`([^`]*)`/);
+  if (m) {
+    var parts = m[1].split('\u00B7'); // split on ·
+    if (!parts[0]) parts = m[1].split('·'); // try regular dot
+    duration = (parts[0] || '').trim();
+    preview = (parts.slice(1).join('·') || '').trim();
+  }
+  return { name: name, duration: duration, preview: preview };
+}
+
+/**
+ * Escape HTML entities.
+ */
+function _esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Format a tool START line into HTML.
+ * Shows as running state with spinner icon.
  */
 function formatToolLine(text, timeStr) {
   var completed = isToolCompleted(text);
   var error = isToolError(text);
-  var status = isStatusLine(text);
   var toolName = extractToolName(text);
-  var icon = status ? '\u2026' : getToolIcon(toolName);
+  var icon = getToolIcon(toolName);
 
-  // Status line (Pensando...) — rendered differently
-  if (status) {
-    return '<span class="tl-time">' + timeStr + '</span>' +
-           '<span class="tl-status-icon spinner">\u2026</span>' +
-           '<span class="tl-status-text">Pensando \u2026</span>';
+  // For completed lines, format as merged line (icon + name + args + duration)
+  if (completed) {
+    var info = formatToolCompletedSuffix(text);
+    var iconCls = error ? 'tl-icon err' : 'tl-icon ok';
+    var toolCls = error ? 'tl-tool err' : 'tl-tool done';
+    var durHtml = info.duration ? '<span class="tl-dur">' + _esc(info.duration) + '</span>' : '';
+    var prevHtml = info.preview ? '<span class="tl-preview">' + _esc(info.preview.length > 120 ? info.preview.slice(0, 117) + '...' : info.preview) + '</span>' : '';
+    return '<span class="tl-icon ' + (error ? 'err' : 'ok') + '">' + icon + '</span>' +
+           '<span class="' + toolCls + '">[' + _esc(info.name) + ']</span> ' +
+           durHtml + (prevHtml ? ' ' + prevHtml : '');
   }
 
-  var timeEl = '<span class="tl-time">' + timeStr + '</span>';
-
-  // Icon with status coloring
-  var iconCls = 'tl-icon';
-  if (error) iconCls += ' err';
-  else if (completed) iconCls += ' ok';
-  else iconCls += ' active';
-  var iconEl = '<span class="' + iconCls + '">' + icon + '</span>';
-
-  // Parse backtick segments
+  // Start line — show with spinner
   var segments = [];
   var regex = /`([^`]*)`/g;
   var match;
@@ -146,29 +145,16 @@ function formatToolLine(text, timeStr) {
   }
 
   var contentHtml = segments.map(function(s) {
-    var escaped = s.val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    if (s.type === 'tool') {
-      if (error) return '<span class="tl-tool err">' + escaped + '</span>';
-      if (completed) return '<span class="tl-tool done">' + escaped + '</span>';
-      return '<span class="tl-tool active">' + escaped + '</span>';
-    }
-    if (s.type === 'arg') {
-      if (completed) return '<span class="tl-arg done">' + escaped + '</span>';
-      return '<span class="tl-arg">' + escaped + '</span>';
-    }
+    var escaped = _esc(s.val);
+    if (s.type === 'tool') return '<span class="tl-tool active">' + escaped + '</span>';
+    if (s.type === 'arg') return '<span class="tl-arg">' + escaped + '</span>';
     return '<span class="tl-plain">' + escaped + '</span>';
   }).join(' ');
 
-  return timeEl + iconEl + contentHtml;
+  return '<span class="tl-icon active spinner">' + icon + '</span>' + contentHtml;
 }
 
-/**
- * Create a new collapsible tool block.
- * When minimized, shows a summary of tool calls count.
- * When expanded, shows individual tool lines.
- */
 function makeToolUseBlock() {
-  // Minimize all existing tool blocks
   var existing = document.querySelectorAll('.tool-use-block');
   for (var i = 0; i < existing.length; i++) {
     if (!existing[i].classList.contains('minimized')) {
@@ -206,9 +192,6 @@ function makeToolUseBlock() {
   return block;
 }
 
-/**
- * Minimize a block and update its summary text.
- */
 function _minimizeBlock(block) {
   block.classList.add('minimized');
   var count = parseInt(block.getAttribute('data-tool-count') || '0', 10);
@@ -223,9 +206,6 @@ function _minimizeBlock(block) {
   }
 }
 
-/**
- * Track tool calls in a block.
- */
 function _trackToolCall(block, text) {
   if (isStatusLine(text)) return;
   if (isToolStart(text)) {

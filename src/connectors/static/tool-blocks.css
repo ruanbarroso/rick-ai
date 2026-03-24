@@ -162,8 +162,12 @@
   color: var(--tool-icon, #3b82f6);
 }
 
+.tool-use-block .tl-icon.active.spinner {
+  animation: toolSpin 1s steps(3) infinite;
+}
+
 .tool-use-block .tl-icon.ok {
-  color: var(--success, #22c55e);
+  color: var(--tool-text, #94a3b8);
 }
 
 .tool-use-block .tl-icon.err {
@@ -189,6 +193,25 @@
 .tool-use-block .tl-tool.err {
   color: var(--danger, #ef4444);
   font-weight: 600;
+}
+
+/* Duration badge */
+.tool-use-block .tl-dur {
+  color: var(--text2, #64748b);
+  font-size: 0.7rem;
+  opacity: 0.6;
+  margin-left: 4px;
+}
+
+/* Output preview (truncated) */
+.tool-use-block .tl-preview {
+  color: var(--text2, #64748b);
+  font-size: 0.72rem;
+  opacity: 0.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 50%;
 }
 
 /* Legacy class compat */

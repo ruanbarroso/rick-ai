@@ -516,7 +516,7 @@ body {
 }
 /* Tool-use terminal block — loaded from /static/tool-blocks.css */
 </style>
-<link rel="stylesheet" href="/static/tool-blocks.css?v=2">
+<link rel="stylesheet" href="/static/tool-blocks.css?v=3">
 <link rel="stylesheet" href="/static/message-styles.css?v=2">
 </head>
 <body>
@@ -595,7 +595,7 @@ body {
   </div>
 </div>
 
-<script src="/static/tool-blocks.js?v=2"></script>
+<script src="/static/tool-blocks.js?v=3"></script>
 <script src="/static/render-text.js?v=2"></script>
 <script>
 // ==================== STATE ====================
@@ -702,9 +702,31 @@ function appendToolLine(text, timeStr) {
   _trackToolCall(block, text);
 
   var body = block.querySelector('.terminal-body');
+
+  // MERGE: if this is a completed/error line, update the matching start line in-place
+  if (isToolCompleted(text)) {
+    var completedName = extractToolName(text);
+    var lines = body.querySelectorAll('.terminal-line[data-tool-state="running"]');
+    for (var li = lines.length - 1; li >= 0; li--) {
+      if (lines[li].getAttribute('data-tool-name') === completedName) {
+        lines[li].innerHTML = formatToolLine(text, timeStr);
+        lines[li].setAttribute('data-tool-state', isToolError(text) ? 'error' : 'done');
+        body.scrollTop = body.scrollHeight;
+        scrollToBottom();
+        return;
+      }
+    }
+  }
+
   var line = document.createElement('div');
   line.className = 'terminal-line';
   line.innerHTML = formatToolLine(text, timeStr);
+  if (isToolStart(text)) {
+    line.setAttribute('data-tool-state', 'running');
+    line.setAttribute('data-tool-name', extractToolName(text));
+  } else if (isToolCompleted(text)) {
+    line.setAttribute('data-tool-state', isToolError(text) ? 'error' : 'done');
+  }
   body.appendChild(line);
   body.scrollTop = body.scrollHeight;
   scrollToBottom();
