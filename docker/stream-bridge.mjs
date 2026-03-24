@@ -70,6 +70,16 @@ async function pollEvents() {
       );
       if (res.ok) {
         const { events, lastEventId: serverLastId } = await res.json();
+
+        // Detect event store reset: if server's lastEventId is less than our
+        // cursor, the SQLite DB was nuked and recreated (Level 2 recovery).
+        // Reset to 0 to re-fetch all events from the new DB.
+        if (typeof serverLastId === "number" && serverLastId < lastEventId && (!events || events.length === 0)) {
+          process.stderr.write(`[bridge] Event store reset detected (server=${serverLastId} < cursor=${lastEventId}). Resetting to 0.\n`);
+          lastEventId = 0;
+          continue;
+        }
+
         if (Array.isArray(events)) {
           for (const evt of events) {
             if (evt.data) {

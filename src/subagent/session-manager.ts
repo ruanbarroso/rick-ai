@@ -625,8 +625,15 @@ export class SessionManager {
             apiUrl,
           }).catch(() => {});
 
-          // Reconnect the live stream bridge (picking up from last synced event)
-          const afterEventId = (session as any)._lastSyncedEventId ?? 0;
+          // Reconnect the live stream bridge (picking up from last synced event).
+          // Guard against stale _lastSyncedEventId: if the agent's event store was
+          // reset (Level 2 DB recovery), agentLastEventId < _lastSyncedEventId.
+          // In that case, start from 0 to re-fetch all events from the new DB.
+          let afterEventId = (session as any)._lastSyncedEventId ?? 0;
+          if (agentLastEventId > 0 && afterEventId > agentLastEventId) {
+            logger.warn({ sessionId: id, afterEventId, agentLastEventId }, "Session resync: _lastSyncedEventId exceeds agent lastEventId — event store was likely reset, starting from 0");
+            afterEventId = 0;
+          }
           this.startAgentProcess(session, afterEventId).catch((err) => {
             logger.error({ err, sessionId: id }, "Session resync: failed to reconnect stream bridge");
           });
