@@ -242,44 +242,15 @@ body {
 
 /* ---- Improvement #9: Pensando... as separate status indicator ---- */
 .tool-status-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 16px;
+  padding: 6px 16px;
   font-size: 13px;
   color: var(--text2);
-  opacity: 0.7;
-}
-
-.tool-status-line .tsl-dots {
-  display: inline-flex;
-  gap: 3px;
-}
-
-.tool-status-line .tsl-dots::before,
-.tool-status-line .tsl-dots::after {
-  content: '';
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: tslPulse 1.4s infinite;
-}
-
-.tool-status-line .tsl-dots::after {
-  animation-delay: 0.3s;
-}
-
-.tool-status-line .tsl-text {
+  opacity: 0.5;
   font-style: italic;
-  font-family: 'SF Mono', Consolas, monospace;
-  font-size: 0.78rem;
 }
 
-@keyframes tslPulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
-}
+/* Hide typing indicator when status line is visible (avoid double indicator) */
+.tool-status-line ~ .typing-indicator { display: none !important; }
 
 .message.question {
   max-width: min(92%, 760px);
@@ -1623,7 +1594,7 @@ function appendToolLine(text, timeStr) {
     }
     var statusDiv = document.createElement('div');
     statusDiv.className = 'tool-status-line';
-    statusDiv.innerHTML = '<span class="tsl-dots"></span> <span class="tsl-text">Pensando \u2026</span>';
+    statusDiv.textContent = 'Pensando \u2026';
     container.insertBefore(statusDiv, typing);
     scrollToBottom();
     return;
