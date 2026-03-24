@@ -108,40 +108,31 @@ function compactToolError(name: string, message: string): string {
   return raw.replace(/\s+/g, " ").trim() || "erro";
 }
 
-/** Extract a human-readable argument string from tool input. */
+/**
+ * Extract a human-readable argument string from tool input.
+ *
+ * Known tools (bash, read, write, edit, glob, grep, todowrite, task) get
+ * specialized formatting. Everything else (including MCP tools like
+ * Playwright) uses the generic OpenCode approach: serialize all primitive
+ * (string/number/boolean) fields as `[key=value, key2=value2]`.
+ */
 function extractArg(inp: Record<string, unknown>): string {
+  // Bash / run_command — show shell command
   const shell = formatShellCommand(inp);
   if (shell) return `$ ${shell}`;
 
-  // Playwright click/hover — show element description
-  if (typeof inp.element === "string" && inp.element.trim()) return inp.element.trim();
-  // Playwright type — show text being typed
-  if (typeof inp.text === "string" && typeof inp.ref === "string") {
-    const t = inp.text as string;
-    return t.length > 60 ? t.slice(0, 57) + "..." : t;
-  }
-  // Playwright fill_form — show field names
-  if (Array.isArray(inp.fields)) {
-    const names = (inp.fields as Array<{name?: string}>).map(f => f.name).filter(Boolean);
-    return names.length > 0 ? names.join(", ") : `${inp.fields.length} fields`;
-  }
-  // Playwright wait_for — show duration
-  if (typeof inp.time === "number") return `${inp.time}s`;
-  // Playwright key press
-  if (typeof inp.key === "string") return inp.key;
-
-  // File paths
+  // File paths (read, write, edit)
   if (typeof inp.filePath === "string" || typeof inp.file_path === "string") {
     return relativePath(String(inp.filePath ?? inp.file_path));
   }
   if (typeof inp.notebook_path === "string") return relativePath(String(inp.notebook_path));
-  // Search patterns
+  // Search patterns (glob, grep)
   if (typeof inp.pattern === "string") {
     const location = (inp.path ?? inp.glob ?? inp.include) as string | undefined;
     const locRel = location ? relativePath(location) : "";
     return locRel ? `"${inp.pattern}" in ${locRel}` : `"${inp.pattern}"`;
   }
-  // URLs
+  // URLs (webfetch)
   if (typeof inp.url === "string") return String(inp.url);
   // TodoWrite
   if (Array.isArray(inp.todos)) return `${inp.todos.length} ${inp.todos.length === 1 ? "item" : "itens"}`;
@@ -151,10 +142,18 @@ function extractArg(inp: Record<string, unknown>): string {
   if (typeof inp.prompt === "string") {
     return inp.prompt.length > 80 ? inp.prompt.slice(0, 77) + "..." : String(inp.prompt);
   }
-  // Fallback
-  const first = firstStringValue(inp);
-  if (first && first.length <= 120) return first;
-  if (first) return first.slice(0, 117) + "...";
+
+  // Generic fallback (OpenCode pattern): serialize primitive fields as [key=value, ...]
+  // This handles all MCP tools (Playwright, etc.) without per-tool logic.
+  const primitives: string[] = [];
+  for (const [key, value] of Object.entries(inp)) {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      let v = String(value);
+      if (v.length > 80) v = v.slice(0, 77) + "...";
+      primitives.push(`${key}=${v}`);
+    }
+  }
+  if (primitives.length > 0) return `[${primitives.join(", ")}]`;
   return "";
 }
 
