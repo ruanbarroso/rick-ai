@@ -191,7 +191,8 @@ export type SessionMessageCallback = (
   role: string,
   text: string,
   messageType?: string,
-  mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }
+  mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> },
+  modelId?: string | null
 ) => void;
 
 /** Callback fired when a sub-agent session completes — used for post-session learning. */
@@ -2268,7 +2269,10 @@ export class SessionManager {
     // acompanha o progresso na página pública da sessão (/s/:id).
     // Broadcast apenas para subscribers da sessão na web UI (página /s/:id)
     if (this.onSessionMessage) {
-      this.onSessionMessage(session.id, "agent", text, messageType);
+      // Include the current model ID so the viewer can show the correct model
+      // in the message footer (historically accurate, not just the current selection)
+      const modelId = session.preferredModel || null;
+      this.onSessionMessage(session.id, "agent", text, messageType, undefined, modelId);
     }
     this.saveSessionMessage(session.id, "agent", text, messageType).catch(() => {});
   }

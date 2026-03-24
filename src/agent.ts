@@ -2075,8 +2075,8 @@ Se nao houver nada util para memorizar, retorne VAZIO.`;
    */
   createWebBridge(webConnector: WebConnector): WebAgentBridge {
     // Wire session message callback so sub-agent messages go to public session pages
-    this.sessionManager.setSessionMessageCallback((sessionId, role, text, messageType, mediaInfo) => {
-      webConnector.broadcastToSessionSubscribers(sessionId, role, text, messageType, mediaInfo);
+    this.sessionManager.setSessionMessageCallback((sessionId, role, text, messageType, mediaInfo, modelId) => {
+      webConnector.broadcastToSessionSubscribers(sessionId, role, text, messageType, mediaInfo, modelId);
     });
 
     // Wire post-session learning callback

@@ -1837,7 +1837,8 @@ export class WebConnector implements Connector {
     role: string,
     text: string,
     messageType?: string,
-    mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }
+    mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> },
+    modelId?: string | null
   ): void {
     const subs = this.sessionSubscribers.get(sessionId);
     if (!subs || subs.size === 0) return;
@@ -1846,6 +1847,7 @@ export class WebConnector implements Connector {
     if (mediaInfo?.audioUrl) msg.audioUrl = mediaInfo.audioUrl;
     if (mediaInfo?.imageUrls && mediaInfo.imageUrls.length > 0) msg.imageUrls = mediaInfo.imageUrls;
     if (mediaInfo?.fileInfos && mediaInfo.fileInfos.length > 0) msg.fileInfos = mediaInfo.fileInfos;
+    if (modelId) msg.modelId = modelId;
     const payload = JSON.stringify(msg);
     for (const ws of subs) {
       if (ws.readyState === WebSocket.OPEN) {

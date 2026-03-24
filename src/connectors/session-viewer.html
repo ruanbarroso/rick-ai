@@ -1998,7 +1998,7 @@ function appendQuestionMessage(text, timeStr) {
   return true;
 }
 
-function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) {
+function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos, modelId) {
   // System state messages (e.g. {"state":"done"}) — don't render as bubbles
   if (role === 'system' || messageType === 'system') {
     try {
@@ -2047,11 +2047,12 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos) 
   div.className = 'message ' + cssClass;
   div.innerHTML = renderMessageContent(text, audioUrl, imageUrls, fileInfos);
 
-  // Add model footer for agent messages
-  if (cssClass === 'agent' && selectedModelId) {
+  // Add model footer for agent messages (use specific modelId if provided, fallback to current)
+  var effectiveModel = modelId || selectedModelId;
+  if (cssClass === 'agent' && effectiveModel) {
     var footer = document.createElement('div');
     footer.className = 'message-footer';
-    footer.textContent = getModelLabel(selectedModelId);
+    footer.textContent = getModelLabel(effectiveModel);
     div.appendChild(footer);
   }
 
@@ -2354,7 +2355,7 @@ function connect() {
           break;
         }
         // Typing/state indicator is managed by 'session_state' events from backend.
-        appendMessage(msg.text, msg.role, msg.messageType, msg.audioUrl || null, msg.imageUrls || null, msg.fileInfos || null);
+        appendMessage(msg.text, msg.role, msg.messageType, msg.audioUrl || null, msg.imageUrls || null, msg.fileInfos || null, msg.modelId || null);
         // If a user message arrived, lock any pending question cards
         if (msg.role === 'user') {
           var qContainer = document.getElementById('messages');
