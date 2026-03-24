@@ -192,7 +192,7 @@ body {
   padding: 6px 16px; font-size: 13px; color: var(--text2);
   opacity: 0.5; font-style: italic;
 }
-.tool-status-line ~ .typing-indicator { display: none !important; }
+
 
 .message .time {
   font-size: 11px;
@@ -411,33 +411,8 @@ body {
 
 #file-input { display: none; }
 
-/* Typing indicator */
-.typing-indicator {
-  display: none;
-  align-self: flex-start;
-  padding: 6px 16px;
-  color: var(--text2);
-  font-size: 13px;
-}
-
-.typing-indicator.visible { display: flex; align-items: center; gap: 8px; }
-
-.typing-indicator span {
-  width: 5px;
-  height: 5px;
-  background: var(--accent);
-  border-radius: 50%;
-  animation: typingFade 1.4s infinite;
-  opacity: 0.4;
-}
-
-.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes typingFade {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
-}
+/* Typing indicator — hidden, kept as DOM anchor for insertBefore */
+.typing-indicator { display: none; }
 
 /* Connection banner */
 .connection-bar {
