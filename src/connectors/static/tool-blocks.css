@@ -1,11 +1,9 @@
 /**
- * Shared tool-use block styles — OpenCode-inspired design.
+ * Shared tool-use styles — OpenCode-inspired inline tool calls.
  * Used by both web-ui.html and session-viewer.html.
- *
- * Two display modes:
- *   .tool-use-block           — grouped block with left border accent
- *   .tool-use-block .terminal-line — individual tool call line (inline style)
  */
+
+/* ==================== TOOL BLOCK CONTAINER ==================== */
 
 .tool-use-block {
   flex-shrink: 0;
@@ -16,20 +14,23 @@
   border-radius: 0;
   overflow: hidden;
   font-family: 'SF Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
-  font-size: 0.8rem;
-  margin: 2px 0;
+  font-size: 0.78rem;
+  margin: 4px 0;
   padding-left: 0;
 }
+
+/* ==================== HEADER ==================== */
 
 .tool-use-block .terminal-header {
   background: transparent;
   border-bottom: none;
-  padding: 4px 12px;
+  padding: 3px 12px;
   display: flex;
   align-items: center;
   gap: 8px;
   user-select: none;
   cursor: pointer;
+  min-height: 24px;
 }
 
 .tool-use-block .terminal-header:hover {
@@ -37,115 +38,23 @@
 }
 
 .tool-use-block .terminal-title {
-  flex: 1;
-  text-align: left;
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   color: var(--text2, #64748b);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 500;
 }
 
-.tool-use-block .terminal-body {
-  padding: 2px 12px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  max-height: 320px;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.tool-use-block .terminal-body::-webkit-scrollbar { width: 3px; }
-.tool-use-block .terminal-body::-webkit-scrollbar-track { background: transparent; }
-.tool-use-block .terminal-body::-webkit-scrollbar-thumb { background: var(--border, #1e293b); border-radius: 2px; }
-
-.tool-use-block .terminal-line {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-all;
-  padding: 1px 0;
-  border-radius: 3px;
-  transition: background 0.1s;
-}
-
-.tool-use-block .terminal-line:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-/* Timestamp */
-.tool-use-block .tl-time {
-  color: var(--text2, #64748b);
+/* Summary (visible when minimized) */
+.tool-use-block .terminal-summary {
   font-size: 0.68rem;
-  flex-shrink: 0;
-  min-width: 50px;
-  user-select: none;
-  opacity: 0.7;
-}
-
-/* Status icon / arrow */
-.tool-use-block .tl-arrow {
-  color: var(--tool-icon, #3b82f6);
-  flex-shrink: 0;
-  user-select: none;
-  font-size: 0.75rem;
-}
-
-/* Tool name */
-.tool-use-block .tl-tool {
-  color: var(--tool-icon, #3b82f6);
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-/* Completed tool name — muted */
-.tool-use-block .tl-tool-done {
-  color: var(--tool-text, #94a3b8);
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-/* Tool arguments */
-.tool-use-block .tl-arg {
-  color: var(--tool-arg, #22d3ee);
-  opacity: 0.8;
-  word-break: break-all;
-  min-width: 0;
-}
-
-/* Plain text segments */
-.tool-use-block .tl-plain {
-  color: var(--tool-text, #94a3b8);
-  word-break: break-all;
-}
-
-/* Status badge (ok, error, duration) */
-.tool-use-block .tl-status {
-  font-size: 0.72rem;
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-.tool-use-block .tl-status.ok {
-  color: var(--success, #22c55e);
-}
-
-.tool-use-block .tl-status.err {
-  color: var(--danger, #ef4444);
-}
-
-.tool-use-block .tl-status.dur {
   color: var(--text2, #64748b);
-  opacity: 0.6;
+  opacity: 0;
+  transition: opacity 0.15s;
 }
 
-/* Footer (unused but kept for compat) */
-.tool-use-block .terminal-footer {
-  display: none;
+.tool-use-block.minimized .terminal-summary {
+  opacity: 0.8;
 }
 
 /* Toggle chevron */
@@ -155,7 +64,163 @@
   flex-shrink: 0;
   transition: transform 0.2s ease;
   line-height: 1;
+  margin-left: auto;
 }
+
+/* ==================== BODY ==================== */
+
+.tool-use-block .terminal-body {
+  padding: 0 12px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  max-height: 400px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.tool-use-block .terminal-body::-webkit-scrollbar { width: 3px; }
+.tool-use-block .terminal-body::-webkit-scrollbar-track { background: transparent; }
+.tool-use-block .terminal-body::-webkit-scrollbar-thumb { background: var(--border, #1e293b); border-radius: 2px; }
+
+/* ==================== TOOL LINE (individual) ==================== */
+
+.tool-use-block .terminal-line {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 1px 0;
+  min-height: 22px;
+}
+
+/* ==================== STATUS LINE (Pensando...) ==================== */
+
+.tool-use-block .terminal-line.status-line {
+  opacity: 0.6;
+}
+
+.tool-use-block .tl-status-icon {
+  color: var(--text2, #64748b);
+  flex-shrink: 0;
+  font-size: 0.8rem;
+}
+
+.tool-use-block .tl-status-icon.spinner {
+  animation: toolSpin 1.2s steps(3) infinite;
+}
+
+.tool-use-block .tl-status-text {
+  color: var(--text2, #64748b);
+  font-style: italic;
+}
+
+@keyframes toolSpin {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+
+/* ==================== TIMESTAMP ==================== */
+
+.tool-use-block .tl-time {
+  color: var(--text2, #64748b);
+  font-size: 0.66rem;
+  flex-shrink: 0;
+  min-width: 52px;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.tool-use-block .terminal-line:hover .tl-time {
+  opacity: 0.6;
+}
+
+/* ==================== TOOL ICON ==================== */
+
+.tool-use-block .tl-icon {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  width: 14px;
+  text-align: center;
+  user-select: none;
+}
+
+.tool-use-block .tl-icon.active {
+  color: var(--tool-icon, #3b82f6);
+}
+
+.tool-use-block .tl-icon.ok {
+  color: var(--success, #22c55e);
+}
+
+.tool-use-block .tl-icon.err {
+  color: var(--danger, #ef4444);
+}
+
+/* ==================== TOOL NAME ==================== */
+
+.tool-use-block .tl-tool {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.tool-use-block .tl-tool.active {
+  color: var(--tool-icon, #3b82f6);
+}
+
+.tool-use-block .tl-tool.done {
+  color: var(--tool-text, #94a3b8);
+  font-weight: 500;
+}
+
+.tool-use-block .tl-tool.err {
+  color: var(--danger, #ef4444);
+  font-weight: 600;
+}
+
+/* Legacy class compat */
+.tool-use-block .tl-tool-done {
+  color: var(--tool-text, #94a3b8);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+/* ==================== ARGUMENTS ==================== */
+
+.tool-use-block .tl-arg {
+  color: var(--tool-arg, #22d3ee);
+  opacity: 0.85;
+  word-break: break-all;
+  min-width: 0;
+}
+
+.tool-use-block .tl-arg.done {
+  color: var(--tool-text, #94a3b8);
+  opacity: 0.6;
+}
+
+/* ==================== PLAIN TEXT ==================== */
+
+.tool-use-block .tl-plain {
+  color: var(--tool-text, #94a3b8);
+  word-break: break-all;
+}
+
+/* ==================== LEGACY (compat with old arrow) ==================== */
+
+.tool-use-block .tl-arrow {
+  color: var(--tool-icon, #3b82f6);
+  flex-shrink: 0;
+  user-select: none;
+  font-size: 0.75rem;
+}
+
+/* ==================== MINIMIZED STATE ==================== */
 
 .tool-use-block.minimized .terminal-toggle {
   transform: rotate(-90deg);
@@ -169,12 +234,18 @@
   display: none;
 }
 
-/* When minimized, show a subtle summary line */
 .tool-use-block.minimized {
   border-left-color: transparent;
-  opacity: 0.7;
+  opacity: 0.65;
+  margin: 1px 0;
 }
 
 .tool-use-block.minimized:hover {
-  opacity: 0.9;
+  opacity: 0.85;
+}
+
+/* ==================== FOOTER (unused, compat) ==================== */
+
+.tool-use-block .terminal-footer {
+  display: none;
 }
