@@ -509,15 +509,14 @@ export class SessionManager {
         }
 
         // Query the agent's actual state via HTTP.
-        // Retry up to 3 times with 2s delay to avoid false negatives when the
-        // agent is busy processing a turn (event loop congestion, slow curl).
-        // A single failed health check previously caused recovery to fall into the
-        // legacy fallback path, spawning a second agent.mjs that exits with code 1
-        // (EADDRINUSE on port 3000) — incorrectly reported as a crash.
+        // Retry up to 10 times with 2s delay (20s total) to handle cases where the
+        // agent is still starting up (OpenCode install, MCP server init) or busy
+        // processing a turn (event loop congestion). Previous value of 3 retries (6s)
+        // was too low for freshly-created containers, causing false legacy detection.
         let agentState = "waiting_user";
         let agentLastEventId = 0;
         let agentHealthReachable = false;
-        const healthRetries = 3;
+        const healthRetries = 10;
         for (let attempt = 1; attempt <= healthRetries; attempt++) {
           try {
             const raw = await this.querySubagentHttp(containerName, "/health");
@@ -534,6 +533,22 @@ export class SessionManager {
             } else {
               logger.warn({ err, sessionId: id, attempts: healthRetries }, "Session resync: agent HTTP not reachable after retries, using DB state");
             }
+          }
+        }
+
+        // If health check failed, detect architecture by checking if stream-bridge.mjs
+        // exists in the container. This avoids falsely assuming legacy architecture when
+        // the agent's event loop is just congested (busy processing a turn) but the
+        // container actually has the new HTTP+bridge architecture.
+        if (!agentHealthReachable) {
+          try {
+            await execFileAsync("docker", ["exec", containerName, "test", "-f", "/app/stream-bridge.mjs"]);
+            // File exists — this IS new architecture, the health endpoint is just not responding yet
+            agentHealthReachable = true;
+            logger.info({ sessionId: id }, "Session resync: stream-bridge.mjs exists — treating as new architecture despite health check failure");
+          } catch {
+            // File doesn't exist — genuinely legacy container
+            logger.info({ sessionId: id }, "Session resync: no stream-bridge.mjs found — confirmed legacy container");
           }
         }
 
@@ -602,11 +617,13 @@ export class SessionManager {
           // NEW ARCHITECTURE: send token via HTTP, reconnect stream bridge
           const token = createAgentToken(id, userId, 86400, numericUserId ?? undefined);
           const apiUrl = this.getCurrentApiUrl();
-          await this.sendHttpCommand(containerName, {
+          // Non-blocking token update — may fail if agent HTTP is not ready yet,
+          // but the agent will work with its existing token and get refreshed later.
+          this.sendHttpCommand(containerName, {
             type: "update_token",
             token,
             apiUrl,
-          });
+          }).catch(() => {});
 
           // Reconnect the live stream bridge (picking up from last synced event)
           const afterEventId = (session as any)._lastSyncedEventId ?? 0;
