@@ -279,7 +279,9 @@ export function startHealthServer(port: number): void {
 
     // Shared static assets (CSS/JS used by both web-ui.html and session-viewer.html)
     if (req.url?.startsWith("/static/") && req.method === "GET") {
-      const filename = req.url.slice("/static/".length);
+      const rawFilename = req.url.slice("/static/".length);
+      // Strip query string (used for cache busting, e.g. ?v=2)
+      const filename = rawFilename.split("?")[0];
       // Whitelist: only serve known files, no path traversal
       if (/^[\w-]+\.(css|js)$/.test(filename)) {
         const ext = filename.endsWith(".css") ? "css" : "js";

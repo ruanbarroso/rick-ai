@@ -521,8 +521,8 @@ body {
 }
 /* Tool-use terminal block — loaded from /static/tool-blocks.css */
 </style>
-<link rel="stylesheet" href="/static/tool-blocks.css">
-<link rel="stylesheet" href="/static/message-styles.css">
+<link rel="stylesheet" href="/static/tool-blocks.css?v=2">
+<link rel="stylesheet" href="/static/message-styles.css?v=2">
 </head>
 <body>
 
@@ -600,8 +600,8 @@ body {
   </div>
 </div>
 
-<script src="/static/tool-blocks.js"></script>
-<script src="/static/render-text.js"></script>
+<script src="/static/tool-blocks.js?v=2"></script>
+<script src="/static/render-text.js?v=2"></script>
 <script>
 // ==================== STATE ====================
 var token = location.pathname.replace(/^\/m\//, '');
@@ -663,7 +663,11 @@ function scrollToBottom(force) {
 // escapeHtml(), renderText(), renderMessageContent(), getFileIcon(), getFileTypeLabel(),
 // openImageFullscreen(), closeImageFullscreen() are loaded from /static/render-text.js
 
-// formatToolLine() and makeToolUseBlock() are loaded from /static/tool-blocks.js
+// formatToolLine(), makeToolUseBlock(), isStatusLine(), _trackToolCall()
+// are loaded from /static/tool-blocks.js
+// Fallbacks in case the cached JS is stale:
+if (typeof isStatusLine === 'undefined') { window.isStatusLine = function() { return false; }; }
+if (typeof _trackToolCall === 'undefined') { window._trackToolCall = function() {}; }
 
 function appendToolLine(text, timeStr) {
   var empty = document.getElementById('empty-state');
