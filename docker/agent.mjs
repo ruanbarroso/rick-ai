@@ -363,7 +363,62 @@ async function syncOpenCodeAuth(forceRefresh = false) {
   const dataDir = join(homedir(), ".local", "share", "opencode");
   await mkdir(dataDir, { recursive: true });
   await writeFile(join(dataDir, "auth.json"), JSON.stringify(auth, null, 2), { mode: 0o600 });
+
+  // Track the earliest token expiration for proactive refresh
+  let earliestExpiry = Infinity;
+  if (auth.anthropic?.type === "oauth" && auth.anthropic.expires) {
+    earliestExpiry = Math.min(earliestExpiry, auth.anthropic.expires);
+  }
+  if (auth.openai?.type === "oauth" && auth.openai.expires) {
+    earliestExpiry = Math.min(earliestExpiry, auth.openai.expires);
+  }
+  _nextTokenExpiry = earliestExpiry === Infinity ? 0 : earliestExpiry;
+
   return available;
+}
+
+/** Earliest token expiration timestamp (ms). 0 = unknown. */
+let _nextTokenExpiry = 0;
+/** Active proactive refresh timer. */
+let _proactiveRefreshTimer = null;
+/** How long before expiry to trigger proactive refresh (5 minutes). */
+const PROACTIVE_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+
+/**
+ * Start a proactive token refresh timer. Called after syncOpenCodeAuth.
+ * If a token will expire during the current turn, schedule a background
+ * refresh so the auth.json stays valid without interrupting the OpenCode process.
+ */
+function startProactiveRefreshTimer() {
+  if (_proactiveRefreshTimer) {
+    clearTimeout(_proactiveRefreshTimer);
+    _proactiveRefreshTimer = null;
+  }
+  if (!_nextTokenExpiry) return;
+
+  const msUntilRefresh = _nextTokenExpiry - Date.now() - PROACTIVE_REFRESH_BUFFER_MS;
+  if (msUntilRefresh <= 0) {
+    // Token already near expiry — refresh immediately in background
+    process.stderr.write(`[auth] Token near expiry — proactive refresh now\n`);
+    syncOpenCodeAuth(true).catch(() => {});
+    return;
+  }
+
+  if (msUntilRefresh > 60 * 60 * 1000) return; // >1h away, don't bother
+
+  process.stderr.write(`[auth] Scheduling proactive token refresh in ${Math.round(msUntilRefresh / 1000)}s\n`);
+  _proactiveRefreshTimer = setTimeout(async () => {
+    _proactiveRefreshTimer = null;
+    try {
+      process.stderr.write(`[auth] Proactive token refresh starting\n`);
+      const refreshed = await syncOpenCodeAuth(true);
+      process.stderr.write(`[auth] Proactive token refresh done, providers: ${[...refreshed].join(",")}\n`);
+      // Schedule next refresh if needed
+      startProactiveRefreshTimer();
+    } catch (err) {
+      process.stderr.write(`[auth] Proactive token refresh failed: ${err?.message}\n`);
+    }
+  }, msUntilRefresh);
 }
 
 /**
@@ -1103,6 +1158,7 @@ async function handleTurnInner(payload) {
       new Promise((_, reject) => setTimeout(() => reject(new Error("syncOpenCodeAuth timeout (30s)")), 30_000)),
     ]);
     process.stderr.write(`[handle-turn] Step 2: syncOpenCodeAuth done, providers: ${[...availableProviders].join(",")}\n`);
+    startProactiveRefreshTimer();
     lastRunHadAuthError = false;
 
     // Resolve model: if requested provider's auth is missing, fall back to an available one
@@ -1342,6 +1398,11 @@ async function handleTurnInner(payload) {
     emitError(errorMsg);
     emitWaitingUser("");
   } finally {
+    // Stop proactive refresh timer — no longer needed between turns
+    if (_proactiveRefreshTimer) {
+      clearTimeout(_proactiveRefreshTimer);
+      _proactiveRefreshTimer = null;
+    }
     // If this turn exits without emitting waiting_user (e.g. superseded at Step 2d),
     // and no subsequent turn is queued (processingGeneration is still ours),
     // emit waiting_user to prevent the session from being stuck in "running" forever.
