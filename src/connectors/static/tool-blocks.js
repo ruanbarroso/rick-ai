@@ -136,7 +136,7 @@ function formatToolLine(text, timeStr) {
   var iconCls = 'tl-icon';
   if (error) iconCls += ' err';
   else if (completed) iconCls += ' ok';
-  else iconCls += ' active spinner';
+  else iconCls += ' active';
 
   var toolCls = 'tl-tool';
   if (error) toolCls += ' err';

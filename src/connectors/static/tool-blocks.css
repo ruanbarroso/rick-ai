@@ -126,11 +126,7 @@
   font-style: italic;
 }
 
-@keyframes toolSpin {
-  0% { opacity: 0.4; }
-  50% { opacity: 1; }
-  100% { opacity: 0.4; }
-}
+
 
 /* ==================== TIMESTAMP ==================== */
 
@@ -160,10 +156,6 @@
 
 .tool-use-block .tl-icon.active {
   color: var(--tool-icon, #3b82f6);
-}
-
-.tool-use-block .tl-icon.active.spinner {
-  animation: toolSpin 1s steps(3) infinite;
 }
 
 .tool-use-block .tl-icon.ok {

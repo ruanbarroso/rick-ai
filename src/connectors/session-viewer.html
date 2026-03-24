@@ -1153,7 +1153,7 @@ body {
 
 /* Tool-use terminal block — loaded from /static/tool-blocks.css */
 </style>
-<link rel="stylesheet" href="/static/tool-blocks.css?v=3">
+<link rel="stylesheet" href="/static/tool-blocks.css?v=4">
 <link rel="stylesheet" href="/static/message-styles.css?v=2">
 </head>
 <body>
@@ -1302,7 +1302,7 @@ body {
   </div>
 </div>
 
-<script src="/static/tool-blocks.js?v=5"></script>
+<script src="/static/tool-blocks.js?v=6"></script>
 <script src="/static/render-text.js?v=2"></script>
 <script>
 // ==================== VARIANT NAMES ====================
@@ -1563,6 +1563,10 @@ if (typeof isStatusLine === 'undefined') { window.isStatusLine = function() { re
 if (typeof _trackToolCall === 'undefined') { window._trackToolCall = function() {}; }
 
 function appendToolLine(text, timeStr) {
+  // Skip empty or non-tool content
+  if (!text || !text.trim()) return;
+  if (text.indexOf('`') === -1) return; // No backticks = not a real tool line
+
   var empty = document.getElementById('empty-state');
   if (empty) empty.classList.add('hidden');
   var container = document.getElementById('messages');
