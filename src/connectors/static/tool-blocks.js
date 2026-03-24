@@ -1,23 +1,14 @@
 /**
- * Shared tool-use rendering — OpenCode-inspired inline tool calls.
- * Used by both web-ui.html and session-viewer.html.
+ * Shared tool-use rendering — OpenCode-inspired.
  *
- * Each tool call renders as a SINGLE line that morphs:
- *   Running:   ⠋ [bash] $ echo hello        (blue, spinner)
- *   Completed: $ [bash] $ echo hello  53ms   (muted, icon)
- *   Error:     $ [bash] $ echo hello  erro   (red)
+ * New format from backend:
+ *   Start:     `Read` `src/file.ts`
+ *   Completed: `Read:ok` `src/file.ts` `23ms`
+ *   Error:     `Read:erro` `error message`
  *
- * The "completed" event UPDATES the existing start line instead of
- * creating a new line, matching OpenCode's behavior.
- *
- * Exports (global):
- *   - isStatusLine(text)
- *   - isToolCompleted(text), isToolError(text), isToolStart(text)
- *   - extractToolName(text)
- *   - formatToolLine(text, timeStr) → HTML
- *   - formatToolCompletedSuffix(text) → { name, duration, preview }
- *   - makeToolUseBlock() → DOM element
- *   - _minimizeBlock(block), _trackToolCall(block, text)
+ * Legacy format (still supported):
+ *   Start:     `[read]` `path`
+ *   Completed: `[read:ok]` `23ms · output`
  */
 
 /* eslint-disable no-unused-vars */
@@ -29,129 +20,145 @@ function isStatusLine(text) {
 }
 
 function isToolCompleted(text) {
-  return /\[[\w_]+:ok\]/.test(text) || /\[[\w_]+:erro\]/.test(text);
+  return /`:ok`|:ok\]|`:erro`|:erro\]/i.test(text);
 }
 
 function isToolError(text) {
-  return /\[[\w_]+:erro\]/.test(text);
+  return /`:erro`|:erro\]/i.test(text);
 }
 
 function isToolStart(text) {
-  return /\[[\w_]+\]/.test(text) && !isToolCompleted(text);
+  if (isToolCompleted(text)) return false;
+  // New format: `ToolName` `arg`  OR  Legacy: `[tool]` `arg`
+  return /^[\s\n]*`[A-Z][\w]*`\s/m.test(text) || /^[\s\n]*`\[[\w_]+\]`\s/m.test(text);
 }
 
 function extractToolName(text) {
-  var m = text.match(/\[([a-z_]+?)(?::(?:ok|erro))?\]/i);
-  return m ? m[1].replace(/^rick_/, '') : '';
+  // New format: `Read:ok` or `Read`
+  var mNew = text.match(/`([A-Z][\w]*)(?::(?:ok|erro))?`/);
+  if (mNew) return mNew[1];
+  // Legacy: [read:ok] or [read]
+  var mLeg = text.match(/\[([a-z_]+?)(?::(?:ok|erro))?\]/i);
+  if (mLeg) return mLeg[1].replace(/^rick_/, '');
+  return '';
 }
 
 var TOOL_ICONS = {
-  'bash': '$', 'run_command': '$',
+  'Read': '\u2192', 'Write': '\u2190', 'Edit': '\u2190',
+  'Bash': '$', 'Glob': '\u2731', 'Grep': '\u2731',
+  'Task': '\u2502', 'WebFetch': '%',
+  'Navigate': '\u25C7', 'Click': '\u25C7', 'Snapshot': '\u25C7',
+  'Type': '\u25C7', 'Screenshot': '\u25C7', 'Evaluate': '\u25C7', 'RunCode': '\u25C7',
+  'TodoWrite': '\u2611', 'Question': '?', 'Skill': '\u2192',
+  'Search': '\u2731', 'Memory': '\u2605', 'SaveMemory': '\u2605', 'DeleteMemory': '\u2605',
+  // Legacy lowercase
   'read': '\u2192', 'write': '\u2190', 'edit': '\u2190',
-  'glob': '\u2731', 'grep': '\u2731',
-  'task': '\u2502', 'webfetch': '%', 'playwright': '\u25C7',
-  'todowrite': '\u2611', 'question': '?',
-  'rick_search': '\u2731', 'rick_memory': '\u2605',
-  'rick_save_memory': '\u2605', 'rick_delete_memory': '\u2605'
+  'bash': '$', 'run_command': '$', 'glob': '\u2731', 'grep': '\u2731',
+  'task': '\u2502', 'webfetch': '%', 'todowrite': '\u2611',
+  'question': '?', 'rick_search': '\u2731', 'rick_memory': '\u2605',
+  'rick_save_memory': '\u2605', 'rick_delete_memory': '\u2605',
+  'playwright': '\u25C7'
 };
 
 function getToolIcon(name) {
   if (!name) return '\u2699';
+  if (TOOL_ICONS[name]) return TOOL_ICONS[name];
   var lower = name.toLowerCase();
-  if (TOOL_ICONS[lower]) return TOOL_ICONS[lower];
   for (var key in TOOL_ICONS) {
-    if (lower.indexOf(key) !== -1) return TOOL_ICONS[key];
+    if (lower === key.toLowerCase()) return TOOL_ICONS[key];
   }
   return '\u2699';
 }
 
-/**
- * Parse a completed line to extract duration and preview.
- * Input: `[bash:ok]` `53ms · Hello world`
- * Returns: { name: "bash", duration: "53ms", preview: "Hello world" }
- */
-function formatToolCompletedSuffix(text) {
-  var name = extractToolName(text);
-  var duration = '';
-  var preview = '';
-  // Extract the arg segment (second backtick pair)
-  var m = text.match(/`\[[^\]]+\]`\s*`([^`]*)`/);
-  if (m) {
-    var parts = m[1].split('\u00B7'); // split on ·
-    if (!parts[0]) parts = m[1].split('·'); // try regular dot
-    duration = (parts[0] || '').trim();
-    preview = (parts.slice(1).join('·') || '').trim();
-  }
-  return { name: name, duration: duration, preview: preview };
-}
-
-/**
- * Escape HTML entities.
- */
 function _esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /**
- * Format a tool START line into HTML.
- * Shows as running state with spinner icon.
+ * Parse backtick segments from tool line text.
+ * Returns array of strings (content between backticks).
+ */
+function _parseSegments(text) {
+  var segments = [];
+  var regex = /`([^`]*)`/g;
+  var match;
+  while ((match = regex.exec(text)) !== null) {
+    segments.push(match[1]);
+  }
+  return segments;
+}
+
+/**
+ * Format a tool line (start or completed) into HTML.
  */
 function formatToolLine(text, timeStr) {
   var completed = isToolCompleted(text);
   var error = isToolError(text);
-  var toolName = extractToolName(text);
+  var segs = _parseSegments(text);
+  var toolName = '';
+  var args = [];
+  var duration = '';
+
+  if (segs.length > 0) {
+    // First segment is tool name (possibly with :ok/:erro suffix)
+    toolName = segs[0].replace(/:ok$|:erro$/i, '');
+    // For legacy format, strip brackets
+    toolName = toolName.replace(/^\[|\]$/g, '');
+    // Capitalize if lowercase legacy name
+    if (toolName && toolName[0] === toolName[0].toLowerCase()) {
+      toolName = toolName.charAt(0).toUpperCase() + toolName.slice(1);
+    }
+    // Remove rick_ prefix
+    toolName = toolName.replace(/^Rick_/i, '');
+
+    // Remaining segments are args + possibly duration
+    for (var i = 1; i < segs.length; i++) {
+      var seg = segs[i];
+      // Duration detection: ends with 'ms' and is numeric prefix
+      if (/^\d+ms$/.test(seg)) {
+        duration = seg;
+      } else if (/^\d+ms\s*·/.test(seg)) {
+        // Legacy format: "23ms · output preview"
+        duration = seg.split('·')[0].trim();
+      } else {
+        args.push(seg);
+      }
+    }
+  }
+
+  if (!toolName) {
+    toolName = extractToolName(text);
+  }
+
   var icon = getToolIcon(toolName);
 
-  // For completed lines, format as merged line (icon + name + args + duration)
-  if (completed) {
-    var info = formatToolCompletedSuffix(text);
-    var iconCls = error ? 'tl-icon err' : 'tl-icon ok';
-    var toolCls = error ? 'tl-tool err' : 'tl-tool done';
-    var durHtml = info.duration ? '<span class="tl-dur">' + _esc(info.duration) + '</span>' : '';
-    var prevHtml = info.preview ? '<span class="tl-preview">' + _esc(info.preview.length > 120 ? info.preview.slice(0, 117) + '...' : info.preview) + '</span>' : '';
-    return '<span class="tl-icon ' + (error ? 'err' : 'ok') + '">' + icon + '</span>' +
-           '<span class="' + toolCls + '">[' + _esc(info.name) + ']</span> ' +
-           durHtml + (prevHtml ? ' ' + prevHtml : '');
+  // Build HTML
+  var iconCls = 'tl-icon';
+  if (error) iconCls += ' err';
+  else if (completed) iconCls += ' ok';
+  else iconCls += ' active spinner';
+
+  var toolCls = 'tl-tool';
+  if (error) toolCls += ' err';
+  else if (completed) toolCls += ' done';
+  else toolCls += ' active';
+
+  var html = '<span class="' + iconCls + '">' + _esc(icon) + '</span>';
+  html += '<span class="' + toolCls + '">' + _esc(toolName) + '</span>';
+
+  for (var j = 0; j < args.length; j++) {
+    var argCls = completed ? 'tl-arg done' : 'tl-arg';
+    var argText = args[j];
+    // Truncate long args
+    if (argText.length > 140) argText = argText.slice(0, 137) + '...';
+    html += ' <span class="' + argCls + '">' + _esc(argText) + '</span>';
   }
 
-  // Start line — show with spinner
-  var segments = [];
-  var regex = /`([^`]*)`/g;
-  var match;
-  var lastIdx = 0;
-  var first = true;
-
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIdx) {
-      var plain = text.slice(lastIdx, match.index).trim();
-      if (plain) segments.push({ type: 'plain', val: plain });
-    }
-    if (first) {
-      segments.push({ type: 'tool', val: match[1] });
-      first = false;
-    } else {
-      segments.push({ type: 'arg', val: match[1] });
-    }
-    lastIdx = regex.lastIndex;
+  if (duration) {
+    html += ' <span class="tl-dur">' + _esc(duration) + '</span>';
   }
 
-  if (lastIdx < text.length) {
-    var remainder = text.slice(lastIdx).trim();
-    if (remainder) segments.push({ type: first ? 'tool' : 'plain', val: remainder });
-  }
-
-  if (segments.length === 0) {
-    segments.push({ type: 'plain', val: text });
-  }
-
-  var contentHtml = segments.map(function(s) {
-    var escaped = _esc(s.val);
-    if (s.type === 'tool') return '<span class="tl-tool active">' + escaped + '</span>';
-    if (s.type === 'arg') return '<span class="tl-arg">' + escaped + '</span>';
-    return '<span class="tl-plain">' + escaped + '</span>';
-  }).join(' ');
-
-  return '<span class="tl-icon active spinner">' + icon + '</span>' + contentHtml;
+  return html;
 }
 
 function makeToolUseBlock() {
@@ -161,7 +168,6 @@ function makeToolUseBlock() {
       _minimizeBlock(existing[i]);
     }
   }
-
   var block = document.createElement('div');
   block.className = 'tool-use-block';
   block.setAttribute('data-tool-count', '0');
@@ -173,7 +179,6 @@ function makeToolUseBlock() {
       '<div class="terminal-toggle">\u25BE</div>' +
     '</div>' +
     '<div class="terminal-body"></div>';
-
   var header = block.querySelector('.terminal-header');
   header.addEventListener('click', function() {
     if (block.classList.contains('minimized')) {
@@ -188,7 +193,6 @@ function makeToolUseBlock() {
       _minimizeBlock(block);
     }
   });
-
   return block;
 }
 
