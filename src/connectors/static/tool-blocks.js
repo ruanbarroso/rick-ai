@@ -20,17 +20,17 @@ function isStatusLine(text) {
 }
 
 function isToolCompleted(text) {
-  return /`:ok`|:ok\]|`:erro`|:erro\]/i.test(text);
+  return /:ok`|:ok\]|:erro`|:erro\]/i.test(text);
 }
 
 function isToolError(text) {
-  return /`:erro`|:erro\]/i.test(text);
+  return /:erro`|:erro\]/i.test(text);
 }
 
 function isToolStart(text) {
   if (isToolCompleted(text)) return false;
   // New format: `ToolName` `arg`  OR  Legacy: `[tool]` `arg`
-  return /^[\s\n]*`[A-Z][\w]*`\s/m.test(text) || /^[\s\n]*`\[[\w_]+\]`\s/m.test(text);
+  return /`[A-Z][\w]*`/m.test(text) || /`\[[\w_]+\]`/m.test(text);
 }
 
 function extractToolName(text) {
