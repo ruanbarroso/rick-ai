@@ -748,7 +748,15 @@ Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a inform
     }
 
     // Build env vars for the sub-agent container — LLM credentials only
-    const env = await this.buildSubAgentEnv(userId);
+    let env: Record<string, string>;
+    try {
+      env = await this.buildSubAgentEnv(userId);
+    } catch (err) {
+      logger.error({ err, userId }, "delegateToSubAgent: buildSubAgentEnv failed");
+      const errMsg = "Erro ao preparar credenciais do sub-agente. Tente novamente.";
+      this.notifyMainViewers(userId, "agent", errMsg, "text", connectorName);
+      return errMsg;
+    }
 
     // Expand generic "email" hint into actual email providers found in memory
     const emailProviders = ["outlook", "gmail", "hotmail", "yahoo", "protonmail"];
@@ -811,8 +819,11 @@ Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a inform
       });
 
       const missingList = missing.map((m) => `*${m}*`).join(", ");
-      // NOTE: user message already saved and notified by handleMessageInternal — no duplicate save here
-      return `Vou precisar de credenciais para ${missingList} pra fazer isso.\n\nMe manda as credenciais de *${missing[0]}* (usuario, senha, token, o que for necessario).`;
+      const credAsk = `Vou precisar de credenciais para ${missingList} pra fazer isso.\n\nMe manda as credenciais de *${missing[0]}* (usuario, senha, token, o que for necessario).`;
+      // Save and notify viewers — without this, the response is lost if WhatsApp is down
+      await this.memory.saveMessageByUserId(userId!, "assistant", credAsk, undefined, undefined, undefined, undefined, undefined, undefined, connectorName);
+      this.notifyMainViewers(userId!, "agent", credAsk, "text", connectorName);
+      return credAsk;
     }
 
     if (missing.length > 0) {
@@ -835,7 +846,10 @@ Se o usuario perguntar sobre isso, seja honesto e peca para ele repetir a inform
       );
     } catch (err) {
       logger.error({ err }, "Sub-agent session failed");
-      return `Erro ao executar sub-agente: ${(err as Error).message}`;
+      const errMsg = `Erro ao criar sub-agente: ${(err as Error).message}`;
+      // Ensure error is visible in the main viewer even if WhatsApp is down
+      this.notifyMainViewers(userId, "agent", errMsg, "error", connectorName);
+      return errMsg;
     }
 
     // Check if superseded AFTER session creation — if so, kill the session we just created
