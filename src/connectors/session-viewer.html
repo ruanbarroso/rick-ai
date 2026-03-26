@@ -1154,7 +1154,7 @@ body {
 /* Tool-use terminal block — loaded from /static/tool-blocks.css */
 </style>
 <link rel="stylesheet" href="/static/tool-blocks.css?v=4">
-<link rel="stylesheet" href="/static/message-styles.css?v=2">
+<link rel="stylesheet" href="/static/message-styles.css?v=3">
 </head>
 <body>
 
@@ -1303,7 +1303,7 @@ body {
 </div>
 
 <script src="/static/tool-blocks.js?v=6"></script>
-<script src="/static/render-text.js?v=2"></script>
+<script src="/static/render-text.js?v=3"></script>
 <script>
 // ==================== VARIANT NAMES ====================
 // Variant names are now computed server-side and sent in the session_info message.
@@ -1313,6 +1313,9 @@ body {
 var sessionId = location.pathname.replace(/^\/s\//, '');
 var userToken = new URLSearchParams(location.search).get('t') || '';
 var hasWriteAccess = !!userToken;
+// File download globals (used by render-text.js addFileDownloadLinks)
+window._dlSessionId = sessionId;
+window._dlToken = userToken;
 var ws = null;
 var reconnectAttempts = 0;
 var reconnectTimer = null;
@@ -2069,106 +2072,10 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos, 
 
   // Add copy buttons to code blocks
   addCodeBlockCopyButtons(div);
+  addFileDownloadLinks(div);
 
   container.insertBefore(div, typing);
   scrollToBottom();
-}
-
-function appendHistoryMessage(msg) {
-  var text = msg.content;
-  var role = msg.role;
-  var timestamp = msg.created_at;
-  var messageType = msg.message_type;
-  var audioUrl = msg.audio_url || null;
-  var imageUrls = msg.image_urls || null;
-  var fileInfos = msg.file_infos || null;
-
-  // Parse image_urls if it's a JSON string
-  if (imageUrls && typeof imageUrls === 'string') {
-    try { imageUrls = JSON.parse(imageUrls); } catch(e) { imageUrls = [imageUrls]; }
-  }
-  // Parse file_infos if it's a JSON string
-  if (fileInfos && typeof fileInfos === 'string') {
-    try { fileInfos = JSON.parse(fileInfos); } catch(e) { fileInfos = null; }
-  }
-
-  // System state messages — don't render, just update state
-  if (role === 'system' || messageType === 'system') {
-    try {
-      var sys = JSON.parse(text);
-      if (sys.state) updateSessionState(sys.state);
-      if (sys.activeModel) {
-        selectedModelId = sys.activeModel;
-        updateModelButton();
-        renderModelOptions();
-      }
-    } catch(e) {}
-    return;
-  }
-
-  var timeStr = formatTimestamp(timestamp ? new Date(timestamp) : new Date());
-
-  // Tool use → terminal block (skip transient/empty lines in history)
-  if (messageType === 'tool_use') {
-    if (isStatusLine(text)) return;
-    // Skip lines that are not real tool calls (no backticks = status/error noise)
-    if (text && text.indexOf('`') === -1) return;
-    // Skip empty or whitespace-only
-    if (!text || !text.trim()) return;
-    appendToolLine(text, timeStr);
-    return;
-  }
-
-  if (messageType === 'question') {
-    if (appendQuestionMessage(text, timeStr)) return;
-  }
-
-  // Skip empty/trivial agent messages (e.g. empty waiting_user result "")
-  if (role !== 'user' && messageType !== 'error' && !audioUrl && (!imageUrls || imageUrls.length === 0)) {
-    var stripped = (text || '').replace(/[-–—\s]/g, '').trim();
-    if (!stripped) return;
-  }
-
-  var empty = document.getElementById('empty-state');
-  if (empty) empty.classList.add('hidden');
-
-  var container = document.getElementById('messages');
-  var typing = document.getElementById('typing-indicator');
-
-  // When a real message arrives during history replay, minimize any open tool block
-  // and remove any lingering "Pensando..." status line
-  var prev = typing.previousElementSibling;
-  if (prev && prev.classList.contains('tool-status-line')) {
-    prev.parentNode.removeChild(prev);
-  }
-  prev = typing.previousElementSibling;
-  if (prev && prev.classList.contains('tool-use-block') && !prev.classList.contains('minimized')) {
-    _minimizeBlock(prev);
-  }
-
-  var div = document.createElement('div');
-  var cssClass = (messageType === 'error' || isExecutionFailureText(text)) ? 'error' : (role === 'user' ? 'user' : 'agent');
-  div.className = 'message ' + cssClass;
-  div.innerHTML = renderMessageContent(text, audioUrl, imageUrls, fileInfos);
-
-  // Add model footer for agent messages in history
-  if (cssClass === 'agent' && selectedModelId) {
-    var footer = document.createElement('div');
-    footer.className = 'message-footer';
-    footer.textContent = getModelLabel(selectedModelId);
-    div.appendChild(footer);
-  }
-
-  var time = document.createElement('div');
-  time.className = 'time';
-  time.textContent = timeStr;
-  div.appendChild(time);
-
-  if (cssClass !== 'error') addCopyButton(div, text);
-
-  addCodeBlockCopyButtons(div);
-
-  container.insertBefore(div, typing);
 }
 
 function updateSessionState(state) {

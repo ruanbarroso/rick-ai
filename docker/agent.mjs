@@ -2,8 +2,8 @@
 
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile, rm, access, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, writeFile, readFile, rm, access, stat } from "node:fs/promises";
+import { join, resolve, basename } from "node:path";
 import { homedir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
@@ -1620,6 +1620,73 @@ const httpServer = createServer((req, res) => {
       stdoutBroken,
       uptime: Math.floor(process.uptime()),
     }));
+    return;
+  }
+
+  // GET /file?path=/workspace/file.md — download a file from the container
+  if (req.method === "GET" && url.pathname === "/file") {
+    const filePath = url.searchParams.get("path");
+    if (!filePath) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: "Missing 'path' parameter" }));
+      return;
+    }
+
+    // Security: only allow safe directories
+    const allowedPrefixes = ["/workspace/", "/tmp/", "/home/agent/"];
+    const normalized = resolve(filePath);
+    if (!allowedPrefixes.some((p) => normalized.startsWith(p))) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ error: "Path not allowed" }));
+      return;
+    }
+
+    (async () => {
+      try {
+        const stats = await stat(normalized);
+        if (!stats.isFile()) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "Not a file" }));
+          return;
+        }
+        if (stats.size > 50 * 1024 * 1024) {
+          res.writeHead(413);
+          res.end(JSON.stringify({ error: "File too large (max 50MB)" }));
+          return;
+        }
+
+        const filename = basename(normalized);
+        const ext = filename.split(".").pop()?.toLowerCase() || "";
+        const mimeTypes = {
+          md: "text/markdown", txt: "text/plain", json: "application/json",
+          html: "text/html", css: "text/css", js: "application/javascript",
+          ts: "text/typescript", java: "text/x-java", py: "text/x-python",
+          xml: "application/xml", yaml: "text/yaml", yml: "text/yaml",
+          csv: "text/csv", sql: "text/x-sql", sh: "text/x-shellscript",
+          pdf: "application/pdf", png: "image/png", jpg: "image/jpeg",
+          jpeg: "image/jpeg", gif: "image/gif", svg: "image/svg+xml",
+          zip: "application/zip", tar: "application/x-tar",
+          gz: "application/gzip",
+        };
+        const contentType = mimeTypes[ext] || "application/octet-stream";
+
+        const fileBuffer = await readFile(normalized);
+        res.writeHead(200, {
+          "Content-Type": contentType,
+          "Content-Length": String(fileBuffer.length),
+          "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+        });
+        res.end(fileBuffer);
+      } catch (err) {
+        if (err?.code === "ENOENT") {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: "File not found" }));
+        } else {
+          res.writeHead(500);
+          res.end(JSON.stringify({ error: err?.message || "Failed to read file" }));
+        }
+      }
+    })();
     return;
   }
 

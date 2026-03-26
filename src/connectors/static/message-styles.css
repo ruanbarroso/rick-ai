@@ -318,6 +318,35 @@
   color: var(--text, #e2e8f0);
 }
 
+/* ==================== FILE DOWNLOAD LINKS ==================== */
+
+.file-dl-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.file-dl-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.8em;
+  color: #60a5fa;
+  text-decoration: none;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.file-dl-link:hover {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #93bbfc;
+}
+
 /* ==================== MOBILE RESPONSIVE ==================== */
 
 @media (max-width: 640px) {

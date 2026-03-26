@@ -369,3 +369,58 @@ function closeImageFullscreen() {
   var overlay = document.getElementById('image-overlay') || document.getElementById('image-fullscreen');
   if (overlay) overlay.classList.remove('visible');
 }
+
+/**
+ * Convert file paths in rendered HTML to download links.
+ * Detects paths like /workspace/file.md, /tmp/output.pdf, /home/agent/result.json
+ * in inline code (<code>) elements and adds a download button next to them.
+ *
+ * Requires global variables: window._dlSessionId, window._dlToken
+ */
+// eslint-disable-next-line no-unused-vars
+function addFileDownloadLinks(containerEl) {
+  if (!window._dlSessionId || !window._dlToken) return;
+
+  var codes = containerEl.querySelectorAll('code');
+  for (var i = 0; i < codes.length; i++) {
+    var code = codes[i];
+    // Skip code blocks inside <pre> (those are code blocks, not inline paths)
+    if (code.parentElement && code.parentElement.tagName === 'PRE') continue;
+
+    var text = code.textContent || '';
+    // Match file paths in allowed directories
+    if (/^\/?(?:workspace|tmp|home\/agent)\/\S+\.\w{1,10}$/.test(text.trim())) {
+      var filePath = text.trim();
+      if (!filePath.startsWith('/')) filePath = '/' + filePath;
+
+      // Don't add link if already wrapped
+      if (code.parentElement && code.parentElement.classList.contains('file-dl-wrap')) continue;
+
+      var filename = filePath.split('/').pop() || filePath;
+      var ext = (filename.split('.').pop() || '').toLowerCase();
+      var icon = '📄';
+      if (['pdf'].indexOf(ext) >= 0) icon = '📕';
+      else if (['png','jpg','jpeg','gif','svg'].indexOf(ext) >= 0) icon = '🖼️';
+      else if (['zip','tar','gz'].indexOf(ext) >= 0) icon = '📦';
+      else if (['md','txt'].indexOf(ext) >= 0) icon = '📝';
+      else if (['json','xml','yaml','yml'].indexOf(ext) >= 0) icon = '📋';
+
+      var url = '/dl/' + window._dlSessionId + '/file?path=' + encodeURIComponent(filePath) + '&t=' + window._dlToken;
+
+      var wrap = document.createElement('span');
+      wrap.className = 'file-dl-wrap';
+
+      var link = document.createElement('a');
+      link.href = url;
+      link.className = 'file-dl-link';
+      link.target = '_blank';
+      link.title = 'Baixar ' + filename;
+      link.textContent = icon + ' ' + filename;
+
+      code.parentElement.insertBefore(wrap, code);
+      wrap.appendChild(code);
+      wrap.appendChild(document.createTextNode(' '));
+      wrap.appendChild(link);
+    }
+  }
+}

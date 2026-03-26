@@ -277,6 +277,113 @@ export function startHealthServer(port: number): void {
       return;
     }
 
+    // File download from sub-agent container: GET /dl/:sessionId/file?path=...&t=token
+    const dlMatch = req.url?.match(/^\/dl\/([a-f0-9]+)\/file\?(.+)$/);
+    if (dlMatch && req.method === "GET") {
+      const sessionId = dlMatch[1];
+      const params = new URLSearchParams(dlMatch[2]);
+      const filePath = params.get("path");
+      const token = params.get("t");
+
+      if (!filePath || !token) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Missing 'path' or 't' parameter" }));
+        return;
+      }
+
+      // Authenticate via sessions token
+      const userId = await resolveSessionsToken(token);
+      if (!userId) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid token" }));
+        return;
+      }
+
+      // Verify session exists and belongs to user (via DB)
+      const sessionCheck = await query(
+        `SELECT id FROM sub_agent_sessions WHERE id = $1 AND user_id = $2`,
+        [sessionId, userId]
+      );
+      if (sessionCheck.rows.length === 0) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Session not found" }));
+        return;
+      }
+
+      // Proxy the file request to the sub-agent container
+      const containerName = `subagent-${sessionId}`;
+      const agentUrl = `http://localhost:3000/file?path=${encodeURIComponent(filePath)}`;
+      const { spawn: spawnChild } = await import("node:child_process");
+      const proc = spawnChild("docker", [
+        "exec", containerName, "curl", "-sf", "--max-time", "30", agentUrl,
+      ], { stdio: ["ignore", "pipe", "pipe"] });
+
+      let headersSent = false;
+      const chunks: Buffer[] = [];
+      let stderr = "";
+
+      proc.stdout.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+
+      proc.on("close", (code) => {
+        if (code !== 0) {
+          if (!headersSent) {
+            res.writeHead(code === 22 ? 404 : 500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: stderr.trim() || "Failed to fetch file from container" }));
+          }
+          return;
+        }
+
+        const data = Buffer.concat(chunks);
+        // Try to parse error JSON from agent
+        if (data.length < 500) {
+          try {
+            const json = JSON.parse(data.toString());
+            if (json.error) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(data);
+              return;
+            }
+          } catch { /* not JSON, it's the file content */ }
+        }
+
+        const filename = filePath.split("/").pop() || "download";
+        const ext = filename.split(".").pop()?.toLowerCase() || "";
+        const textExts = ["md", "txt", "json", "html", "css", "js", "ts", "java", "py", "xml", "yaml", "yml", "csv", "sql", "sh", "log", "kt", "gradle", "properties", "toml"];
+        const isText = textExts.includes(ext);
+
+        headersSent = true;
+        res.writeHead(200, {
+          "Content-Type": isText ? "text/plain; charset=utf-8" : "application/octet-stream",
+          "Content-Length": String(data.length),
+          "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+          "Cache-Control": "no-cache",
+        });
+        res.end(data);
+      });
+
+      proc.on("error", (err) => {
+        if (!headersSent) {
+          headersSent = true;
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: (err as Error).message }));
+        }
+      });
+
+      // 30s timeout
+      setTimeout(() => {
+        if (!headersSent) {
+          try { proc.kill(); } catch {}
+          headersSent = true;
+          res.writeHead(504, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Timeout fetching file" }));
+        }
+      }, 30_000);
+      return;
+    }
+
     // Shared static assets (CSS/JS used by both web-ui.html and session-viewer.html)
     if (req.url?.startsWith("/static/") && req.method === "GET") {
       const rawFilename = req.url.slice("/static/".length);
