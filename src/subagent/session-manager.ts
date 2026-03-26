@@ -1033,6 +1033,11 @@ export class SessionManager {
       this.processes.delete(sessionId);
     }
 
+    // Extract workspace files before killing (for post-session file downloads)
+    if (session.containerId) {
+      await this.extractSessionFiles(sessionId, session.containerName);
+    }
+
     // Kill the container (with timeout to prevent gateway timeouts when container is Dead/stuck)
     if (session.containerId) {
       try {
@@ -1304,6 +1309,24 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Extract workspace files from a container before removing it.
+   * Copies /workspace/ to /data/session-files/:sessionId/ on the host.
+   * This allows file downloads to work even after the session is killed.
+   */
+  private async extractSessionFiles(sessionId: string, containerName: string): Promise<void> {
+    const destDir = `/app/data/session-files/${sessionId}`;
+    try {
+      await execFileAsync("mkdir", ["-p", destDir], { timeout: 5_000 });
+      // docker cp copies the workspace directory contents into destDir
+      await execFileAsync("docker", ["cp", `${containerName}:/workspace/.`, destDir], { timeout: 30_000 });
+      logger.info({ sessionId, destDir }, "Extracted session workspace files");
+    } catch (err) {
+      // Non-fatal: workspace may be empty or container already gone
+      logger.debug({ err, sessionId }, "Failed to extract session files (workspace may be empty)");
+    }
+  }
+
   private async removeContainerIfInactive(sessionId: string, containerName: string, reason: string, sessionStatus?: string | null): Promise<boolean> {
     const running = await this.isContainerRunning(containerName);
     if (running) {
@@ -1316,6 +1339,9 @@ export class SessionManager {
       logger.warn({ sessionId, containerName, reason, sessionStatus, dockerRunning: false }, "Refusing to remove non-terminal subagent container");
       return false;
     }
+
+    // Extract workspace files before removal (for post-session file downloads)
+    await this.extractSessionFiles(sessionId, containerName);
 
     try {
       await execFileAsync("docker", ["rm", "-f", containerName], { timeout: 10_000 });

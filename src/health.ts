@@ -310,7 +310,34 @@ export function startHealthServer(port: number): void {
         return;
       }
 
-      // Proxy the file request to the sub-agent container
+      // Helper to serve a file from local filesystem (extracted session files)
+      const serveLocalFile = async (localPath: string): Promise<boolean> => {
+        try {
+          const { readFile: readFileFs, stat: statFs } = await import("node:fs/promises");
+          const stats = await statFs(localPath);
+          if (!stats.isFile() || stats.size > 50 * 1024 * 1024) return false;
+
+          const filename = localPath.split("/").pop() || "download";
+          const ext = filename.split(".").pop()?.toLowerCase() || "";
+          const textExts = ["md", "txt", "json", "html", "css", "js", "ts", "java", "py", "xml", "yaml", "yml", "csv", "sql", "sh", "log", "kt", "gradle", "properties", "toml"];
+          const isText = textExts.includes(ext);
+
+          const data = await readFileFs(localPath);
+          res.writeHead(200, {
+            "Content-Type": isText ? "text/plain; charset=utf-8" : "application/octet-stream",
+            "Content-Length": String(data.length),
+            "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+            "Cache-Control": "no-cache",
+          });
+          res.end(data);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      // Strategy 1: Try live container (session still active)
+      // Strategy 2: Fall back to extracted files on host (session ended)
       const containerName = `subagent-${sessionId}`;
       const agentUrl = `http://localhost:3000/file?path=${encodeURIComponent(filePath)}`;
       const { spawn: spawnChild } = await import("node:child_process");
@@ -322,31 +349,46 @@ export function startHealthServer(port: number): void {
       const chunks: Buffer[] = [];
       let stderr = "";
 
-      proc.stdout.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
+      proc.stdout.on("data", (chunk: Buffer) => { chunks.push(chunk); });
       proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
 
-      proc.on("close", (code) => {
+      proc.on("close", async (code) => {
+        if (headersSent) return;
+
         if (code !== 0) {
-          if (!headersSent) {
-            res.writeHead(code === 22 ? 404 : 500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: stderr.trim() || "Failed to fetch file from container" }));
+          // Container gone or curl failed — try extracted files
+          // Map /workspace/X to /data/session-files/:sessionId/X
+          const relativePath = filePath.replace(/^\/workspace\//, "");
+          const localPath = `/app/data/session-files/${sessionId}/${relativePath}`;
+          const served = await serveLocalFile(localPath);
+          if (served) {
+            headersSent = true;
+            return;
           }
+
+          headersSent = true;
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Arquivo indisponivel — sessao encerrada e arquivo nao foi preservado" }));
           return;
         }
 
         const data = Buffer.concat(chunks);
-        // Try to parse error JSON from agent
         if (data.length < 500) {
           try {
             const json = JSON.parse(data.toString());
             if (json.error) {
+              // Agent returned an error — try extracted files as fallback
+              const relativePath = filePath.replace(/^\/workspace\//, "");
+              const localPath = `/app/data/session-files/${sessionId}/${relativePath}`;
+              const served = await serveLocalFile(localPath);
+              if (served) { headersSent = true; return; }
+
+              headersSent = true;
               res.writeHead(400, { "Content-Type": "application/json" });
               res.end(data);
               return;
             }
-          } catch { /* not JSON, it's the file content */ }
+          } catch { /* not JSON */ }
         }
 
         const filename = filePath.split("/").pop() || "download";
@@ -364,15 +406,19 @@ export function startHealthServer(port: number): void {
         res.end(data);
       });
 
-      proc.on("error", (err) => {
-        if (!headersSent) {
-          headersSent = true;
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: (err as Error).message }));
-        }
+      proc.on("error", async (err) => {
+        if (headersSent) return;
+        // spawn failed — container doesn't exist. Try extracted files.
+        const relativePath = filePath.replace(/^\/workspace\//, "");
+        const localPath = `/data/session-files/${sessionId}/${relativePath}`;
+        const served = await serveLocalFile(localPath);
+        if (served) { headersSent = true; return; }
+
+        headersSent = true;
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: (err as Error).message }));
       });
 
-      // 30s timeout
       setTimeout(() => {
         if (!headersSent) {
           try { proc.kill(); } catch {}
