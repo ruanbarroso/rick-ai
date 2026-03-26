@@ -2078,6 +2078,94 @@ function appendMessage(text, role, messageType, audioUrl, imageUrls, fileInfos, 
   scrollToBottom();
 }
 
+function appendHistoryMessage(msg) {
+  var text = msg.content;
+  var role = msg.role;
+  var timestamp = msg.created_at;
+  var messageType = msg.message_type;
+  var audioUrl = msg.audio_url || null;
+  var imageUrls = msg.image_urls || null;
+  var fileInfos = msg.file_infos || null;
+
+  if (imageUrls && typeof imageUrls === 'string') {
+    try { imageUrls = JSON.parse(imageUrls); } catch(e) { imageUrls = [imageUrls]; }
+  }
+  if (fileInfos && typeof fileInfos === 'string') {
+    try { fileInfos = JSON.parse(fileInfos); } catch(e) { fileInfos = null; }
+  }
+
+  if (role === 'system' || messageType === 'system') {
+    try {
+      var sys = JSON.parse(text);
+      if (sys.state) updateSessionState(sys.state);
+      if (sys.activeModel) {
+        selectedModelId = sys.activeModel;
+        updateModelButton();
+        renderModelOptions();
+      }
+    } catch(e) {}
+    return;
+  }
+
+  var timeStr = formatTimestamp(timestamp ? new Date(timestamp) : new Date());
+
+  if (messageType === 'tool_use') {
+    if (isStatusLine(text)) return;
+    if (text && text.indexOf('`') === -1) return;
+    if (!text || !text.trim()) return;
+    appendToolLine(text, timeStr);
+    return;
+  }
+
+  if (messageType === 'question') {
+    if (appendQuestionMessage(text, timeStr)) return;
+  }
+
+  if (role !== 'user' && messageType !== 'error' && !audioUrl && (!imageUrls || imageUrls.length === 0)) {
+    var stripped = (text || '').replace(/[-–—\s]/g, '').trim();
+    if (!stripped) return;
+  }
+
+  var empty = document.getElementById('empty-state');
+  if (empty) empty.classList.add('hidden');
+
+  var container = document.getElementById('messages');
+  var typing = document.getElementById('typing-indicator');
+
+  var prev = typing.previousElementSibling;
+  if (prev && prev.classList.contains('tool-status-line')) {
+    prev.parentNode.removeChild(prev);
+  }
+  prev = typing.previousElementSibling;
+  if (prev && prev.classList.contains('tool-use-block') && !prev.classList.contains('minimized')) {
+    _minimizeBlock(prev);
+  }
+
+  var div = document.createElement('div');
+  var cssClass = (messageType === 'error' || isExecutionFailureText(text)) ? 'error' : (role === 'user' ? 'user' : 'agent');
+  div.className = 'message ' + cssClass;
+  div.innerHTML = renderMessageContent(text, audioUrl, imageUrls, fileInfos);
+
+  if (cssClass === 'agent' && selectedModelId) {
+    var footer = document.createElement('div');
+    footer.className = 'message-footer';
+    footer.textContent = getModelLabel(selectedModelId);
+    div.appendChild(footer);
+  }
+
+  var time = document.createElement('div');
+  time.className = 'time';
+  time.textContent = timeStr;
+  div.appendChild(time);
+
+  if (cssClass !== 'error') addCopyButton(div, text);
+
+  addCodeBlockCopyButtons(div);
+  addFileDownloadLinks(div);
+
+  container.insertBefore(div, typing);
+}
+
 function updateSessionState(state) {
   sessionState = state;
   var dot = document.getElementById('status-dot');
