@@ -8,20 +8,26 @@ import { logger } from "../config/logger.js";
 
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTH_URL = "https://claude.ai/oauth/authorize";
-const TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
+// Token endpoint migrated to platform.claude.com (console.anthropic.com is legacy)
+const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
 
 const SCOPES = [
   "org:create_api_key",
   "user:profile",
   "user:inference",
+  "user:sessions:claude_code",
+  "user:mcp_servers",
+  "user:file_upload",
 ].join(" ");
 
+// Headers aligned with opencode-anthropic-auth plugin behavior.
+// Note: anthropic-beta is NOT needed for token exchange/refresh,
+// only for API requests to /v1/messages.
 const TOKEN_EXCHANGE_HEADERS = {
   "Content-Type": "application/json",
-  "Accept": "application/json",
-  "anthropic-beta": "oauth-2025-04-20",
-  "user-agent": "claude-cli/2.1.80 (external, cli)",
+  "Accept": "application/json, text/plain, */*",
+  "user-agent": "axios/1.13.6",
 };
 
 /** Buffer before expiry to trigger proactive refresh (5 minutes) */

@@ -223,7 +223,7 @@ function buildOpencodeConfig() {
   return {
     $schema: "https://opencode.ai/config.json",
     permission: "allow",
-    plugin: ["opencode-anthropic-oauth"],
+    plugin: ["@ex-machina/opencode-anthropic-auth"],
     instructions: ["/app/AGENTS.md"],
     lsp: {
       jdtls: {
