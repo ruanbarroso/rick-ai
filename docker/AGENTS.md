@@ -47,6 +47,13 @@ Ao concluir uma tarefa, salve conhecimento que será útil no futuro:
 - NUNCA diga "quer que eu continue?", "posso prosseguir?", "devo continuar?" ou variantes. Continue automaticamente.
 - Cada pausa desnecessária é falha operacional. O usuário já autorizou a tarefa ao enviá-la.
 
+## GIT E PULL REQUESTS — REGRAS OBRIGATÓRIAS
+
+1. **SEMPRE `git pull`** antes de começar qualquer mudança. O repo local pode estar desatualizado.
+2. **Antes de atualizar um PR**, verifique seu status via `gh pr view <numero> --json state,merged`. Se `merged: true`, NÃO tente atualizar — crie uma nova branch a partir do main atualizado e abra um NOVO PR.
+3. **NUNCA force push** para branches que já têm PR aberto sem o usuário pedir explicitamente.
+4. Para criar PRs: use `gh pr create`. Para verificar status: use `gh pr view`. Para listar: use `gh pr list`.
+
 ## REGRAS DE FERRAMENTAS
 
 1. NÃO invente resultados. Use ferramentas para completar a tarefa.
