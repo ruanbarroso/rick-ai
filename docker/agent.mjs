@@ -332,6 +332,11 @@ async function syncOpenCodeAuth(forceRefresh = false) {
       key: process.env.ANTHROPIC_API_KEY,
     };
     available.add("anthropic");
+  } else {
+    // Write a placeholder so OpenCode doesn't crash with
+    // "undefined is not an object (evaluating 'auth.type')"
+    // when reading auth.json and finding no anthropic entry.
+    auth.anthropic = { type: "none" };
   }
 
   const openAIBundle = await fetchAgentJson(`/api/agent/llm-auth-bundle?provider=openai${forceParam}`);
@@ -351,6 +356,8 @@ async function syncOpenCodeAuth(forceRefresh = false) {
       key: process.env.OPENAI_API_KEY,
     };
     available.add("openai");
+  } else {
+    auth.openai = { type: "none" };
   }
 
   // Gemini uses GEMINI_API_KEY env var directly (not stored in auth.json)
