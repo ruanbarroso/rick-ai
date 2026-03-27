@@ -369,7 +369,27 @@ async function syncOpenCodeAuth(forceRefresh = false) {
 
   const dataDir = join(homedir(), ".local", "share", "opencode");
   await mkdir(dataDir, { recursive: true });
-  await writeFile(join(dataDir, "auth.json"), JSON.stringify(auth, null, 2), { mode: 0o600 });
+
+  // CRITICAL: Before writing, preserve existing valid tokens that we failed to refresh.
+  // If a provider's refresh failed but the existing token hasn't expired yet,
+  // keep the old token in auth.json so OpenCode can still use it.
+  const authPath = join(dataDir, "auth.json");
+  try {
+    const existing = JSON.parse(await readFile(authPath, "utf-8"));
+    for (const provider of ["anthropic", "openai"]) {
+      const oldEntry = existing[provider];
+      const newEntry = auth[provider];
+      // If we have no valid new token but the old one is still valid, keep the old one
+      if (oldEntry && oldEntry.type === "oauth" && oldEntry.expires > Date.now() &&
+          (!newEntry || newEntry.type === "none")) {
+        auth[provider] = oldEntry;
+        available.add(provider === "anthropic" ? "anthropic" : "openai");
+        process.stderr.write(`[auth] Preserved existing ${provider} token (expires in ${Math.round((oldEntry.expires - Date.now()) / 1000)}s) — refresh failed but token still valid\n`);
+      }
+    }
+  } catch { /* no existing auth.json, first run */ }
+
+  await writeFile(authPath, JSON.stringify(auth, null, 2), { mode: 0o600 });
 
   // Track the earliest token expiration for proactive refresh
   let earliestExpiry = Infinity;
