@@ -26,6 +26,13 @@ USER root
 RUN cd /app && npx playwright install chrome --with-deps
 RUN chmod -R a+rX /ms-playwright
 
+# Install opencode-claude-auth plugin (replicates ~/.config/opencode/ structure)
+COPY --chown=agent:agent opencode-plugins/package.json /home/agent/.config/opencode/package.json
+COPY --chown=agent:agent opencode-plugins/plugins/claude-auth.js /home/agent/.config/opencode/plugins/claude-auth.js
+USER agent
+RUN cd /home/agent/.config/opencode && npm install --omit=dev
+USER root
+
 # Copy all runtime files in a single layer to minimise overlay depth.
 COPY --chown=agent:agent AGENTS.md tools.mjs tool-declarations.mjs \
      rick-api.mjs mcp-playwright.mjs rick-mcp.mjs opencode.json \

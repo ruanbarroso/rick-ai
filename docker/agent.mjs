@@ -223,7 +223,6 @@ function buildOpencodeConfig() {
   return {
     $schema: "https://opencode.ai/config.json",
     permission: "allow",
-    plugin: ["@ex-machina/opencode-anthropic-auth"],
     instructions: ["/app/AGENTS.md"],
     lsp: {
       jdtls: {
@@ -326,6 +325,19 @@ async function syncOpenCodeAuth(forceRefresh = false) {
       expires: Number(claudeBundle.auth.expiresAt || 0),
     };
     available.add("anthropic");
+
+    // Sync credentials for opencode-claude-auth plugin (~/.claude/.credentials.json)
+    try {
+      const claudeDir = join(homedir(), ".claude");
+      await mkdir(claudeDir, { recursive: true });
+      await writeFile(join(claudeDir, ".credentials.json"), JSON.stringify({
+        accessToken: String(claudeBundle.auth.accessToken || ""),
+        refreshToken: String(claudeBundle.auth.refreshToken || ""),
+        expiresAt: Number(claudeBundle.auth.expiresAt || 0),
+      }, null, 2), { mode: 0o600 });
+    } catch (err) {
+      process.stderr.write(`[auth] Failed to write .claude/.credentials.json: ${err?.message}\n`);
+    }
   } else if (process.env.ANTHROPIC_API_KEY) {
     auth.anthropic = {
       type: "api",
