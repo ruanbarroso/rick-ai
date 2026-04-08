@@ -128,8 +128,8 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 - **Model selection**: Session primary model is mapped to OpenCode provider/model IDs (`anthropic/*`, `openai/*`, `google/*`) while preserving per-session model switching in the viewer.
 - **Tools via MCP**: Browser tools come from Playwright MCP (Chrome), and Rick memory/search/save/config/conversations are exposed to OpenCode through a local `rick` MCP server that calls `/api/agent/*`.
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
-- **Build/Plan mode**: Session viewer mode is preserved; Rick maps mode to OpenCode agent (`build` or `plan`).
-- **Credential injection**: Sub-agent syncs Claude/OpenAI auth to OpenCode `auth.json` using Rick Agent API OAuth bundles (`access`, `refresh`, `expires`, `accountId` when applicable). API-key fallback remains supported.
+- **Build/Plan mode**: Session viewer mode is preserved in the UI as `Build`/`Plan`; internally Rick maps Anthropic runs to dedicated OpenCode agents while keeping `build`/`plan` for other providers.
+- **Credential injection**: Sub-agent syncs Claude/OpenAI auth to OpenCode `auth.json` using Rick Agent API OAuth bundles (`access`, `refresh`, `expires`, `accountId` when applicable). Anthropic auth is loaded through the OpenCode plugin `@ex-machina/opencode-anthropic-auth`. API-key fallback remains supported.
 - **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick APIs from MCP tools — scoped to the owner's data.
 - **Session recovery**: Running containers reconnect after Rick restarts, and exited active sessions are restarted without removing live containers during resync
 - **Image freshness**: `subagent` image is rebuilt automatically whenever bundle hash or Rick version label differs (no stale image reuse across versions)

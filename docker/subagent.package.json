@@ -5,6 +5,7 @@
   "description": "Runtime dependencies for rick-ai subagent container",
   "dependencies": {
     "opencode-ai": "1.2.18",
+    "@ex-machina/opencode-anthropic-auth": "latest",
     "@playwright/mcp": "0.0.68",
     "@modelcontextprotocol/sdk": "1.17.3",
     "playwright": "1.58.2"

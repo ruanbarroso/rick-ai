@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "@opencode-ai/plugin": "latest",
-    "opencode-claude-auth": "latest"
-  }
-}

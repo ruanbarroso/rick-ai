@@ -4,7 +4,6 @@ import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile, readFile, rm, access, stat } from "node:fs/promises";
 import { join, resolve, basename } from "node:path";
-import { homedir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 
@@ -224,6 +223,24 @@ function buildOpencodeConfig() {
     $schema: "https://opencode.ai/config.json",
     permission: "allow",
     instructions: ["/app/AGENTS.md"],
+    agent: {
+      "claude-build": {
+        mode: "primary",
+        description: "Build agent for Anthropic Opus 4.6",
+        model: "anthropic/claude-opus-4-6",
+        prompt: "You are Claude Code, Anthropic's official CLI for Claude.",
+      },
+      "claude-plan": {
+        mode: "primary",
+        description: "Planning agent for Anthropic Opus 4.6",
+        model: "anthropic/claude-opus-4-6",
+        prompt: "You are Claude Code, Anthropic's official CLI for Claude.",
+        permission: {
+          edit: "deny",
+          bash: "ask",
+        },
+      },
+    },
     lsp: {
       jdtls: {
         disabled: true,
@@ -325,19 +342,6 @@ async function syncOpenCodeAuth(forceRefresh = false) {
       expires: Number(claudeBundle.auth.expiresAt || 0),
     };
     available.add("anthropic");
-
-    // Sync credentials for opencode-claude-auth plugin (~/.claude/.credentials.json)
-    try {
-      const claudeDir = join(homedir(), ".claude");
-      await mkdir(claudeDir, { recursive: true });
-      await writeFile(join(claudeDir, ".credentials.json"), JSON.stringify({
-        accessToken: String(claudeBundle.auth.accessToken || ""),
-        refreshToken: String(claudeBundle.auth.refreshToken || ""),
-        expiresAt: Number(claudeBundle.auth.expiresAt || 0),
-      }, null, 2), { mode: 0o600 });
-    } catch (err) {
-      process.stderr.write(`[auth] Failed to write .claude/.credentials.json: ${err?.message}\n`);
-    }
   } else if (process.env.ANTHROPIC_API_KEY) {
     auth.anthropic = {
       type: "api",
@@ -468,6 +472,13 @@ function providerForModel(opencodeModel) {
   if (opencodeModel.startsWith("openai/")) return "openai";
   if (opencodeModel.startsWith("google/")) return "google";
   return null;
+}
+
+function agentForRun(mode, opencodeModel) {
+  if (providerForModel(opencodeModel) === "anthropic") {
+    return mode === "plan" ? "claude-plan" : "claude-build";
+  }
+  return mode === "plan" ? "plan" : "build";
 }
 
 /**
@@ -793,6 +804,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
     const runStartedAt = Date.now();
     const configContent = JSON.stringify(buildOpencodeConfig());
     const selectedModel = pickModel(model);
+    const selectedAgent = agentForRun(mode, selectedModel);
     lastRunHadRateLimitError = false;
     lastRunHadDbError = false;
 
@@ -804,7 +816,7 @@ function runOpencodeTurn({ text, model, mode, images }) {
       "--model",
       selectedModel,
       "--agent",
-      mode === "plan" ? "plan" : "build",
+      selectedAgent,
     ];
 
     if (openCodeSessionId) {
